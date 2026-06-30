@@ -116,6 +116,12 @@ pub async fn user_can_see_event(
 	}
 
 	let currently_member = self.services.state_cache.is_joined(user_id, room_id).await;
+	let was_member = currently_member
+		|| self
+			.services
+			.state_cache
+			.once_joined(user_id, room_id)
+			.await;
 
 	if currently_member
 		&& self
@@ -132,7 +138,10 @@ pub async fn user_can_see_event(
 		// history_visibility as a best-effort fallback. For shared/world_readable
 		// policies, allow if currently a member. For joined/invited, deny since we
 		// cannot verify historical membership without the shortstatehash.
-		debug_info!("visibility {event_id}: no shortstatehash, is_joined={currently_member}");
+		debug_info!(
+			"visibility {event_id}: no shortstatehash, is_joined={currently_member}, \
+			 was_member={was_member}"
+		);
 		let history_visibility = self
 			.room_state_get_content(room_id, &StateEventType::RoomHistoryVisibility, "")
 			.await
@@ -142,7 +151,7 @@ pub async fn user_can_see_event(
 
 		return match history_visibility {
 			| HistoryVisibility::WorldReadable => true,
-			| HistoryVisibility::Shared => currently_member,
+			| HistoryVisibility::Shared => was_member,
 			| _ => false,
 		};
 	};
@@ -168,7 +177,11 @@ pub async fn user_can_see_event(
 			self.user_was_joined(shortstatehash, user_id).await
 		},
 		| HistoryVisibility::WorldReadable => true,
-		| HistoryVisibility::Shared | _ => currently_member,
+		| HistoryVisibility::Shared | _ => {
+			// Shared: visible if currently joined, or was joined at this event's state.
+			// This correctly denies events sent after the user left.
+			currently_member || self.user_was_joined(shortstatehash, user_id).await
+		},
 	}
 }
 

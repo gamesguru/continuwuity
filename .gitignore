@@ -115,3 +115,4 @@ doc_build/
 *.swp
 test_logs.jsonl
 test_results.jsonl
+matrix-spec-txt/
