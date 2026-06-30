@@ -102,8 +102,8 @@ impl PduStateProvider {
 }
 
 impl StateProvider<String> for PduStateProvider {
-	fn get_event(&self, event_type: &str, state_key: Option<&str>) -> Option<&LeanEvent<String>> {
-		let key_owned = (event_type.to_owned(), state_key.map(str::to_owned));
+	fn get_event(&self, event_type: &str, state_key: &str) -> Option<&LeanEvent<String>> {
+		let key_owned = (event_type.to_owned(), Some(state_key.to_owned()));
 		self.events.get(&key_owned)
 	}
 }

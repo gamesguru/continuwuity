@@ -304,7 +304,7 @@ impl super::Service {
 			}
 		}
 
-		let mut ssk_cache: HashMap<(String, Option<String>), u64> =
+		let mut ssk_cache: HashMap<(String, String), u64> =
 			HashMap::with_capacity(unique_state_keys.len());
 		for (ty, sk) in &unique_state_keys {
 			let ssk = self
@@ -312,7 +312,7 @@ impl super::Service {
 				.short
 				.get_or_create_shortstatekey(&ty.as_str().into(), sk)
 				.await;
-			ssk_cache.insert((ty.clone(), Some(sk.clone())), ssk);
+			ssk_cache.insert((ty.clone(), sk.clone()), ssk);
 		}
 
 		let mut sei_cache: HashMap<OwnedEventId, u64> =
@@ -551,8 +551,7 @@ impl super::Service {
 					.copied()
 					.unwrap_or(0);
 				if count == num_maps {
-					let state_key_opt = if key.1.is_empty() { None } else { Some(key.1.clone()) };
-					unconflicted.insert((key.0.clone(), state_key_opt), id.clone());
+					unconflicted.insert((key.0.clone(), key.1.clone()), id.clone());
 					continue;
 				}
 			}
@@ -680,9 +679,9 @@ impl super::Service {
 
 		// 8. Convert back to Ruma StateMap
 		let mut resolved = StateMap::new();
-		for ((ty_str, sk_opt), eid_str) in resolved_lean {
+		for ((ty_str, sk_str), eid_str) in resolved_lean {
 			let ty: ruma::events::StateEventType = ty_str.into();
-			let sk: conduwuit_core::matrix::StateKey = sk_opt.unwrap_or_default().into();
+			let sk: conduwuit_core::matrix::StateKey = sk_str.into();
 			if let Ok(eid) = OwnedEventId::try_from(eid_str.as_str()) {
 				resolved.insert((ty, sk), eid);
 			}
