@@ -398,7 +398,7 @@ where
 
 	// Call rezzy (sync -- no async overhead)
 	let resolved_lean =
-		rezzy::resolve_lean(unconflicted, conflicted_events, &auth_context, version);
+		rezzy::resolve_iterative_sort(unconflicted, conflicted_events, &auth_context, version);
 
 	// Convert back to Ruma StateMap
 	let mut resolved = StateMap::new();

@@ -438,7 +438,7 @@ async fn run_dag_mode(
 	Ok(())
 }
 
-/// Resolve state using rezzy::resolve_lean instead of ruma's
+/// Resolve state using rezzy::resolve_iterative_sort instead of ruma's
 /// state_res::resolve.
 ///
 /// Builds the unconflicted/conflicted/auth_context split from state sets and
@@ -628,7 +628,7 @@ fn resolve_via_rezzy(
 	);
 
 	let resolved_lean =
-		rezzy::resolve_lean(unconflicted, conflicted_events, &auth_context, version);
+		rezzy::resolve_iterative_sort(unconflicted, conflicted_events, &auth_context, version);
 
 	// Convert back to StateMap
 	let mut resolved = HashMap::new();

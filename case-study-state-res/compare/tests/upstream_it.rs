@@ -4,7 +4,7 @@
 //! Each test loads the same fixture files used by upstream ruma-state-res
 //! tests. "Batched" tests load multiple PDU files, each representing one side
 //! of a DAG fork (plus a common bootstrap). State is built per-fork and fed to
-//! `rezzy::resolve_lean` as separate state sets.
+//! `rezzy::resolve_iterative_sort` as separate state sets.
 //!
 //! "State map" tests (MSC4297) load explicit state maps + PDU definitions.
 
@@ -318,7 +318,7 @@ fn to_rezzy_version(v: &RoomVersionId) -> rezzy::StateResVersion {
 }
 
 /// Resolve state sets via rezzy: pre-separate unconflicted/conflicted,
-/// compute auth diff, convert to LeanEvent, call resolve_lean.
+/// compute auth diff, convert to LeanEvent, call resolve_iterative_sort.
 fn resolve_via_rezzy(
 	state_sets: &[StateMap<OwnedEventId>],
 	store: &EventStore,
@@ -421,7 +421,7 @@ fn resolve_via_rezzy(
 
 	let version = to_rezzy_version(room_version);
 	let resolved_lean =
-		rezzy::resolve_lean(unconflicted, conflicted_events, &auth_context, version);
+		rezzy::resolve_iterative_sort(unconflicted, conflicted_events, &auth_context, version);
 
 	// Convert back to Ruma StateMap
 	let mut resolved = StateMap::new();

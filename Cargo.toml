@@ -402,7 +402,7 @@ features = [
 ]
 
 [workspace.dependencies.rezzy]
-version = "0.2.0"
+version = "0.4.0"
 
 [workspace.dependencies.rust-rocksdb]
 git = "https://forgejo.ellis.link/continuwuation/rust-rocksdb-zaidoon1"
