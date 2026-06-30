@@ -356,7 +356,7 @@ fn resolve_via_rezzy(
 				.copied()
 				.unwrap_or(0);
 			if count == num_maps {
-				let sk_opt = if key.1.is_empty() { None } else { Some(key.1.clone()) };
+				let sk_opt = Some(key.1.clone());
 				unconflicted.insert((key.0.clone(), sk_opt), id.clone());
 				continue;
 			}
