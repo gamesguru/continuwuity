@@ -76,7 +76,10 @@ fn room_version_from_event(
 	}
 }
 
-// Creates an event, but does not hash or sign it.
+/// Creates, hashes, signs, and auth-checks an event.
+///
+/// The returned PDU has its real event_id (computed from the content hash),
+/// not a placeholder.
 #[implement(super::Service)]
 pub async fn create_event(
 	&self,
@@ -84,7 +87,7 @@ pub async fn create_event(
 	sender: &UserId,
 	room_id: Option<&RoomId>,
 	_mutex_lock: &RoomMutexGuard,
-) -> Result<(PduEvent, RoomVersionId)> {
+) -> Result<(PduEvent, CanonicalJsonObject)> {
 	let PduBuilder {
 		event_type,
 		content,
@@ -188,7 +191,7 @@ pub async fn create_event(
 		}
 	}
 
-	let pdu = PduEvent {
+	let mut pdu = PduEvent {
 		event_id: ruma::event_id!("$thiswillbefilledinlater").into(),
 		room_id: room_id.map(ToOwned::to_owned),
 		sender: sender.to_owned(),
@@ -220,6 +223,11 @@ pub async fn create_event(
 		signatures: None,
 		rejected: false,
 	};
+
+	// Hash, sign, and compute the real event_id immediately so all
+	// downstream logging and auth checks see the real ID, not the
+	// placeholder.
+	let pdu_json = self.hash_sign_and_finalize(&mut pdu, &room_version_id)?;
 
 	info!(
 		"auth_events keys for new {} at PDU {}: {:?}",
@@ -253,7 +261,16 @@ pub async fn create_event(
 		pdu.event_id,
 		pdu.room_id.as_ref().map_or("None", |id| id.as_str())
 	);
-	Ok((pdu, room_version_id))
+
+	// MSC4291: ensure `room_id` in internal representation even for v12+
+	if pdu.room_id.is_none() {
+		let internal_room_id = pdu
+			.room_id_or_hash()
+			.ok_or_else(|| err!(Request(Forbidden("Event has no room_id"))))?;
+		pdu.room_id = Some(internal_room_id);
+	}
+
+	Ok((pdu, pdu_json))
 }
 
 #[implement(super::Service)]
@@ -268,41 +285,9 @@ pub async fn create_hash_and_sign_event(
 	if !self.services.globals.user_is_local(sender) {
 		return Err!(Request(Forbidden("Sender must be a local user")));
 	}
-	let (mut pdu, room_version_id) = self
+	let (pdu, mut pdu_json) = self
 		.create_event(pdu_builder, sender, room_id, mutex_lock)
 		.await?;
-	// Hash and sign
-	let mut pdu_json = utils::to_canonical_object(&pdu).map_err(|e| {
-		err!(Request(BadJson(warn!("Failed to convert PDU to canonical JSON: {e}"))))
-	})?;
-	pdu_json.remove("event_id");
-
-	trace!("hashing and signing event {}", pdu.event_id);
-	if let Err(e) = self
-		.services
-		.server_keys
-		.hash_and_sign_event(&mut pdu_json, &room_version_id)
-	{
-		return match e {
-			| Error::Signatures(ruma::signatures::Error::PduSize) => {
-				Err!(Request(TooLarge("Message/PDU is too long (exceeds 65535 bytes)")))
-			},
-			| _ => Err!(Request(BadJson(warn!("Signing event failed: {e}")))),
-		};
-	}
-	// Generate event id
-	pdu.event_id = gen_event_id(&pdu_json, &room_version_id)?;
-	pdu_json.insert("event_id".into(), CanonicalJsonValue::String(pdu.event_id.clone().into()));
-	info!("Generated PDU event ID: {}", pdu.event_id);
-
-	// MSC4291: ensure room_id is in our internal representation even if it's
-	// v12+
-	if pdu.room_id.is_none() {
-		let internal_room_id = pdu
-			.room_id_or_hash()
-			.ok_or_else(|| err!(Request(Forbidden("Event has no room_id"))))?;
-		pdu.room_id = Some(internal_room_id);
-	}
 
 	// Verify that the *full* PDU isn't over 64KiB.
 	// Ruma only validates that it's under 64KiB before signing and hashing.
@@ -352,6 +337,41 @@ pub async fn create_hash_and_sign_event(
 
 	trace!("New PDU created: {pdu:?}");
 	Ok((pdu, pdu_json))
+}
+
+/// Serialize a PDU to canonical JSON, hash and sign it, then compute and
+/// set the real `event_id`.  Returns the signed canonical JSON object.
+#[implement(super::Service)]
+pub fn hash_sign_and_finalize(
+	&self,
+	pdu: &mut PduEvent,
+	room_version_id: &RoomVersionId,
+) -> Result<CanonicalJsonObject> {
+	// Sort keys canonically and purge "placeholder" `event_id`
+	let mut pdu_json = utils::to_canonical_object(&*pdu).map_err(|e| {
+		err!(Request(BadJson(warn!("Failed to convert PDU to canonical JSON: {e}"))))
+	})?;
+	pdu_json.remove("event_id");
+
+	// Sign
+	if let Err(e) = self
+		.services
+		.server_keys
+		.hash_and_sign_event(&mut pdu_json, room_version_id)
+	{
+		return match e {
+			| Error::Signatures(ruma::signatures::Error::PduSize) => {
+				Err!(Request(TooLarge("Message/PDU is too long (exceeds 65535 bytes)")))
+			},
+			| _ => Err!(Request(BadJson(warn!("Signing event failed: {e}")))),
+		};
+	}
+
+	// Compute event hash
+	pdu.event_id = gen_event_id(&pdu_json, room_version_id)?;
+	pdu_json.insert("event_id".into(), CanonicalJsonValue::String(pdu.event_id.clone().into()));
+
+	Ok(pdu_json)
 }
 
 #[cfg(test)]

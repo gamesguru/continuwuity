@@ -298,7 +298,7 @@ pub(super) async fn build_membership_template_pdu(
 ) -> Result<Box<serde_json::value::RawValue>> {
 	let state_lock = services.rooms.state.mutex.lock(room_id).await;
 
-	let (pdu, _) = services
+	let (_, mut pdu_json) = services
 		.rooms
 		.timeline
 		.create_event(
@@ -310,8 +310,6 @@ pub(super) async fn build_membership_template_pdu(
 		.await?;
 
 	drop(state_lock);
-	let mut pdu_json = conduwuit::utils::to_canonical_object(&pdu)
-		.expect("Barebones PDU should be convertible to canonical JSON");
 	pdu_json.remove("event_id");
 
 	Ok(serde_json::value::to_raw_value(&pdu_json)
