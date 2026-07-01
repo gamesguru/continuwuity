@@ -134,5 +134,5 @@ pub fn rezzy_auth_check<S: StateProvider<String>>(
 	version: StateResVersion,
 ) -> bool {
 	let lean = pdu_to_lean(pdu);
-	rezzy::auth::check_auth(&lean, state, version).is_ok()
+	rezzy::auth::check_auth(&lean, state, version, None).is_ok()
 }
