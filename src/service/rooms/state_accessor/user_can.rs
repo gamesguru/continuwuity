@@ -178,9 +178,10 @@ pub async fn user_can_see_event(
 		},
 		| HistoryVisibility::WorldReadable => true,
 		| HistoryVisibility::Shared | _ => {
-			// Shared: visible if currently joined, or was joined at this event's state.
-			// This correctly denies events sent after the user left.
-			currently_member || self.user_was_joined(shortstatehash, user_id).await
+			// Shared: visible if user was ever a member of the room.
+			// Per spec §11.5 rule 3: "If the user's membership was join at
+			// any point after the event, allow."
+			was_member
 		},
 	}
 }
