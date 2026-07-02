@@ -484,14 +484,10 @@ async fn allowed_to_send_state_event(
 			let mut membership_content = match membership_result {
 				| Ok(content) => content,
 				| Err(e) => {
-					let is_join_to_join = services
-						.rooms
-						.state_accessor
-						.room_state_get(room_id, &StateEventType::RoomMember, state_key)
-						.await
-						.ok()
-						.and_then(|pdu| pdu.get_content::<RoomMemberEventContent>().ok())
-						.is_some_and(|c| c.membership == MembershipState::Join);
+					let is_join_to_join = match UserId::parse(state_key) {
+						| Ok(uid) => services.rooms.state_cache.is_joined(uid, room_id).await,
+						| Err(_) => false,
+					};
 
 					if !is_join_to_join {
 						return Err!(Request(BadJson(
