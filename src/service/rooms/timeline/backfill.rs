@@ -12,13 +12,12 @@ use conduwuit_core::{
 };
 use futures::{FutureExt, StreamExt};
 use ruma::{
-	CanonicalJsonObject, EventId, Int, RoomId, ServerName,
+	CanonicalJsonObject, EventId, Int, RoomId, ServerName, UInt,
 	api::federation,
 	events::{
 		StateEventType,
 		room::{create::RoomCreateEventContent, power_levels::RoomPowerLevelsEventContent},
 	},
-	uint,
 };
 use serde_json::value::RawValue as RawJsonValue;
 
@@ -147,60 +146,123 @@ pub async fn backfill_if_required(
 		}
 	});
 
-	let mut servers = self.get_backfill_servers(room_id, room_mods).await.boxed();
+	// Iterative backfill loop: after each successful /backfill response, re-scan
+	// for new backward extremities created by the newly inserted events'
+	// prev_events. This matches Synapse's behavior where backfilled events create
+	// new backward extremities that are discovered on subsequent pagination calls.
+	let backfill_limit: u32 = limit.max(100).min(500).try_into().unwrap_or(100);
+	let mut budget = 5_u32;
 
-	let mut federated_room = false;
-
-	while let Some(ref backfill_server) = servers.next().await {
-		if !self.services.globals.server_is_ours(backfill_server) {
-			federated_room = true;
+	loop {
+		let mut backwards_extremities = Vec::new();
+		let mut scanned = 0_usize;
+		let mut pdus = self
+			.pdus_rev(room_id, Some(from.saturating_inc(ruma::api::Direction::Forward)))
+			.take(limit)
+			.boxed();
+		while let Some(Ok((_, pdu))) = pdus.next().await {
+			scanned = scanned.saturating_add(1);
+			for prev_event_id in &pdu.prev_events {
+				if self.get_pdu_id(prev_event_id).await.is_err() {
+					info!(
+						"backfill: gap at {} (missing prev_event {}) in {room_id}",
+						pdu.event_id, prev_event_id
+					);
+					backwards_extremities.push(pdu.event_id.clone());
+					break;
+				}
+			}
 		}
+
+		if backwards_extremities.is_empty() {
+			info!("backfill: no gaps in {room_id} (scanned {scanned} events from {from})");
+			return Ok(());
+		}
+
+		if budget == 0 {
+			info!(
+				"backfill: budget exhausted for {room_id} with {} remaining gaps",
+				backwards_extremities.len()
+			);
+			return Ok(());
+		}
+		budget = budget.saturating_sub(1);
+
 		info!(
-			"Asking {backfill_server} for backfill in {room_id} (extremities: \
-			 {backwards_extremities:?})"
+			"backfill: {room_id} has {} gaps (scanned {scanned}, budget {budget}): {:?}",
+			backwards_extremities.len(),
+			backwards_extremities
 		);
-		let response = self
-			.services
-			.sending
-			.send_federation_request(
-				backfill_server,
-				federation::backfill::get_backfill::v1::Request {
-					room_id: room_id.to_owned(),
-					v: backwards_extremities.clone(),
-					limit: uint!(100),
-				},
-			)
-			.await;
-		match response {
-			| Ok(response) => {
-				let pdus = response.pdus;
-				info!("backfill: {backfill_server} returned {} events for {room_id}", pdus.len());
-				if pdus.is_empty() {
-					continue;
-				}
-				// Handle timeline events newest-first (maintain timeline integrity)
-				for pdu in pdus {
-					if let Err(e) = self.backfill_pdu(backfill_server, pdu, None).boxed().await {
-						debug_warn!("Failed to add backfilled pdu in room {room_id}: {e}");
-					}
-				}
-				return Ok(());
-			},
-			| Err(ref e) => {
-				// If the server explicitly forbids us, drop it from candidates
-				if matches!(e, Error::Federation(_, _)) && e.to_string().contains("not allowed") {
-					info!("{backfill_server} forbade backfill for {room_id}, skipping");
-					continue;
-				}
-				warn!("{backfill_server} failed to provide backfill for room {room_id}: {e}");
-			},
-		}
-	}
 
-	if federated_room {
-		warn!("No servers could backfill, but backfill was needed in room {room_id}");
+		let mut servers = self
+			.get_backfill_servers(room_id, room_mods.clone())
+			.await
+			.boxed();
+		let mut federated_room = false;
+		let mut got_events = false;
+
+		while let Some(ref backfill_server) = servers.next().await {
+			if !self.services.globals.server_is_ours(backfill_server) {
+				federated_room = true;
+			}
+			info!(
+				"Asking {backfill_server} for backfill in {room_id} (extremities: \
+				 {backwards_extremities:?})"
+			);
+			let response = self
+				.services
+				.sending
+				.send_federation_request(
+					backfill_server,
+					federation::backfill::get_backfill::v1::Request {
+						room_id: room_id.to_owned(),
+						v: backwards_extremities.clone(),
+						limit: UInt::from(backfill_limit),
+					},
+				)
+				.await;
+			match response {
+				| Ok(response) => {
+					let pdus = response.pdus;
+					info!(
+						"backfill: {backfill_server} returned {} events for {room_id}",
+						pdus.len()
+					);
+					if pdus.is_empty() {
+						continue;
+					}
+					// Handle timeline events newest-first (maintain timeline integrity)
+					for pdu in pdus {
+						if let Err(e) =
+							self.backfill_pdu(backfill_server, pdu, None).boxed().await
+						{
+							debug_warn!("Failed to add backfilled pdu in room {room_id}: {e}");
+						}
+					}
+					got_events = true;
+					break; // Got events from this server, re-scan for new gaps
+				},
+				| Err(ref e) => {
+					// If the server explicitly forbids us, drop it from candidates
+					if matches!(e, Error::Federation(_, _))
+						&& e.to_string().contains("not allowed")
+					{
+						info!("{backfill_server} forbade backfill for {room_id}, skipping");
+						continue;
+					}
+					warn!("{backfill_server} failed to provide backfill for room {room_id}: {e}");
+				},
+			}
+		}
+
+		if !got_events {
+			if federated_room {
+				warn!("No servers could backfill, but backfill was needed in room {room_id}");
+			}
+			return Ok(());
+		}
+		// Loop back to re-scan for new gaps created by backfilled events
 	}
-	Ok(())
 }
 
 #[implement(super::Service)]

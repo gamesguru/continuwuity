@@ -111,50 +111,11 @@ where
 		.collect()
 		.await;
 
-	let prev_events_vec: Vec<_> = incoming_pdu.prev_events().map(ToOwned::to_owned).collect();
-	let is_fast_forward = !current_extremities.is_empty()
-		&& current_extremities.len() == prev_events_vec.len()
-		&& current_extremities
-			.iter()
-			.all(|e| prev_events_vec.contains(e));
-
-	// Pre-fetch missing auth chain events from federation BEFORE state resolution.
-	// We deleted iterative pre-fetching, so for non-fast-forward state events we
-	// must blindly trigger a bulk /state_ids to ensure state_res has the auth
-	// chain.
-	//
-	// Skip the pre-fetch entirely if any auth event is already rejected locally.
-	// The event will be rejected anyway during auth checking, so the /state_ids
-	// call would be wasted network traffic.
-	if !is_fast_forward && !skip_soft_fail {
-		let any_auth_rejected = futures::stream::iter(incoming_pdu.auth_events())
-			.any(|aid| async move { self.services.pdu_metadata.is_event_rejected(aid).await })
-			.await;
-
-		let any_prev_rejected = futures::stream::iter(incoming_pdu.prev_events())
-			.any(|pid| async move { self.services.pdu_metadata.is_event_rejected(pid).await })
-			.await;
-
-		if any_auth_rejected || any_prev_rejected {
-			debug!(
-				event_id = %incoming_pdu.event_id,
-				"Skipping /state pre-fetch: auth or prev events include rejected events"
-			);
-		} else {
-			debug!(
-				event_id = %incoming_pdu.event_id,
-				"Event is a DAG fork state event; pre-fetching auth chain via /state_ids"
-			);
-			let _ = Box::pin(self.fetch_state(
-				origin,
-				create_event,
-				room_id,
-				incoming_pdu.event_id(),
-				false,
-			))
-			.await;
-		}
-	}
+	// NOTE: The previous /state/ pre-fetch for non-fast-forward events has been
+	// removed. The /state/ endpoint is deprecated for auth gap-filling (use
+	// /state_ids + /event/ instead), and Complement test servers don't implement
+	// it. The pre-fetch result was ignored anyway (`let _ = ...`), so it only
+	// wasted network time and produced confusing 404 log spam.
 
 	let mut state_at_incoming_event = Box::pin(self.resolve_state_at_incoming_event(
 		&incoming_pdu,
@@ -774,7 +735,46 @@ where
 			"State is none. Resolving state for incoming PDU (prev_events count: {})",
 			incoming_pdu.prev_events().count()
 		);
-		let resolved_state = if incoming_pdu.prev_events().count() == 1 {
+
+		// When the incoming event creates a DAG fork (its prev_events don't
+		// match the current forward extremities), we MUST resolve state across
+		// both the incoming event's prev_events AND the current forward
+		// extremities. Without this, state resolution uses only the fork's
+		// state — which may lack memberships that exist in the current state
+		// (e.g., a user who joined on the other fork). `force_state` would
+		// then apply the fork's state as a delta, removing those memberships.
+		//
+		// This matches Synapse's `compute_event_context()` which resolves
+		// state groups across all prev_events (including current extremities
+		// that aren't in the incoming event's prev_events).
+		let is_dag_fork = !exact_match;
+
+		let resolved_state = if is_dag_fork {
+			// Collect all events we need to resolve across: the incoming
+			// event's prev_events PLUS the current forward extremities.
+			let mut all_extremities: Vec<OwnedEventId> = prev_events.clone();
+			for ext in &current_extremities {
+				if !all_extremities.contains(ext) {
+					all_extremities.push(ext.clone());
+				}
+			}
+
+			info!(
+				event_id = %incoming_pdu.event_id(),
+				n_prev = prev_events.len(),
+				n_extremities = current_extremities.len(),
+				n_total = all_extremities.len(),
+				"DAG fork detected: resolving state across prev_events + current extremities"
+			);
+
+			self.resolve_extremities(
+				all_extremities.iter().map(AsRef::as_ref),
+				room_id,
+				room_version_id,
+				None,
+			)
+			.await?
+		} else if incoming_pdu.prev_events().count() == 1 {
 			self.state_at_incoming_degree_one(incoming_pdu, room_id)
 				.await?
 		} else {
