@@ -404,7 +404,6 @@ features = [
 [workspace.dependencies.rezzy]
 git = "https://github.com/gamesguru/rezzy"
 branch = "dev"
-submodules = false
 
 [workspace.dependencies.rust-rocksdb]
 git = "https://forgejo.ellis.link/continuwuation/rust-rocksdb-zaidoon1"

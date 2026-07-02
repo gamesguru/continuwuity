@@ -150,7 +150,7 @@ pub async fn backfill_if_required(
 	// for new backward extremities created by the newly inserted events'
 	// prev_events. This matches Synapse's behavior where backfilled events create
 	// new backward extremities that are discovered on subsequent pagination calls.
-	let backfill_limit: u32 = limit.max(100).min(500).try_into().unwrap_or(100);
+	let backfill_limit: u32 = limit.clamp(100, 500).try_into().unwrap_or(100);
 	let mut budget = 5_u32;
 
 	loop {

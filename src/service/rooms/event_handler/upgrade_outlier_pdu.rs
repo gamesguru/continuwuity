@@ -102,21 +102,6 @@ where
 	let timer = Instant::now();
 	let room_version_id = get_room_version_id(create_event)?;
 
-	// --- Phase 1: resolve state at the incoming event (extracted to reduce frame)
-	// ---
-	let current_extremities: Vec<OwnedEventId> = self
-		.services
-		.state
-		.get_forward_extremities(room_id)
-		.collect()
-		.await;
-
-	// NOTE: The previous /state/ pre-fetch for non-fast-forward events has been
-	// removed. The /state/ endpoint is deprecated for auth gap-filling (use
-	// /state_ids + /event/ instead), and Complement test servers don't implement
-	// it. The pre-fetch result was ignored anyway (`let _ = ...`), so it only
-	// wasted network time and produced confusing 404 log spam.
-
 	let mut state_at_incoming_event = Box::pin(self.resolve_state_at_incoming_event(
 		&incoming_pdu,
 		create_event,
