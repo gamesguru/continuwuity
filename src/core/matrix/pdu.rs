@@ -5,6 +5,7 @@ mod raw_id;
 mod redact;
 #[cfg(test)]
 mod tests;
+mod topo;
 mod unsigned;
 
 use std::cmp::Ordering;
@@ -22,6 +23,7 @@ pub use self::{
 	count::Count,
 	id::{ShortId, *},
 	raw_id::*,
+	topo::TopoToken,
 };
 use super::{Event, StateKey};
 use crate::Result;

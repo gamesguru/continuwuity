@@ -1,12 +1,13 @@
 use axum::extract::State;
 use conduwuit::{
-	Err, Event, Result, at, debug_warn, err, ref_at,
+	Err, Event, PduEvent, Result, at, debug_warn, err, ref_at,
 	utils::{
 		IterStream,
 		future::TryExtExt,
 		stream::{BroadbandExt, ReadyExt, TryIgnore, WidebandExt},
 	},
 };
+use conduwuit_core::matrix::pdu::TopoToken;
 use conduwuit_service::rooms::{lazy_loading, lazy_loading::Options, short::ShortStateKey};
 use futures::{
 	FutureExt, StreamExt, TryFutureExt, TryStreamExt,
@@ -86,15 +87,19 @@ pub(crate) async fn get_context_route(
 	is_ignored_pdu(&services, &base_pdu, sender_user).await?;
 
 	let base_count = base_id.pdu_count();
+	let base_token = TopoToken {
+		depth: u64::from(base_pdu.depth()),
+		pdu_count: base_count,
+	};
 
-	let base_event = ignored_filter(&services, (base_count, base_pdu), sender_user);
+	let base_event = ignored_filter(&services, (base_token, base_pdu), sender_user);
 
 	// PDUs are used to get seen user IDs and then returned in response.
 
 	let events_before = services
 		.rooms
 		.timeline
-		.topo_pdus_rev(room_id, Some(base_count))
+		.topo_pdus_rev(room_id, Some(base_token))
 		.ignore_err()
 		.then(async |mut pdu| {
 			pdu.1.set_unsigned(Some(sender_user));
@@ -118,7 +123,7 @@ pub(crate) async fn get_context_route(
 	let events_after = services
 		.rooms
 		.timeline
-		.topo_pdus(room_id, Some(base_count))
+		.topo_pdus(room_id, Some(base_token))
 		.ignore_err()
 		.then(async |mut pdu| {
 			pdu.1.set_unsigned(Some(sender_user));
@@ -139,8 +144,11 @@ pub(crate) async fn get_context_route(
 		.take(limit / 2)
 		.collect();
 
-	let (base_event, events_before, events_after): (_, Vec<_>, Vec<_>) =
-		join3(base_event, events_before, events_after).boxed().await;
+	let (base_event, events_before, events_after): (
+		Option<(TopoToken, PduEvent)>,
+		Vec<_>,
+		Vec<_>,
+	) = join3(base_event, events_before, events_after).boxed().await;
 
 	let lazy_loading_context = lazy_loading::Context {
 		user_id: sender_user,
@@ -184,7 +192,8 @@ pub(crate) async fn get_context_route(
 		.try_collect()
 		.boxed();
 
-	let (lazy_loading_witnessed, state_ids) = join(lazy_loading_witnessed, state_ids).await;
+	let (lazy_loading_witnessed, state_ids): (_, Result<Vec<(ShortStateKey, OwnedEventId)>>) =
+		join(lazy_loading_witnessed, state_ids).await;
 
 	let state_ids: Vec<(ShortStateKey, OwnedEventId)> = state_ids?;
 	let shortstatekeys = state_ids.iter().map(at!(0)).stream();
@@ -222,16 +231,16 @@ pub(crate) async fn get_context_route(
 		start: events_before
 			.last()
 			.map(at!(0))
-			.or(Some(base_count))
+			.or(Some(base_token))
 			.as_ref()
-			.map(ToString::to_string),
+			.map(TopoToken::to_string),
 
 		end: events_after
 			.last()
 			.map(at!(0))
-			.or(Some(base_count))
+			.or(Some(base_token))
 			.as_ref()
-			.map(ToString::to_string),
+			.map(TopoToken::to_string),
 
 		events_before: events_before
 			.into_iter()

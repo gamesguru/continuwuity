@@ -1,10 +1,10 @@
 use axum::extract::State;
 use axum_client_ip::ClientIp;
 use conduwuit::{
-	Err, Error, Result, at, debug_warn, info,
+	Err, Error, PduEvent, Result, at, debug_warn, info,
 	matrix::{
 		event::{Event, Matches},
-		pdu::PduCount,
+		pdu::{PduCount, TopoToken},
 	},
 	ref_at,
 	utils::{
@@ -18,7 +18,7 @@ use conduwuit_service::{
 	rooms::{
 		lazy_loading,
 		lazy_loading::{MemberSet, Options},
-		timeline::PdusIterItem,
+		timeline::TopoIterItem,
 	},
 };
 use futures::{FutureExt, StreamExt, TryFutureExt, future::OptionFuture, pin_mut};
@@ -108,17 +108,20 @@ pub(crate) async fn get_message_events_route(
 		return Err!(Request(Forbidden("You don't have permission to view this room.")));
 	}
 
-	let from: PduCount = body
+	let from: TopoToken = body
 		.from
 		.as_deref()
 		.map(str::parse)
 		.transpose()?
 		.unwrap_or_else(|| match body.dir {
-			| Direction::Forward => PduCount::min(),
-			| Direction::Backward => PduCount::max(),
+			| Direction::Forward => TopoToken { depth: 0, pdu_count: PduCount::min() },
+			| Direction::Backward => TopoToken {
+				depth: u64::MAX,
+				pdu_count: PduCount::max(),
+			},
 		});
 
-	let to: Option<PduCount> = body.to.as_deref().map(str::parse).transpose()?;
+	let to: Option<TopoToken> = body.to.as_deref().map(str::parse).transpose()?;
 
 	let limit: usize = body
 		.limit
@@ -135,7 +138,7 @@ pub(crate) async fn get_message_events_route(
 		services
 			.rooms
 			.timeline
-			.backfill_if_required(room_id, from, limit)
+			.backfill_if_required(room_id, from.pdu_count, limit)
 			.boxed()
 			.await
 			.log_err()
@@ -163,7 +166,7 @@ pub(crate) async fn get_message_events_route(
 	};
 
 	let events: Vec<_> = it
-		.ready_take_while(|(count, _)| Some(*count) != to)
+		.ready_take_while(|(token, _)| Some(*token) != to)
 		.ready_filter_map(|item| event_filter(item, filter))
 		.wide_filter_map(|item| ignored_filter(&services, item, sender_user))
 		.wide_filter_map(
@@ -200,7 +203,7 @@ pub(crate) async fn get_message_events_route(
 			}
 		}),
 		room_id,
-		token: Some(from.into_unsigned()),
+		token: Some(from.pdu_count.into_unsigned()),
 		options: Some(&filter.lazy_load_options),
 	};
 
@@ -238,7 +241,7 @@ pub(crate) async fn get_message_events_route(
 
 	let resp = get_message_events::v3::Response {
 		start: from.to_string(),
-		end: next_token.as_ref().map(PduCount::to_string),
+		end: next_token.as_ref().map(TopoToken::to_string),
 		chunk,
 		state,
 	};
@@ -259,19 +262,17 @@ pub(crate) async fn lazy_loading_witness<'a, I>(
 	events: I,
 ) -> MemberSet
 where
-	I: Iterator<Item = &'a PdusIterItem> + Clone + Send,
+	I: Iterator<Item = &'a TopoIterItem> + Clone + Send,
 {
 	let oldest = events
 		.clone()
-		.map(|(count, _)| count)
-		.copied()
+		.map(|(token, _)| token.pdu_count)
 		.min()
 		.unwrap_or_else(PduCount::max);
 
 	let newest = events
 		.clone()
-		.map(|(count, _)| count)
-		.copied()
+		.map(|(token, _)| token.pdu_count)
 		.max()
 		.unwrap_or_else(PduCount::max);
 
@@ -316,11 +317,11 @@ async fn get_member_event(
 }
 
 #[inline]
-pub(crate) async fn ignored_filter(
+pub(crate) async fn ignored_filter<T: Send>(
 	services: &Services,
-	item: PdusIterItem,
+	item: (T, PduEvent),
 	user_id: &UserId,
-) -> Option<PdusIterItem> {
+) -> Option<(T, PduEvent)> {
 	let (_, ref pdu) = item;
 
 	is_ignored_pdu(services, pdu, user_id)
@@ -387,11 +388,11 @@ where
 }
 
 #[inline]
-pub(crate) async fn visibility_filter(
+pub(crate) async fn visibility_filter<T: Send>(
 	services: &Services,
-	item: PdusIterItem,
+	item: (T, PduEvent),
 	user_id: &UserId,
-) -> Option<PdusIterItem> {
+) -> Option<(T, PduEvent)> {
 	let (_, pdu) = &item;
 
 	let room_id = pdu.room_id_or_hash()?;
@@ -405,7 +406,10 @@ pub(crate) async fn visibility_filter(
 }
 
 #[inline]
-pub(crate) fn event_filter(item: PdusIterItem, filter: &RoomEventFilter) -> Option<PdusIterItem> {
+pub(crate) fn event_filter<T: Send>(
+	item: (T, PduEvent),
+	filter: &RoomEventFilter,
+) -> Option<(T, PduEvent)> {
 	let (_, pdu) = &item;
 	filter.matches(pdu).then_some(item)
 }

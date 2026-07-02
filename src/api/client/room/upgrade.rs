@@ -96,8 +96,8 @@ pub(crate) async fn upgrade_room_route(
 		.boxed()
 		.await;
 
-	if let Err(_e) = tombstone_test_result {
-		conduwuit::error!("TOMBSTONE UPGRADE REJECTED: {:?}", _e);
+	if let Err(e) = tombstone_test_result {
+		conduwuit::error!("TOMBSTONE UPGRADE REJECTED: {:?}", e);
 		return Err!(Request(Forbidden("User does not have permission to upgrade this room.")));
 	}
 

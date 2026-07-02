@@ -5,6 +5,7 @@ use std::{
 
 use conduwuit::{
 	Err, Event, PduCount, PduEvent, Result, at, err,
+	matrix::pdu::TopoToken,
 	result::NotFound,
 	utils::{
 		self,
@@ -37,6 +38,7 @@ struct Services {
 }
 
 pub type PdusIterItem = (PduCount, PduEvent);
+pub type TopoIterItem = (TopoToken, PduEvent);
 
 impl Data {
 	pub(super) fn new(args: &crate::Args<'_>) -> Self {
@@ -1125,12 +1127,12 @@ impl Data {
 			.raw_put_into_batch(batch, event_id_bytes, Json(json));
 		self.room_pducount_eventid
 			.insert_into_batch(batch, pdu_id, event_id_bytes);
-		let existing_metadata =
-			if let Ok(bytes) = self.eventid_metadata.get_blocking(event_id_bytes) {
-				rooms::timeline::EventMetadata::from_bincode(&bytes).ok()
-			} else {
-				None
-			};
+		let existing_metadata = if let Ok(bytes) = self.eventid_metadata.get(event_id_bytes).await
+		{
+			rooms::timeline::EventMetadata::from_bincode(&bytes).ok()
+		} else {
+			None
+		};
 
 		let topo_key = Self::topo_pducount_key(pdu_id, pdu.depth().into());
 		self.roomid_topologicalorder_pducount
@@ -1390,41 +1392,91 @@ impl Data {
 	pub(super) fn topo_pdus_rev<'a>(
 		&'a self,
 		room_id: &'a RoomId,
-		until: PduCount,
-	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		self.count_to_id(room_id, until.saturating_inc(Direction::Backward), Direction::Backward)
-			.and_then(move |current| async move {
-				let prefix = current.shortroomid();
-				let topo_key = self
-					.seek_topo_key(room_id, until, &current, Direction::Backward)
-					.await?;
+		until: TopoToken,
+	) -> impl Stream<Item = Result<TopoIterItem>> + Send + 'a {
+		let prefix = room_id.as_bytes().to_vec();
 
-				let stream = self
-					.roomid_topologicalorder_pducount
-					.rev_raw_stream_from(&topo_key);
-				Ok(self.parse_topo_stream(stream, prefix.to_vec()))
-			})
-			.try_flatten_stream()
+		let stream = async move {
+			let topo_key = if until.is_legacy() {
+				// Legacy tokens don't have depth, fallback to the old buggy behavior just for
+				// them
+				self.count_to_id(
+					room_id,
+					until.pdu_count.saturating_inc(Direction::Backward),
+					Direction::Backward,
+				)
+				.and_then(move |current| async move {
+					self.legacy_seek_topo_key(
+						room_id,
+						until.pdu_count,
+						&current,
+						Direction::Backward,
+					)
+					.await
+				})
+				.await?
+			} else {
+				let current = self
+					.count_to_id(
+						room_id,
+						until.pdu_count.saturating_inc(Direction::Backward),
+						Direction::Backward,
+					)
+					.await?;
+				Self::topo_pducount_key(&current, until.depth)
+			};
+
+			let raw_stream = self
+				.roomid_topologicalorder_pducount
+				.rev_raw_stream_from(&topo_key);
+			Ok(self.parse_topo_stream(raw_stream, prefix))
+		};
+		stream.try_flatten_stream()
 	}
 
 	pub(super) fn topo_pdus<'a>(
 		&'a self,
 		room_id: &'a RoomId,
-		from: PduCount,
-	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		self.count_to_id(room_id, from.saturating_inc(Direction::Forward), Direction::Forward)
-			.and_then(move |current| async move {
-				let prefix = current.shortroomid();
-				let topo_key = self
-					.seek_topo_key(room_id, from, &current, Direction::Forward)
-					.await?;
+		from: TopoToken,
+	) -> impl Stream<Item = Result<TopoIterItem>> + Send + 'a {
+		let prefix = room_id.as_bytes().to_vec();
 
-				let stream = self
-					.roomid_topologicalorder_pducount
-					.raw_stream_from(&topo_key);
-				Ok(self.parse_topo_stream(stream, prefix.to_vec()))
-			})
-			.try_flatten_stream()
+		let stream = async move {
+			let topo_key = if from.is_legacy() {
+				// Legacy tokens don't have depth, fallback to the old buggy behavior just for
+				// them
+				self.count_to_id(
+					room_id,
+					from.pdu_count.saturating_inc(Direction::Forward),
+					Direction::Forward,
+				)
+				.and_then(move |current| async move {
+					self.legacy_seek_topo_key(
+						room_id,
+						from.pdu_count,
+						&current,
+						Direction::Forward,
+					)
+					.await
+				})
+				.await?
+			} else {
+				let current = self
+					.count_to_id(
+						room_id,
+						from.pdu_count.saturating_inc(Direction::Forward),
+						Direction::Forward,
+					)
+					.await?;
+				Self::topo_pducount_key(&current, from.depth)
+			};
+
+			let raw_stream = self
+				.roomid_topologicalorder_pducount
+				.raw_stream_from(&topo_key);
+			Ok(self.parse_topo_stream(raw_stream, prefix))
+		};
+		stream.try_flatten_stream()
 	}
 
 	fn parse_json_slice(
@@ -1500,7 +1552,7 @@ impl Data {
 		Ok(pdu_id.into())
 	}
 
-	async fn seek_topo_key(
+	async fn legacy_seek_topo_key(
 		&self,
 		room_id: &RoomId,
 		token: PduCount,
@@ -1612,16 +1664,18 @@ impl Data {
 		&'a self,
 		stream: impl Stream<Item = Result<KeyVal<'a>>> + Send + 'a,
 		prefix: Vec<u8>,
-	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
+	) -> impl Stream<Item = Result<TopoIterItem>> + Send + 'a {
 		stream
 			.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
 			// Clone raw bytes to owned before async resolve to avoid
 			// RocksDB cursor invalidation through try_buffered
 			.map_ok(|(key, val)| (key.to_vec(), val.to_vec()))
 			.and_then(move |(topo_key, event_id_bytes)| async move {
+				let depth = u64::from_be_bytes(topo_key[8..16].try_into().expect("topo key must be 24 bytes"));
 				let pdu_id = Self::topo_key_to_pdu_id(&topo_key);
 				let json_bytes = self.eventid_pdu.get(&event_id_bytes).await?;
-				Self::parse_json_slice(None, (pdu_id.as_ref(), json_bytes.as_ref()))
+				let (pdu_count, pdu) = Self::parse_json_slice(None, (pdu_id.as_ref(), json_bytes.as_ref()))?;
+				Ok((TopoToken { depth, pdu_count }, pdu))
 			})
 	}
 

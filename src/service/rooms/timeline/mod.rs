@@ -16,7 +16,7 @@ mod state;
 use std::{fmt::Write, sync::Arc};
 
 use async_trait::async_trait;
-pub use conduwuit_core::matrix::pdu::{PduId, RawPduId, ShortRoomId};
+pub use conduwuit_core::matrix::pdu::{PduId, RawPduId, ShortRoomId, TopoToken};
 use conduwuit_core::{
 	Result, Server, SyncMutex, at, err,
 	matrix::{
@@ -37,11 +37,7 @@ use self::data::Data;
 pub(super) use self::state::TimelineStateResolver;
 pub use self::{
 	create::pdu_fits,
-	data::PdusIterItem,
-	extremities::{
-		calculate_true_extremities, calculate_true_extremities_roaring,
-		detect_phantom_extremities_roaring, merge_true_extremities_roaring,
-	},
+	data::{PdusIterItem, TopoIterItem},
 	heal::{HealOptions, HealResult},
 	metadata::EventMetadata,
 	repair_unsigned::update_unsigned_prev_content,
@@ -226,8 +222,8 @@ impl Service {
 	}
 
 	#[tracing::instrument(skip(self), level = "debug")]
-	pub async fn first_item_in_room(&self, room_id: &RoomId) -> Result<(PduCount, impl Event)> {
-		let pdus = self.pdus(room_id, None);
+	pub async fn first_item_in_room(&self, room_id: &RoomId) -> Result<(TopoToken, impl Event)> {
+		let pdus = self.topo_pdus(room_id, None);
 
 		pin_mut!(pdus);
 		pdus.try_next()
@@ -575,10 +571,10 @@ impl Service {
 	pub fn topo_pdus_rev<'a>(
 		&'a self,
 		room_id: &'a RoomId,
-		until: Option<PduCount>,
-	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
+		until: Option<TopoToken>,
+	) -> impl Stream<Item = Result<TopoIterItem>> + Send + 'a {
 		self.db
-			.topo_pdus_rev(room_id, until.unwrap_or_else(PduCount::max))
+			.topo_pdus_rev(room_id, until.unwrap_or_else(TopoToken::max))
 	}
 
 	#[tracing::instrument(skip(self), level = "info")]
@@ -599,10 +595,10 @@ impl Service {
 	pub fn topo_pdus<'a>(
 		&'a self,
 		room_id: &'a RoomId,
-		from: Option<PduCount>,
-	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
+		from: Option<TopoToken>,
+	) -> impl Stream<Item = Result<TopoIterItem>> + Send + 'a {
 		self.db
-			.topo_pdus(room_id, from.unwrap_or_else(PduCount::min))
+			.topo_pdus(room_id, from.unwrap_or_else(TopoToken::min))
 	}
 }
 
