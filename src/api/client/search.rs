@@ -167,17 +167,62 @@ async fn category_room_events(
 			}
 			pdu
 		})
-		.map(Event::into_format)
-		.map(|result| SearchResult {
-			rank: None,
-			result: Some(result),
-			context: EventContextResult {
-				profile_info: BTreeMap::new(), //TODO
-				events_after: Vec::new(),      //TODO
-				events_before: Vec::new(),     //TODO
-				start: None,                   //TODO
-				end: None,                     //TODO
-			},
+		.then(|pdu| async {
+			let (before_limit, after_limit) = match criteria.event_context.as_ref() {
+				Some(c) => (
+					c.before_limit.map_or(5, |u| u.try_into().unwrap_or(5)),
+					c.after_limit.map_or(5, |u| u.try_into().unwrap_or(5)),
+				),
+				None => (0, 0),
+			};
+
+			let mut events_before = Vec::new();
+			let mut events_after = Vec::new();
+
+			if before_limit > 0 || after_limit > 0 {
+				if let Some(room_id) = pdu.room_id_or_hash() {
+					let count = pdu.count();
+					
+					if before_limit > 0 {
+						use futures::{StreamExt, pin_mut};
+						let stream = services
+							.rooms
+							.timeline
+							.pdus_rev(&room_id, Some(count))
+							.take(before_limit);
+						pin_mut!(stream);
+						while let Some(Ok((_, prev_pdu))) = stream.next().await {
+							events_before.push(prev_pdu.into_format());
+						}
+						events_before.reverse();
+					}
+
+					if after_limit > 0 {
+						use futures::{StreamExt, pin_mut};
+						let stream = services
+							.rooms
+							.timeline
+							.pdus(&room_id, Some(count))
+							.take(after_limit);
+						pin_mut!(stream);
+						while let Some(Ok((_, next_pdu))) = stream.next().await {
+							events_after.push(next_pdu.into_format());
+						}
+					}
+				}
+			}
+
+			SearchResult {
+				rank: None,
+				result: Some(pdu.into_format()),
+				context: EventContextResult {
+					profile_info: BTreeMap::new(), //TODO
+					events_after,
+					events_before,
+					start: None,                   //TODO
+					end: None,                     //TODO
+				},
+			}
 		})
 		.collect()
 		.await;
