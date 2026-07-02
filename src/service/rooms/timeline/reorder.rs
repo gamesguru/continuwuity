@@ -245,7 +245,7 @@ impl Service {
 						true_extremities.len()
 					);
 
-					if let Ok(compressed) = self
+					if let Ok(Some(compressed)) = self
 						.services
 						.event_handler
 						.resolve_extremities(

@@ -47,7 +47,7 @@ pub(super) async fn resolve_state_before(
 			if let Some(&cached_ssh) = resolver.resolved_state_cache.get(&unique_sshs) {
 				cached_ssh
 			} else {
-				let compressed_state = self
+				let compressed_state_opt = self
 					.services
 					.event_handler
 					.state_at_incoming_resolved(
@@ -57,20 +57,26 @@ pub(super) async fn resolve_state_before(
 						resolver.prefetch_cache.clone(),
 					)
 					.await
-					.unwrap_or_else(|_| std::sync::Arc::new(std::collections::BTreeSet::new()));
+					.ok()
+					.flatten();
 
-				let state_delta = self
-					.services
-					.state_compressor
-					.save_state_with_parent(
-						resolver.room_id,
-						Some(unique_sshs[0]),
-						compressed_state,
-					)
-					.await
-					.ok();
+				let ssh = if let Some(compressed_state) = compressed_state_opt {
+					let state_delta = self
+						.services
+						.state_compressor
+						.save_state_with_parent(
+							resolver.room_id,
+							Some(unique_sshs[0]),
+							compressed_state,
+						)
+						.await
+						.ok();
 
-				let ssh = state_delta.map_or(resolver.empty_ssh, |d| d.shortstatehash);
+					state_delta.map_or(resolver.empty_ssh, |d| d.shortstatehash)
+				} else {
+					resolver.empty_ssh
+				};
+
 				resolver.resolved_state_cache.insert(unique_sshs, ssh);
 
 				ssh

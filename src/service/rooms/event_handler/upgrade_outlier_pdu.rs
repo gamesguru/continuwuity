@@ -776,12 +776,12 @@ where
 		);
 		let resolved_state = if incoming_pdu.prev_events().count() == 1 {
 			self.state_at_incoming_degree_one(incoming_pdu, room_id)
-				.await
+				.await?
 		} else {
 			self.state_at_incoming_resolved(incoming_pdu, room_id, room_version_id, None)
-				.await
+				.await?
 		};
-		if let Ok(compressed) = resolved_state {
+		if let Some(compressed) = resolved_state {
 			state_at_event = Some(StateAtEvent::Compressed(compressed));
 		}
 		info!("State resolution completed for incoming PDU");
