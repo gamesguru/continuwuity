@@ -50,8 +50,8 @@ impl Data {
 			Arc::new(RoaringTreemap::deserialize_from(raw.as_ref()).unwrap_or_else(|_| {
 				// Legacy format: packed u64 big-endian
 				let mut bm = RoaringTreemap::new();
-				for chunk in raw.chunks_exact(size_of::<u64>()) {
-					let id = u64::from_be_bytes(chunk.try_into().unwrap());
+				for chunk in raw.as_chunks::<{ size_of::<u64>() }>().0 {
+					let id = u64::from_be_bytes(*chunk);
 					bm.insert(id);
 				}
 				bm

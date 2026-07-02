@@ -1752,8 +1752,10 @@ impl Data {
 		let key = shorteventid.to_be_bytes();
 		let val = self.shorteventid_shortprevevents.get(&key).await?;
 		let prev_shorts = val
-			.chunks_exact(size_of::<u64>())
-			.map(utils::u64_from_u8)
+			.as_chunks::<{ size_of::<u64>() }>()
+			.0
+			.iter()
+			.map(|c| u64::from_be_bytes(*c))
 			.collect();
 		Ok(prev_shorts)
 	}
@@ -1778,8 +1780,10 @@ impl Data {
 		let key = shorteventid.to_be_bytes();
 		let val = self.shorteventid_shortauthevents.get(&key).await?;
 		let auth_shorts = val
-			.chunks_exact(size_of::<u64>())
-			.map(utils::u64_from_u8)
+			.as_chunks::<{ size_of::<u64>() }>()
+			.0
+			.iter()
+			.map(|c| u64::from_be_bytes(*c))
 			.collect();
 		Ok(auth_shorts)
 	}
@@ -1812,8 +1816,10 @@ impl Data {
 			.map(|res| {
 				let val = res?;
 				let auth_shorts = val
-					.chunks_exact(size_of::<u64>())
-					.map(utils::u64_from_u8)
+					.as_chunks::<{ size_of::<u64>() }>()
+					.0
+					.iter()
+					.map(|c| u64::from_be_bytes(*c))
 					.collect();
 				Ok(auth_shorts)
 			})
