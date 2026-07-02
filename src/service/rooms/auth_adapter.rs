@@ -181,7 +181,13 @@ pub fn rezzy_auth_check<S: StateProvider<String>>(
 	version: StateResVersion,
 ) -> bool {
 	let lean = pdu_to_lean(pdu);
-	rezzy::auth::check_auth(&lean, state, version, None).is_ok()
+	match rezzy::auth::check_auth(&lean, state, version, None) {
+		| Ok(()) => true,
+		| Err(e) => {
+			tracing::warn!("rezzy auth check failed: {e}");
+			false
+		},
+	}
 }
 
 /// Convenience wrapper bundling a [`PduStateProvider`] with the resolved
