@@ -858,8 +858,8 @@ where
 					// rejected outliers) can safely fall through to the current
 					// room state fallback — the auth check will still reject
 					// invalid events.
-					let any_prev_unknown = futures::stream::iter(incoming_pdu.prev_events())
-						.any(|prev_id| async move {
+					let all_prevs_unknown = futures::stream::iter(incoming_pdu.prev_events())
+						.all(|prev_id| async move {
 							self.services.timeline.get_pdu_id(prev_id).await.is_err()
 								&& self
 									.services
@@ -870,24 +870,28 @@ where
 						})
 						.await;
 
-					if any_prev_unknown {
+					if all_prevs_unknown {
 						info!(
 							event_id = %incoming_pdu.event_id,
-							"Rejecting event: prev_events completely unknown and /state_ids fetch failed"
+							"Rejecting event: all prev_events unknown and /state_ids fetch failed"
 						);
 						self.services
 							.pdu_metadata
 							.mark_event_rejected(
 								incoming_pdu.event_id(),
-								"prev_events unknown and /state_ids fetch failed",
+								"all prev_events unknown and /state_ids fetch failed",
 							)
 							.await;
-						return Ok(StateAtEvent::Resolved(HashMap::new()));
+						return Err!(Request(Forbidden(
+							"Cannot determine state: all prev_events unknown and /state_ids \
+							 fetch failed"
+						)));
 					}
 
 					// All prev_events exist but state hashes not computed — safe to
 					// fall back to current room state for the auth check.
-					debug!(
+					info!(
+						target: "state_res_debug",
 						event_id = %incoming_pdu.event_id,
 						"fetch_state failed but prev_events present; falling back to current room state"
 					);
