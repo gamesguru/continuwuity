@@ -1394,9 +1394,15 @@ impl Data {
 		room_id: &'a RoomId,
 		until: TopoToken,
 	) -> impl Stream<Item = Result<TopoIterItem>> + Send + 'a {
-		let prefix = room_id.as_bytes().to_vec();
-
 		let stream = async move {
+			let prefix = self
+				.services
+				.short
+				.get_shortroomid(room_id)
+				.await?
+				.to_be_bytes()
+				.to_vec();
+
 			let topo_key = if until.is_legacy() {
 				// Legacy tokens don't have depth, fallback to the old buggy behavior just for
 				// them
@@ -1439,9 +1445,15 @@ impl Data {
 		room_id: &'a RoomId,
 		from: TopoToken,
 	) -> impl Stream<Item = Result<TopoIterItem>> + Send + 'a {
-		let prefix = room_id.as_bytes().to_vec();
-
 		let stream = async move {
+			let prefix = self
+				.services
+				.short
+				.get_shortroomid(room_id)
+				.await?
+				.to_be_bytes()
+				.to_vec();
+
 			let topo_key = if from.is_legacy() {
 				// Legacy tokens don't have depth, fallback to the old buggy behavior just for
 				// them
