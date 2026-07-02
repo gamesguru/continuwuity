@@ -189,7 +189,6 @@ async fn category_room_events(
 							while let Some(Ok((_, prev_pdu))) = stream.next().await {
 								events_before.push(prev_pdu.into_format());
 							}
-							events_before.reverse();
 						}
 
 						if after_limit > 0 {
