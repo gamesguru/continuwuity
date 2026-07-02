@@ -365,6 +365,12 @@ pub(crate) async fn build_sync_events(
 					if !state_after.is_empty() {
 						joined_state_after.insert(room_id, state_after);
 					}
+				} else {
+					conduwuit::info!(
+						target: "timeline_debug",
+						"incremental sync skipping empty room {} for {}",
+						room_id, context.syncing_user
+					);
 				}
 
 				(joined_rooms, joined_state_after, all_updates)

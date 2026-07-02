@@ -55,6 +55,12 @@ async fn load_timeline(
 	ending_count: Option<PduCount>,
 	limit: usize,
 ) -> Result<TimelinePdus> {
+	info!(
+		target: "timeline_debug",
+		"load_timeline entry: room={} sender={} starting={:?} ending={:?} limit={}",
+		room_id, sender_user, starting_count, ending_count, limit
+	);
+
 	let mut pdu_stream = match starting_count {
 		| Some(starting_count) => {
 			let last_timeline_count = services
@@ -71,8 +77,8 @@ async fn load_timeline(
 				info!(
 					target: "timeline_debug",
 					"load_timeline early return for {}: last_timeline_count={:?} <= \
-					 starting_count={:?}",
-					room_id, last_timeline_count, starting_count
+					 starting_count={:?} sender={}",
+					room_id, last_timeline_count, starting_count, sender_user
 				);
 				return Ok(TimelinePdus::default());
 			}
@@ -196,8 +202,8 @@ async fn load_timeline(
 	if pdus.is_empty() && starting_count.is_some() {
 		info!(
 			target: "timeline_debug",
-			"sync: 0 timeline pdus for {} from {:?} to {:?} (limited = {:?})",
-			room_id, starting_count, ending_count, limited,
+			"sync: 0 timeline pdus for {} from {:?} to {:?} (limited = {:?}) sender={}",
+			room_id, starting_count, ending_count, limited, sender_user,
 		);
 	} else {
 		info!(
