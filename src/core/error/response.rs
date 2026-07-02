@@ -16,7 +16,7 @@ impl axum::response::IntoResponse for Error {
 	fn into_response(self) -> axum::response::Response {
 		let status = self.status_code();
 		if status == StatusCode::INTERNAL_SERVER_ERROR {
-			error!(
+			crate::warn!(
 				error = %self,
 				error_debug = ?self,
 				kind = ?self.kind(),
@@ -87,11 +87,8 @@ pub(super) fn bad_request_code(kind: &ErrorKind) -> StatusCode {
 		// 413
 		| TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
 
-		// 405
-		| Unrecognized => StatusCode::METHOD_NOT_ALLOWED,
-
 		// 404
-		| NotFound | NotImplemented | FeatureDisabled | SenderIgnored { .. } =>
+		| Unrecognized | NotFound | NotImplemented | FeatureDisabled | SenderIgnored { .. } =>
 			StatusCode::NOT_FOUND,
 
 		// 403

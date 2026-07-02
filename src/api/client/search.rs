@@ -57,7 +57,6 @@ pub(crate) async fn search_events_route(
 	})
 }
 
-#[allow(clippy::map_unwrap_or)]
 async fn category_room_events(
 	services: &Services,
 	sender_user: &UserId,
@@ -84,44 +83,52 @@ async fn category_room_events(
 		.clone()
 		.map(IntoIterator::into_iter)
 		.map(IterStream::stream)
-		.map(StreamExt::boxed)
-		.unwrap_or_else(|| {
-			services
-				.rooms
-				.state_cache
-				.rooms_joined(sender_user)
-				.map(ToOwned::to_owned)
-				.boxed()
-		});
+		.map_or_else(
+			|| {
+				services
+					.rooms
+					.state_cache
+					.rooms_joined(sender_user)
+					.map(ToOwned::to_owned)
+					.boxed()
+			},
+			StreamExt::boxed,
+		);
 
 	let results: Vec<_> = rooms
-		.filter_map(|room_id| async move {
-			check_room_visible(services, sender_user, &room_id, criteria)
-				.await
-				.is_ok()
-				.then_some(room_id)
+		.filter_map(|room_id| {
+			async move {
+				check_room_visible(services, sender_user, &room_id, criteria)
+					.await
+					.is_ok()
+					.then_some(room_id)
+			}
+			.boxed()
 		})
-		.filter_map(|room_id| async move {
-			let query = RoomQuery {
-				room_id: &room_id,
-				user_id: Some(sender_user),
-				criteria,
-				skip: next_batch,
-				limit,
-			};
+		.filter_map(|room_id| {
+			async move {
+				let query = RoomQuery {
+					room_id: &room_id,
+					user_id: Some(sender_user),
+					criteria,
+					skip: next_batch,
+					limit,
+				};
 
-			let (count, results) = services
-				.rooms
-				.search
-				.search_pdus(&query, sender_user)
-				.await
-				.ok()?;
+				let (count, results) = services
+					.rooms
+					.search
+					.search_pdus(&query, sender_user)
+					.await
+					.ok()?;
 
-			results
-				.collect::<Vec<_>>()
-				.map(|results| (room_id.clone(), count, results))
-				.map(Some)
-				.await
+				results
+					.collect::<Vec<_>>()
+					.map(|results| (room_id.clone(), count, results))
+					.map(Some)
+					.await
+			}
+			.boxed()
 		})
 		.collect()
 		.await;
@@ -160,17 +167,58 @@ async fn category_room_events(
 			}
 			pdu
 		})
-		.map(Event::into_format)
-		.map(|result| SearchResult {
-			rank: None,
-			result: Some(result),
-			context: EventContextResult {
-				profile_info: BTreeMap::new(), //TODO
-				events_after: Vec::new(),      //TODO
-				events_before: Vec::new(),     //TODO
-				start: None,                   //TODO
-				end: None,                     //TODO
-			},
+		.then(|pdu| async {
+			let before_limit = usize::try_from(criteria.event_context.before_limit).unwrap_or(5);
+			let after_limit = usize::try_from(criteria.event_context.after_limit).unwrap_or(5);
+
+			let mut events_before = Vec::new();
+			let mut events_after = Vec::new();
+
+			if before_limit > 0 || after_limit > 0 {
+				if let Some(room_id) = pdu.room_id_or_hash() {
+					if let Ok(count) = services.rooms.timeline.get_pdu_count(pdu.event_id()).await
+					{
+						if before_limit > 0 {
+							use futures::{StreamExt, pin_mut};
+							let stream = services
+								.rooms
+								.timeline
+								.pdus_rev(&room_id, Some(count))
+								.take(before_limit);
+							pin_mut!(stream);
+							while let Some(Ok((_, prev_pdu))) = stream.next().await {
+								events_before.push(prev_pdu.into_format());
+							}
+							events_before.reverse();
+						}
+
+						if after_limit > 0 {
+							use futures::{StreamExt, pin_mut};
+							let stream = services
+								.rooms
+								.timeline
+								.pdus(&room_id, Some(count))
+								.take(after_limit);
+							pin_mut!(stream);
+							while let Some(Ok((_, next_pdu))) = stream.next().await {
+								events_after.push(next_pdu.into_format());
+							}
+						}
+					}
+				}
+			}
+
+			SearchResult {
+				rank: None,
+				result: Some(pdu.into_format()),
+				context: EventContextResult {
+					profile_info: BTreeMap::new(), //TODO
+					events_after,
+					events_before,
+					start: None, //TODO
+					end: None,   //TODO
+				},
+			}
 		})
 		.collect()
 		.await;

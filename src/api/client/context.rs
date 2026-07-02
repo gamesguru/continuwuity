@@ -19,6 +19,7 @@ use crate::{
 	client::{
 		is_ignored_pdu,
 		message::{event_filter, ignored_filter, lazy_loading_witness, visibility_filter},
+		sync::add_membership_to_unsigned,
 	},
 };
 
@@ -93,10 +94,11 @@ pub(crate) async fn get_context_route(
 	let events_before = services
 		.rooms
 		.timeline
-		.pdus_rev(room_id, Some(base_count))
+		.topo_pdus_rev(room_id, Some(base_count))
 		.ignore_err()
 		.then(async |mut pdu| {
 			pdu.1.set_unsigned(Some(sender_user));
+			add_membership_to_unsigned(&services, sender_user, &mut pdu.1).await;
 			if let Err(e) = services
 				.rooms
 				.pdu_metadata
@@ -116,10 +118,11 @@ pub(crate) async fn get_context_route(
 	let events_after = services
 		.rooms
 		.timeline
-		.pdus(room_id, Some(base_count))
+		.topo_pdus(room_id, Some(base_count))
 		.ignore_err()
 		.then(async |mut pdu| {
 			pdu.1.set_unsigned(Some(sender_user));
+			add_membership_to_unsigned(&services, sender_user, &mut pdu.1).await;
 			if let Err(e) = services
 				.rooms
 				.pdu_metadata

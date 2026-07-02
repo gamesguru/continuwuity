@@ -105,7 +105,9 @@ impl super::Service {
 		Ok(CachedDest {
 			dest: actual_dest,
 			host: host.uri_string(),
-			expire: CachedDest::default_expire(),
+			expire: CachedDest::default_expire(
+				self.services.server.config.dns_cache_override_expire,
+			),
 		})
 	}
 
@@ -295,13 +297,15 @@ impl super::Service {
 		self.services.server.check_running()?;
 
 		debug!("querying IP for {untername:?} ({hostname:?}:{port})");
-		match self.resolver.resolver.lookup_ip(hostname.to_owned()).await {
+		match self.resolver.lookup_ip(hostname.to_owned()).await {
 			| Err(e) => Self::handle_resolve_error(&e, hostname, "IP"),
 			| Ok(override_ip) => {
 				self.cache.set_override(untername, &CachedOverride {
 					ips: override_ip.into_iter().take(MAX_IPS).collect(),
 					port,
-					expire: CachedOverride::default_expire(),
+					expire: CachedOverride::default_expire(
+						self.services.server.config.dns_cache_override_expire,
+					),
 					overriding: (hostname != untername)
 						.then_some(hostname.into())
 						.inspect(|_| debug_info!("{untername:?} overridden by {hostname:?}")),
@@ -322,7 +326,7 @@ impl super::Service {
 
 			debug!("querying SRV for {hostname:?}");
 			let hostname = hostname.trim_end_matches('.');
-			match self.resolver.resolver.srv_lookup(hostname).await {
+			match self.resolver.srv_lookup(hostname).await {
 				| Err(e) => Self::handle_resolve_error(&e, hostname, "SRV")?,
 				| Ok(result) => {
 					return Ok(result.iter().next().map(|result| {
@@ -352,7 +356,7 @@ impl super::Service {
 					Ok(())
 				},
 				| ProtoErrorKind::Timeout => {
-					Err!(warn!(%host, %qtype, "DNS {e}"))
+					Err!(debug!(%host, %qtype, "DNS {e}"))
 				},
 				| ProtoErrorKind::NoConnections => {
 					error!(
@@ -362,16 +366,18 @@ impl super::Service {
 						 federation connectivity."
 					);
 
-					Err!(error!(%host, %qtype, "DNS error: {e}"))
+					Err!(debug!(%host, %qtype, "DNS error: {e}"))
 				},
-				| _ => Err!(error!(%host, %qtype, "DNS error: {e}")),
+				| _ => Err!(debug!(%host, %qtype, "DNS error: {e}")),
 			},
-			| _ => Err!(error!(%host, %qtype, "DNS error: {e}")),
+			| _ => Err!(warn!(%host, %qtype, "DNS error: {e}")),
 		}
 	}
 
 	fn validate_dest(&self, dest: &ServerName) -> Result<()> {
-		if dest == self.services.server.name && !self.services.server.config.federation_loopback {
+		if self.services.server.is_ours(dest.as_str())
+			&& !self.services.server.config.federation_loopback
+		{
 			return Err!("Won't send federation request to ourselves");
 		}
 

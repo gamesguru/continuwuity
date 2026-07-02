@@ -1,10 +1,13 @@
-use conduwuit::{Result, implement, trace};
+use conduwuit::{implement, trace};
 use futures::{FutureExt, StreamExt, pin_mut, stream::FuturesUnordered};
 use ruma::{DeviceId, UserId};
 
 #[implement(super::Service)]
-#[tracing::instrument(skip(self), level = "debug")]
-pub async fn watch(&self, user_id: &UserId, device_id: &DeviceId) -> Result {
+pub async fn setup_watch<'a>(
+	&'a self,
+	user_id: &'a UserId,
+	device_id: &'a DeviceId,
+) -> impl Future<Output = ()> + Send + 'a {
 	let userid_bytes = user_id.as_bytes().to_vec();
 	let mut userid_prefix = userid_bytes.clone();
 	userid_prefix.push(0xFF);
@@ -19,8 +22,9 @@ pub async fn watch(&self, user_id: &UserId, device_id: &DeviceId) -> Result {
 	// TODO: only send for user they share a room with
 	futures.push(self.db.todeviceid_events.watch_prefix(&userdeviceid_prefix));
 
-	futures.push(self.db.userroomid_joined.watch_prefix(&userid_prefix));
 	futures.push(self.db.userroomid_invitestate.watch_prefix(&userid_prefix));
+	futures.push(self.db.userroomid_joined.watch_prefix(&userid_prefix));
+	futures.push(self.db.userroomid_knockedstate.watch_prefix(&userid_prefix));
 	futures.push(self.db.userroomid_leftstate.watch_prefix(&userid_prefix));
 	futures.push(
 		self.db
@@ -61,7 +65,7 @@ pub async fn watch(&self, user_id: &UserId, device_id: &DeviceId) -> Result {
 
 		// PDUs
 		let short_roomid = short_roomid.to_be_bytes().to_vec();
-		futures.push(self.db.pduid_pdu.watch_prefix(&short_roomid));
+		futures.push(self.db.room_pducount_eventid.watch_prefix(&short_roomid));
 
 		// EDUs
 		let typing_room_id = room_id.to_owned();
@@ -99,14 +103,14 @@ pub async fn watch(&self, user_id: &UserId, device_id: &DeviceId) -> Result {
 	// Server shutdown
 	futures.push(self.services.server.until_shutdown().boxed());
 
-	if !self.services.server.running() {
-		return Ok(());
+	async move {
+		if !self.services.server.running() {
+			return;
+		}
+
+		// Wait until one of them finds something
+		trace!(futures = futures.len(), "watch started");
+		futures.next().await;
+		trace!(futures = futures.len(), "watch finished");
 	}
-
-	// Wait until one of them finds something
-	trace!(futures = futures.len(), "watch started");
-	futures.next().await;
-	trace!(futures = futures.len(), "watch finished");
-
-	Ok(())
 }

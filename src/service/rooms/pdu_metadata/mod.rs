@@ -131,8 +131,12 @@ impl Service {
 
 	#[inline]
 	#[tracing::instrument(skip(self), level = "debug")]
-	pub fn mark_event_soft_failed(&self, event_id: &EventId) {
-		self.db.mark_event_soft_failed(event_id);
+	pub fn mark_event_soft_failed(&self, event_id: &EventId, reason: &str) {
+		self.db.mark_event_soft_failed(event_id, reason);
+	}
+
+	pub async fn get_soft_fail_reason(&self, event_id: &EventId) -> Option<String> {
+		self.db.get_soft_fail_reason(event_id).await
 	}
 
 	#[inline]
@@ -140,4 +144,51 @@ impl Service {
 	pub async fn is_event_soft_failed(&self, event_id: &EventId) -> bool {
 		self.db.is_event_soft_failed(event_id).await
 	}
+
+	pub async fn is_event_rejected(&self, event_id: &EventId) -> bool {
+		self.db.is_event_rejected(event_id).await
+	}
+
+	pub async fn mark_event_rejected(&self, event_id: &EventId, reason: &str) {
+		// Only protect events that are truly on the timeline (have a PduCount
+		// ordering entry), not outliers. The eventid_pdu table is shared by
+		// both timeline and outlier paths, so pdu_exists would incorrectly
+		// prevent rejection of outliers that were just added.
+		if self.is_event_visible_to_clients(event_id).await {
+			conduwuit::warn!(
+				%event_id,
+				%reason,
+				"refusing to reject timeline event (already passed auth)"
+			);
+			return;
+		}
+		self.db.mark_event_rejected(event_id, reason);
+	}
+
+	pub fn unmark_event_soft_failed(&self, event_id: &EventId) {
+		self.db.unmark_event_soft_failed(event_id);
+	}
+
+	pub fn unmark_event_rejected(&self, event_id: &EventId) {
+		self.db.unmark_event_rejected(event_id);
+	}
+
+	/// Returns true if the event is not rejected. Soft-failed events ARE
+	/// accepted for auth purposes (used in federation/state-res contexts).
+	pub async fn is_event_accepted(&self, event_id: &EventId) -> bool {
+		!self.db.is_event_rejected(event_id).await
+	}
+
+	/// Returns true if the event is in the timeline and should be visible
+	/// to clients. Events only in the outlier store (rejected, pending,
+	/// etc.) are not visible.
+	pub async fn is_event_visible_to_clients(&self, event_id: &EventId) -> bool {
+		self.services.timeline.get_pdu_id(event_id).await.is_ok()
+	}
+
+	pub async fn get_rejection_reason(&self, event_id: &EventId) -> Option<String> {
+		self.db.get_rejection_reason(event_id).await
+	}
+
+	pub fn clear_pdu_markers(&self, event_id: &EventId) { self.db.clear_pdu_markers(event_id); }
 }

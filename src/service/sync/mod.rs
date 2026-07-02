@@ -27,12 +27,13 @@ pub struct Service {
 
 pub struct Data {
 	todeviceid_events: Arc<Map>,
-	userroomid_joined: Arc<Map>,
 	userroomid_invitestate: Arc<Map>,
+	userroomid_joined: Arc<Map>,
+	userroomid_knockedstate: Arc<Map>,
 	userroomid_leftstate: Arc<Map>,
 	userroomid_notificationcount: Arc<Map>,
 	userroomid_highlightcount: Arc<Map>,
-	pduid_pdu: Arc<Map>,
+	room_pducount_eventid: Arc<Map>,
 	keychangeid_userid: Arc<Map>,
 	roomusertype_roomuserdataid: Arc<Map>,
 	readreceiptid_readreceipt: Arc<Map>,
@@ -73,12 +74,13 @@ impl crate::Service for Service {
 		Ok(Arc::new(Self {
 			db: Data {
 				todeviceid_events: args.db["todeviceid_events"].clone(),
-				userroomid_joined: args.db["userroomid_joined"].clone(),
 				userroomid_invitestate: args.db["userroomid_invitestate"].clone(),
+				userroomid_joined: args.db["userroomid_joined"].clone(),
+				userroomid_knockedstate: args.db["userroomid_knockedstate"].clone(),
 				userroomid_leftstate: args.db["userroomid_leftstate"].clone(),
 				userroomid_notificationcount: args.db["userroomid_notificationcount"].clone(),
 				userroomid_highlightcount: args.db["userroomid_highlightcount"].clone(),
-				pduid_pdu: args.db["pduid_pdu"].clone(),
+				room_pducount_eventid: args.db["room_pducount_eventid"].clone(),
 				keychangeid_userid: args.db["keychangeid_userid"].clone(),
 				roomusertype_roomuserdataid: args.db["roomusertype_roomuserdataid"].clone(),
 				readreceiptid_readreceipt: args.db["readreceiptid_readreceipt"].clone(),

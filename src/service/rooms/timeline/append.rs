@@ -1,11 +1,8 @@
-use std::{
-	collections::{BTreeMap, HashSet},
-	sync::Arc,
-};
+use std::{collections::HashSet, sync::Arc};
 
 use conduwuit::trace;
 use conduwuit_core::{
-	Result, err, error, implement,
+	Result, err, error, implement, info,
 	matrix::{
 		event::Event,
 		pdu::{PduCount, PduEvent, PduId, RawPduId},
@@ -15,7 +12,7 @@ use conduwuit_core::{
 };
 use futures::StreamExt;
 use ruma::{
-	CanonicalJsonObject, CanonicalJsonValue, EventId, RoomVersionId, UserId,
+	CanonicalJsonObject, OwnedEventId, RoomVersionId, UserId,
 	events::{
 		GlobalAccountDataEventType, StateEventType, TimelineEventType,
 		push_rules::PushRulesEvent,
@@ -46,7 +43,7 @@ pub async fn append_incoming_pdu<'a, Leaves>(
 	room_id: &'a ruma::RoomId,
 ) -> Result<Option<RawPduId>>
 where
-	Leaves: Iterator<Item = &'a EventId> + Send + 'a,
+	Leaves: Iterator<Item = OwnedEventId> + Send + 'a,
 {
 	// We append to state before appending the pdu, so we don't have a moment in
 	// time with the pdu without it's state. This is okay because append_pdu can't
@@ -56,22 +53,40 @@ where
 		.set_event_state(&pdu.event_id, room_id, state_ids_compressed)
 		.await?;
 
+	// Soft-failed events pass auth against the state at the event but fail
+	// against the current room state. Per spec §11.33.2.6 they SHOULD NOT
+	// appear in /sync or /messages. Store the state association (above) for
+	// DAG integrity, but do NOT append to the timeline sequence.
 	if soft_fail {
+		self.services.outlier.clear_outlier_flag(pdu.event_id());
 		self.services
 			.pdu_metadata
-			.mark_as_referenced(room_id, pdu.prev_events.iter().map(AsRef::as_ref));
+			.unmark_event_rejected(pdu.event_id());
 
-		// self.services
-		// 	.state
-		// 	.set_forward_extremities(room_id, new_room_leaves, state_lock)
-		// 	.await;
-
+		conduwuit::debug_warn!(
+			event_id = %pdu.event_id,
+			"Event soft-failed; stored state but omitted from timeline"
+		);
 		return Ok(None);
 	}
 
 	let pdu_id = self
-		.append_pdu(pdu, pdu_json, new_room_leaves, state_lock, room_id)
+		.append_pdu(pdu, pdu_json, new_room_leaves, state_lock, room_id, soft_fail)
 		.await?;
+
+	// Clean up the outlier table entry now that this event is in the timeline.
+	// Without this, events upgraded via the federation path remain in both the
+	// timeline and outlier tables indefinitely (the "stuck" state bug).
+	self.services.outlier.clear_outlier_flag(pdu.event_id());
+
+	// Clear any stale rejection flags now that the event is accepted into
+	// the timeline. Without this, events that were rejected during initial
+	// backfill (e.g., due to temporarily missing auth events) remain
+	// permanently poisoned — cascading auth failures through state
+	// resolution. Soft-fail flags are intentional and must persist.
+	self.services
+		.pdu_metadata
+		.unmark_event_rejected(pdu.event_id());
 
 	// Process admin commands for federation events
 	if *pdu.kind() == TimelineEventType::RoomMessage {
@@ -111,9 +126,10 @@ pub async fn append_pdu<'a, Leaves>(
 	leaves: Leaves,
 	state_lock: &'a RoomMutexGuard,
 	room_id: &'a ruma::RoomId,
+	soft_fail: bool,
 ) -> Result<RawPduId>
 where
-	Leaves: Iterator<Item = &'a EventId> + Send + 'a,
+	Leaves: Iterator<Item = OwnedEventId> + Send + 'a,
 {
 	// Coalesce database writes for the remainder of this scope.
 	let _cork = self.db.db.cork();
@@ -129,52 +145,65 @@ where
 	// but state events need to have previous content in the unsigned field, so
 	// clients can easily interpret things like membership changes
 	if let Some(state_key) = pdu.state_key() {
-		if let CanonicalJsonValue::Object(unsigned) = pdu_json
-			.entry("unsigned".to_owned())
-			.or_insert_with(|| CanonicalJsonValue::Object(BTreeMap::default()))
+		if let Ok(shortstatehash) = self
+			.services
+			.state_accessor
+			.pdu_shortstatehash(pdu.event_id())
+			.await
 		{
-			if let Ok(shortstatehash) = self
+			match self
 				.services
 				.state_accessor
-				.pdu_shortstatehash(pdu.event_id())
+				.state_get(shortstatehash, &pdu.kind().to_string().into(), state_key)
 				.await
 			{
-				if let Ok(prev_state) = self
-					.services
-					.state_accessor
-					.state_get(shortstatehash, &pdu.kind().to_string().into(), state_key)
-					.await
-				{
-					unsigned.insert(
-						"prev_content".to_owned(),
-						CanonicalJsonValue::Object(
-							utils::to_canonical_object(prev_state.get_content_as_value())
-								.map_err(|e| {
-									err!(Database(error!(
-										"Failed to convert prev_state to canonical JSON: {e}",
-									)))
-								})?,
-						),
+				| Ok(prev_state) => {
+					let prev_content_value = prev_state.get_content_as_value();
+					let curr_content_value = pdu.get_content_as_value();
+
+					// Log no-op membership transitions (identical content)
+					if pdu.kind() == &TimelineEventType::RoomMember
+						&& prev_content_value == curr_content_value
+					{
+						info!(
+							event_id = %pdu.event_id(),
+							sender = %pdu.sender(),
+							state_key = %state_key,
+							prev_event_id = %prev_state.event_id(),
+							room_id = %room_id,
+							"no-op membership event: content identical to prev_content \
+							 (possible stale state lookup during DAG fork)",
+						);
+					}
+
+					if let Err(e) = crate::rooms::timeline::update_unsigned_prev_content(
+						&mut pdu_json,
+						&prev_state,
+					) {
+						error!(%room_id, event_id = %pdu.event_id(), "Failed to update unsigned.prev_content: {e}");
+					}
+				},
+				| Err(e) => {
+					// It's normal for prev_state to be missing, especially for new members
+					// joining a room. No need to log an error.
+					conduwuit::debug!(
+						event_id = %pdu.event_id(),
+						%shortstatehash,
+						%state_key,
+						"state_get failed for prev_content (expected for new members): {e}",
 					);
-					unsigned.insert(
-						String::from("prev_sender"),
-						CanonicalJsonValue::String(prev_state.sender().to_string()),
-					);
-					unsigned.insert(
-						String::from("replaces_state"),
-						CanonicalJsonValue::String(prev_state.event_id().to_string()),
-					);
-				}
+				},
 			}
-		} else {
-			error!("Invalid unsigned type in pdu.");
 		}
 	}
 
 	// We must keep track of all events that have been referenced.
-	self.services
-		.pdu_metadata
-		.mark_as_referenced(room_id, pdu.prev_events().map(AsRef::as_ref));
+	// EXCEPT for soft-failed events, which are invisible to DAG tips.
+	if !soft_fail {
+		self.services
+			.pdu_metadata
+			.mark_as_referenced(room_id, pdu.prev_events().map(AsRef::as_ref));
+	}
 
 	trace!("setting forward extremities");
 	self.services
@@ -184,23 +213,81 @@ where
 
 	let insert_lock = self.mutex_insert.lock(room_id).await;
 
-	let count1 = self.services.globals.next_count().unwrap();
+	let count = self.services.globals.next_count().unwrap();
+	let pdu_count = PduCount::Normal(count);
+	let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
 
-	// Mark as read first so the sending client doesn't get a notification even if
-	// appending fails
+	// Insert pdu FIRST to ensure it's in the DB before any secondary writes
+	// unexpectedly wake the sync watcher.
+	self.db.append_pdu(&pdu_id, pdu, &pdu_json, pdu_count).await;
+	self.last_timeline_count_cache
+		.insert(room_id.to_owned(), pdu_count);
+
+	// Mark as read first so the sync watcher uses the correct receipt
+	let receipt_content = std::collections::BTreeMap::from_iter([(
+		pdu.event_id().to_owned(),
+		std::collections::BTreeMap::from_iter([(
+			ruma::events::receipt::ReceiptType::ReadPrivate,
+			std::collections::BTreeMap::from_iter([(
+				pdu.sender().to_owned(),
+				ruma::events::receipt::Receipt {
+					ts: Some(ruma::MilliSecondsSinceUnixEpoch::now()),
+					thread: ruma::events::receipt::ReceiptThread::Unthreaded,
+				},
+			)]),
+		)]),
+	)]);
+	let receipt_event = ruma::events::receipt::ReceiptEvent {
+		content: ruma::events::receipt::ReceiptEventContent(receipt_content),
+		room_id: room_id.to_owned(),
+	};
+
 	self.services
 		.read_receipt
-		.private_read_set(room_id, pdu.sender(), count1);
+		.private_read_set(room_id, pdu.sender(), count, &receipt_event)
+		.expect("failed to set private read receipt");
 
 	self.services
 		.user
 		.reset_notification_counts(pdu.sender(), room_id);
 
-	let count2 = PduCount::Normal(self.services.globals.next_count().unwrap());
-	let pdu_id: RawPduId = PduId { shortroomid, shorteventid: count2 }.into();
+	// Flattened Auth Chain Cache:
+	// Pre-calculate the auth chain closure for this PDU by doing a single
+	// get_auth_chain lookup on its auth_events. Because the auth events
+	// were already appended, their closures are cached, making this an
+	// O(1) DB hit per auth event rather than a 30-second DAG crawl later.
+	let short_event_id = self
+		.services
+		.short
+		.get_or_create_shorteventid(pdu.event_id())
+		.await;
+	if let Ok(full_auth_chain) = self
+		.services
+		.auth_chain
+		.get_auth_chain(room_id, pdu.auth_events().map(AsRef::as_ref))
+		.await
+	{
+		// The auth chain closure for this PDU must include both the
+		// transitive ancestors returned by get_auth_chain AND the PDU's
+		// own direct auth_events (which get_auth_chain uses as *starting*
+		// points but does not include in its output).
+		let mut bm = roaring::RoaringTreemap::new();
+		for id in &full_auth_chain {
+			bm.insert(*id);
+		}
+		for auth_event_id in pdu.auth_events() {
+			let short = self
+				.services
+				.short
+				.get_or_create_shorteventid(auth_event_id)
+				.await;
+			bm.insert(short);
+		}
 
-	// Insert pdu
-	self.db.append_pdu(&pdu_id, pdu, &pdu_json, count2).await;
+		self.services
+			.auth_chain
+			.cache_auth_chain_bitmap(vec![short_event_id], &bm);
+	}
 
 	drop(insert_lock);
 
@@ -236,66 +323,77 @@ where
 		}
 	}
 
-	let serialized = pdu.to_format();
-	for user in &push_target {
-		let rules_for_user = self
-			.services
-			.account_data
-			.get_global(user, GlobalAccountDataEventType::PushRules)
-			.await
-			.map_or_else(
-				|_| Ruleset::server_default(user),
-				|ev: PushRulesEvent| ev.content.global,
-			);
+	// Skip push notifications for historical events (backfilled, rescued,
+	// or heavily delayed federation events) to avoid notification storms.
+	let now = utils::millis_since_unix_epoch();
+	let is_historical = now.saturating_sub(pdu.origin_server_ts().0.into()) > 10 * 60 * 1000;
 
-		let mut highlight = false;
-		let mut notify = false;
+	if soft_fail {
+		trace!("Event {} is soft-failed, skipping push notifications", pdu.event_id());
+	} else if is_historical {
+		trace!("Event {} is historical, skipping push notifications", pdu.event_id());
+	} else {
+		let serialized = pdu.to_format();
+		for user in &push_target {
+			let rules_for_user = self
+				.services
+				.account_data
+				.get_global(user, GlobalAccountDataEventType::PushRules)
+				.await
+				.map_or_else(
+					|_| Ruleset::server_default(user),
+					|ev: PushRulesEvent| ev.content.global,
+				);
 
-		for action in self
-			.services
-			.pusher
-			.get_actions(user, &rules_for_user, &power_levels, &serialized, room_id)
-			.await
-		{
-			match action {
-				| Action::Notify => notify = true,
-				| Action::SetTweak(Tweak::Highlight(true)) => {
-					highlight = true;
-				},
-				| _ => {},
-			}
+			let mut highlight = false;
+			let mut notify = false;
 
-			// Break early if both conditions are true
-			if notify && highlight {
-				break;
-			}
-		}
-
-		if notify {
-			notifies.push(user.clone());
-		}
-
-		if highlight {
-			highlights.push(user.clone());
-		}
-
-		self.services
-			.pusher
-			.get_pushkeys(user)
-			.ready_for_each(|push_key| {
-				if let Err(e) =
-					self.services
-						.sending
-						.send_pdu_push(&pdu_id, user, push_key.to_owned())
-				{
-					warn!("Failed to queue push notification: {e}");
+			for action in self
+				.services
+				.pusher
+				.get_actions(user, &rules_for_user, &power_levels, &serialized, room_id)
+				.await
+			{
+				match action {
+					| Action::Notify => notify = true,
+					| Action::SetTweak(Tweak::Highlight(true)) => {
+						highlight = true;
+					},
+					| _ => {},
 				}
-			})
-			.await;
-	}
 
-	self.db
-		.increment_notification_counts(room_id, notifies, highlights);
+				// Break early if both conditions are true
+				if notify && highlight {
+					break;
+				}
+			}
+
+			if notify {
+				notifies.push(user.clone());
+			}
+
+			if highlight {
+				highlights.push(user.clone());
+			}
+
+			self.services
+				.pusher
+				.get_pushkeys(user)
+				.ready_for_each(|push_key| {
+					if let Err(e) =
+						self.services
+							.sending
+							.send_pdu_push(&pdu_id, user, push_key.to_owned())
+					{
+						warn!("Failed to queue push notification: {e}");
+					}
+				})
+				.await;
+		}
+
+		self.db
+			.increment_notification_counts(room_id, notifies, highlights);
+	}
 
 	match *pdu.kind() {
 		| TimelineEventType::RoomRedaction => {
@@ -352,13 +450,33 @@ where
 					.state_cache
 					.update_membership(room_id, target_user_id, pdu, true)
 					.await?;
+
+				if let Ok(content) =
+					pdu.get_content::<ruma::events::room::member::RoomMemberEventContent>()
+				{
+					if content.membership == ruma::events::room::member::MembershipState::Join {
+						if self.services.globals.user_is_local(target_user_id) {
+							self.services
+								.users
+								.mark_device_key_update(target_user_id)
+								.await;
+						}
+					}
+				}
+
+				// Invalidate hierarchy cache: membership changes can affect
+				// restricted room accessibility (the `allow` list checks
+				// whether the requesting user/server is joined to this room).
+				self.services
+					.spaces
+					.roomid_spacehierarchy_cache
+					.lock()
+					.await
+					.remove(room_id);
 			}
 		},
 		| TimelineEventType::RoomMessage => {
-			let content: ExtractBody = pdu.get_content()?;
-			if let Some(body) = content.body {
-				self.services.search.index_pdu(shortroomid, &pdu_id, &body);
-			}
+			self.index_pdu_search(shortroomid, &pdu_id, pdu);
 		},
 		| _ => {},
 	}
@@ -371,7 +489,7 @@ where
 		if let Ok(related_pducount) = self.get_pdu_count(&content.relates_to.event_id).await {
 			self.services
 				.pdu_metadata
-				.add_relation(count2, related_pducount);
+				.add_relation(pdu_count, related_pducount);
 		}
 	}
 
@@ -383,14 +501,26 @@ where
 				if let Ok(related_pducount) = self.get_pdu_count(&in_reply_to.event_id).await {
 					self.services
 						.pdu_metadata
-						.add_relation(count2, related_pducount);
+						.add_relation(pdu_count, related_pducount);
 				}
 			},
 			| Relation::Thread(thread) => {
-				self.services
+				if let Err(e) = self
+					.services
 					.threads
 					.add_to_thread(&thread.event_id, pdu)
-					.await?;
+					.await
+				{
+					// Thread root may not be in the timeline yet (e.g. during
+					// rescue-room reorder or when the root is itself an outlier).
+					// Store the PDU anyway; thread metadata will be missing until
+					// the root is also promoted to the timeline.
+					info!(
+						?e,
+						event_id = %pdu.event_id,
+						"failed to add event to thread (root not yet in timeline)"
+					);
+				}
 			},
 			| _ => {}, // TODO: Aggregate other types
 		}
