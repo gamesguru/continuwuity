@@ -1,6 +1,4 @@
-use conduwuit::{
-	Err, Result, RoomVersion, debug_info, implement, matrix::Event, pdu::PduBuilder,
-};
+use conduwuit::{Err, Result, RoomVersion, debug_info, implement, matrix::Event};
 use ruma::{
 	EventId, RoomId, UserId,
 	events::{
@@ -8,13 +6,10 @@ use ruma::{
 		room::{
 			create::RoomCreateEventContent,
 			history_visibility::{HistoryVisibility, RoomHistoryVisibilityEventContent},
-			member::{MembershipState, RoomMemberEventContent},
 			power_levels::{RoomPowerLevels, RoomPowerLevelsEventContent},
 		},
 	},
 };
-
-use crate::rooms::state::RoomMutexGuard;
 
 /// Checks if a given user can redact a given event
 ///
@@ -230,24 +225,9 @@ pub async fn user_can_see_state_events(&self, user_id: &UserId, room_id: &RoomId
 }
 
 #[implement(super::Service)]
-pub async fn user_can_invite(
-	&self,
-	room_id: &RoomId,
-	sender: &UserId,
-	target_user: &UserId,
-	state_lock: &RoomMutexGuard,
-) -> bool {
-	self.services
-		.timeline
-		.create_hash_and_sign_event(
-			PduBuilder::state(
-				target_user.as_str(),
-				&RoomMemberEventContent::new(MembershipState::Invite),
-			),
-			sender,
-			Some(room_id),
-			state_lock,
-		)
-		.await
-		.is_ok()
+pub async fn user_can_invite(&self, room_id: &RoomId, sender: &UserId) -> bool {
+	let Ok(state) = crate::rooms::auth_adapter::RoomStateProvider::new(room_id, self).await else {
+		return false;
+	};
+	rezzy::auth::user::user_can_invite(sender.as_str(), &state.provider, state.version)
 }

@@ -113,6 +113,49 @@ impl PduStateProvider {
 		}
 		self
 	}
+
+	/// Build a state provider from the current room state by fetching key
+	/// auth events from the database.
+	///
+	/// Fetches `m.room.create`, `m.room.power_levels`, and `m.room.join_rules`
+	/// from the room's current state snapshot. This is useful for query-style
+	/// checks (e.g. `rezzy::auth::user::user_can_invite`) where a pre-built
+	/// auth events map is not available.
+	pub async fn from_room_state(
+		room_id: &ruma::RoomId,
+		state_accessor: &crate::rooms::state_accessor::Service,
+	) -> Self {
+		let mut events = HashMap::new();
+
+		// Fetch power levels (most important for PL queries)
+		if let Ok(pdu) = state_accessor
+			.room_state_get(room_id, &StateEventType::RoomPowerLevels, "")
+			.await
+		{
+			let key = (StateEventType::RoomPowerLevels.to_string(), Some(String::new()));
+			events.insert(key, pdu_to_lean(&pdu));
+		}
+
+		// Fetch create event (needed for V12+ implicit creator PL)
+		if let Ok(pdu) = state_accessor
+			.room_state_get(room_id, &StateEventType::RoomCreate, "")
+			.await
+		{
+			let key = (StateEventType::RoomCreate.to_string(), Some(String::new()));
+			events.insert(key, pdu_to_lean(&pdu));
+		}
+
+		// Fetch join rules (needed for restricted join checks)
+		if let Ok(pdu) = state_accessor
+			.room_state_get(room_id, &StateEventType::RoomJoinRules, "")
+			.await
+		{
+			let key = (StateEventType::RoomJoinRules.to_string(), Some(String::new()));
+			events.insert(key, pdu_to_lean(&pdu));
+		}
+
+		Self { events }
+	}
 }
 
 impl StateProvider<String> for PduStateProvider {
@@ -135,4 +178,31 @@ pub fn rezzy_auth_check<S: StateProvider<String>>(
 ) -> bool {
 	let lean = pdu_to_lean(pdu);
 	rezzy::auth::check_auth(&lean, state, version, None).is_ok()
+}
+
+/// Convenience wrapper bundling a [`PduStateProvider`] with the resolved
+/// [`StateResVersion`] for a room.  Eliminates boilerplate at call sites
+/// that need both.
+pub struct RoomStateProvider {
+	pub provider: PduStateProvider,
+	pub version: StateResVersion,
+}
+
+impl RoomStateProvider {
+	/// Build from the current room state.
+	///
+	/// # Errors
+	///
+	/// Returns an error if the room version cannot be determined (missing
+	/// create event, DB corruption, or nonexistent room).
+	pub async fn new(
+		room_id: &ruma::RoomId,
+		state_accessor: &crate::rooms::state_accessor::Service,
+	) -> conduwuit_core::Result<Self> {
+		let provider = PduStateProvider::from_room_state(room_id, state_accessor).await;
+
+		let version = state_accessor.get_state_res_version(room_id).await?;
+
+		Ok(Self { provider, version })
+	}
 }

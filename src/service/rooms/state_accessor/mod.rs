@@ -72,6 +72,19 @@ impl crate::Service for Service {
 }
 
 impl Service {
+	/// Returns the rezzy [`StateResVersion`] for a room, using the
+	/// cached 3-tier lookup (memory → DB → create event fallback).
+	pub async fn get_state_res_version(
+		&self,
+		room_id: &RoomId,
+	) -> Result<rezzy::StateResVersion> {
+		self.services
+			.state
+			.get_room_version(room_id)
+			.await
+			.map(|v| rooms::auth_adapter::to_state_res_version(&v))
+	}
+
 	pub async fn get_name(&self, room_id: &RoomId) -> Result<String> {
 		self.room_state_get_content(room_id, &StateEventType::RoomName, "")
 			.await

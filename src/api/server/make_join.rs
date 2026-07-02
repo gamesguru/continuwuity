@@ -155,9 +155,9 @@ pub(crate) async fn create_join_event_template_route(
 pub(crate) async fn select_authorising_user(
 	services: &Services,
 	room_id: &RoomId,
-	user_id: &UserId,
+	_user_id: &UserId,
 	allowed_rooms: &[OwnedRoomId],
-	state_lock: &RoomMutexGuard,
+	_state_lock: &RoomMutexGuard,
 ) -> Result<OwnedUserId> {
 	let local_members: Vec<_> = services
 		.rooms
@@ -167,14 +167,18 @@ pub(crate) async fn select_authorising_user(
 		.collect()
 		.await;
 
+	// Snapshot the room state once for all PL checks. State could change
+	// mid-loop via federation, but re-fetching per-member is wasteful and
+	// the old code had the same race.
+	let state = conduwuit_service::rooms::auth_adapter::RoomStateProvider::new(
+		room_id,
+		&services.rooms.state_accessor,
+	)
+	.await?;
+
 	for user in &local_members {
 		// Must have invite power in the restricted room
-		if !services
-			.rooms
-			.state_accessor
-			.user_can_invite(room_id, user, user_id, state_lock)
-			.await
-		{
+		if !rezzy::auth::user::user_can_invite(user.as_str(), &state.provider, state.version) {
 			continue;
 		}
 

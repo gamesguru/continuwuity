@@ -678,6 +678,7 @@ impl Service {
 		let version = if room_version.room_ids_as_hashes {
 			rezzy::StateResVersion::V2_1
 		} else {
+			// TODO: what about StateRes V1? V1 rooms?
 			rezzy::StateResVersion::V2
 		};
 		let auth_types_raw = rezzy::auth::auth_types_for_event(
