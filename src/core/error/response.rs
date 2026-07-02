@@ -87,8 +87,11 @@ pub(super) fn bad_request_code(kind: &ErrorKind) -> StatusCode {
 		// 413
 		| TooLarge => StatusCode::PAYLOAD_TOO_LARGE,
 
+		// 405
+		| Unrecognized => StatusCode::METHOD_NOT_ALLOWED,
+
 		// 404
-		| Unrecognized | NotFound | NotImplemented | FeatureDisabled | SenderIgnored { .. } =>
+		| NotFound | NotImplemented | FeatureDisabled | SenderIgnored { .. } =>
 			StatusCode::NOT_FOUND,
 
 		// 403

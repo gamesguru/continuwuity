@@ -1,0 +1,6 @@
+{"Action":"fail","Test":"TestUnknownEndpoints"}
+{"Action":"fail","Test":"TestUnknownEndpoints/Client-server_endpoints"}
+{"Action":"fail","Test":"TestUnknownEndpoints/Key_endpoints"}
+{"Action":"fail","Test":"TestUnknownEndpoints/Media_endpoints"}
+{"Action":"fail","Test":"TestUnknownEndpoints/Server-server_endpoints"}
+{"Action":"pass","Test":"TestUnknownEndpoints/Unknown_prefix"}

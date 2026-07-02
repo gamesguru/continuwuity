@@ -68,7 +68,7 @@ async fn load_timeline(
 
 			if last_timeline_count <= starting_count {
 				// no messages have been sent in this room since `starting_count`
-				conduwuit::debug!(
+				info!(
 					target: "timeline_debug",
 					"load_timeline early return for {}: last_timeline_count={:?} <= \
 					 starting_count={:?}",
