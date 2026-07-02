@@ -4,11 +4,71 @@
 //! This enables using `rezzy::auth::check_auth` as a drop-in replacement
 //! for ruma's `state_res::event_auth::auth_check` throughout the codebase.
 
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap};
 
-use conduwuit_core::matrix::{Event, PduEvent, state_key::StateKey, state_res::RoomVersion};
-use rezzy::{LeanEvent, StateResVersion, auth::StateProvider};
-use ruma::{RoomVersionId, events::StateEventType};
+use conduwuit_core::matrix::{
+	Event, PduEvent, pdu::Pdu, state_key::StateKey, state_res::RoomVersion,
+};
+use rezzy::{EventLike, LeanEvent, StateResVersion, auth::StateProvider};
+use ruma::{OwnedEventId, RoomVersionId, events::StateEventType};
+use serde_json::Value as JsonValue;
+
+// ── AuthPdu: zero-copy EventLike wrapper ────────────────────────────
+
+/// A newtype wrapping `&Pdu` that implements rezzy's [`DagNode`]
+/// and [`EventLike`] traits.
+///
+/// Content is parsed once from `Box<RawJsonValue>` at construction time
+/// and cached as a `serde_json::Value`, so content accessor methods can
+/// return `&str` references with the correct lifetime.
+///
+/// Usage: `check_auth(&AuthPdu::new(pdu), state, version, None)`
+pub struct AuthPdu<'a> {
+	pdu: &'a Pdu,
+	/// Parsed event content, cached for accessor lifetime.
+	content: JsonValue,
+}
+
+impl<'a> AuthPdu<'a> {
+	/// Create a new `AuthPdu` wrapper, parsing the PDU's content once.
+	#[must_use]
+	pub fn new(pdu: &'a Pdu) -> Self {
+		let content = serde_json::from_str(pdu.content.get()).unwrap_or_default();
+		Self { pdu, content }
+	}
+}
+
+impl rezzy::DagNode for AuthPdu<'_> {
+	type Id = OwnedEventId;
+
+	fn event_id(&self) -> &OwnedEventId { &self.pdu.event_id }
+
+	fn depth(&self) -> u64 { self.pdu.depth.into() }
+
+	fn prev_events(&self) -> &[OwnedEventId] { &self.pdu.prev_events }
+
+	fn auth_events(&self) -> &[OwnedEventId] { &self.pdu.auth_events }
+}
+
+impl EventLike for AuthPdu<'_> {
+	type Content = JsonValue;
+
+	fn event_type(&self) -> Cow<'_, str> { Cow::Owned(self.pdu.kind.to_string()) }
+
+	fn sender(&self) -> &str { self.pdu.sender.as_str() }
+
+	fn state_key(&self) -> Option<&str> { self.pdu.state_key.as_deref() }
+
+	fn power_level(&self) -> i64 {
+		// Pdu doesn't store a cached power level. This field is only used
+		// for sort priority during state resolution, not auth checking.
+		0
+	}
+
+	fn origin_server_ts(&self) -> u64 { self.pdu.origin_server_ts.into() }
+
+	fn content(&self) -> &JsonValue { &self.content }
+}
 
 /// Map a ruma `RoomVersionId` to rezzy's `StateResVersion`.
 ///
