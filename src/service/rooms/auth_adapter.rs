@@ -184,7 +184,7 @@ pub fn rezzy_auth_check<S: StateProvider<String>>(
 	match rezzy::auth::check_auth(&lean, state, version, None) {
 		| Ok(()) => true,
 		| Err(e) => {
-			tracing::warn!("rezzy auth check failed: {e}");
+			tracing::error!("rezzy auth check failed: {e}");
 			false
 		},
 	}

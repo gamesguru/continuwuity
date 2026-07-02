@@ -1563,7 +1563,41 @@ impl Data {
 			// earlier in stream order.  Using only the token's depth would
 			// cause the backward scan to start too low, permanently skipping
 			// higher-depth events on the other branch.
-			let current_depth = self.pdu_id_to_depth(current).await.unwrap_or(token_depth);
+			let current_depth = match self.pdu_id_to_depth(current).await {
+				| Ok(depth) => depth,
+				| Err(_) => {
+					let prefix = current.shortroomid();
+					let nearest_pdu_id = if dir == Direction::Forward {
+						let mut stream = Box::pin(
+							self.room_pducount_eventid
+								.raw_stream_from(current)
+								.ready_try_take_while(|(k, _)| Ok(k.starts_with(&prefix))),
+						);
+						stream
+							.next()
+							.await
+							.map(|res| res.map(|(k, _)| RawPduId::from(k)))
+					} else {
+						let mut stream = Box::pin(
+							self.room_pducount_eventid
+								.rev_raw_stream_from(current)
+								.ready_try_take_while(|(k, _)| Ok(k.starts_with(&prefix))),
+						);
+						stream
+							.next()
+							.await
+							.map(|res| res.map(|(k, _)| RawPduId::from(k)))
+					};
+
+					if let Some(Ok(nearest_pdu_id)) = nearest_pdu_id {
+						self.pdu_id_to_depth(&nearest_pdu_id)
+							.await
+							.unwrap_or(token_depth)
+					} else {
+						token_depth
+					}
+				},
+			};
 
 			let target_depth = match dir {
 				| Direction::Backward => token_depth.max(current_depth),
