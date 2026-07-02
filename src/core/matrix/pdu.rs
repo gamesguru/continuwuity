@@ -136,6 +136,51 @@ impl Pdu {
 	}
 }
 
+/// Maps Pdu fields to rezzy's [`RawEvent`](rezzy::RawEvent) trait,
+/// enabling `rezzy::ParsedEvent::new(&pdu)` for zero-copy auth checks
+/// and state resolution without intermediate `LeanEvent` conversion.
+impl rezzy::RawEvent for Pdu {
+	type Id = OwnedEventId;
+
+	/// `Pdu::event_id` → `$event_id:server.name`
+	#[inline]
+	fn raw_event_id(&self) -> &OwnedEventId { &self.event_id }
+
+	/// `Pdu::kind` (`TimelineEventType` enum) → `"m.room.member"` etc.
+	#[inline]
+	fn raw_event_type(&self) -> std::borrow::Cow<'_, str> {
+		std::borrow::Cow::Owned(self.kind.to_string())
+	}
+
+	/// `Pdu::sender` (`OwnedUserId`) → `"@user:server"`
+	#[inline]
+	fn raw_sender(&self) -> &str { self.sender.as_str() }
+
+	/// `Pdu::state_key` (`Option<StateKey>`) → `Option<&str>`
+	#[inline]
+	fn raw_state_key(&self) -> Option<&str> { self.state_key.as_deref() }
+
+	/// `Pdu::content` (`Box<RawJsonValue>`) → raw JSON string
+	#[inline]
+	fn raw_content_json(&self) -> &str { self.content.get() }
+
+	/// `Pdu::prev_events` → DAG parent references
+	#[inline]
+	fn raw_prev_events(&self) -> &[OwnedEventId] { &self.prev_events }
+
+	/// `Pdu::auth_events` → auth chain references
+	#[inline]
+	fn raw_auth_events(&self) -> &[OwnedEventId] { &self.auth_events }
+
+	/// `Pdu::depth` (`UInt`) → `u64`
+	#[inline]
+	fn raw_depth(&self) -> u64 { self.depth.into() }
+
+	/// `Pdu::origin_server_ts` (`UInt`) → milliseconds since epoch
+	#[inline]
+	fn raw_origin_server_ts(&self) -> u64 { self.origin_server_ts.into() }
+}
+
 macro_rules! impl_event_delegates {
 	() => {
 		#[inline]
