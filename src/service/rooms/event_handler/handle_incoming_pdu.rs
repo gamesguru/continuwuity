@@ -185,8 +185,10 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 			return Ok(Some(pdu_id));
 		}
 	}
-	// NATIVE RETRY INTERCEPTION: If it's a known outlier that was rejected, check local auth.
-	else if is_timeline_event
+
+	// NATIVE RETRY INTERCEPTION: If it's a known outlier that was rejected, check
+	// local auth.
+	if is_timeline_event
 		&& self
 			.services
 			.outlier
