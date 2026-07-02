@@ -1514,12 +1514,9 @@ impl Data {
 		} else if token == PduCount::min() {
 			Ok(Self::topo_pducount_key(current, 0))
 		} else {
-			// Find the EXACT depth of the requested token.
-			// We MUST NOT use the depth of a nearby 1D count blindly with `current`,
-			// as it might be higher, causing us to jump forward in the DAG.
 			let token_pdu_id = self.count_to_id(room_id, token, dir).await?;
 
-			let target_depth = match self.pdu_id_to_depth(&token_pdu_id).await {
+			let token_depth = match self.pdu_id_to_depth(&token_pdu_id).await {
 				| Ok(depth) => depth,
 				| Err(_) => {
 					// Fallback: find the nearest existing event in the requested direction
@@ -1560,7 +1557,19 @@ impl Data {
 				},
 			};
 
-			// Construct key using EXACT depth of token, but the PduCount of token +/- 1.
+			// Also check the depth of `current` (the event at token ± 1).
+			// When the DAG has forks, the token event may sit on a branch with
+			// a lower depth than events on a parallel branch that arrived
+			// earlier in stream order.  Using only the token's depth would
+			// cause the backward scan to start too low, permanently skipping
+			// higher-depth events on the other branch.
+			let current_depth = self.pdu_id_to_depth(current).await.unwrap_or(token_depth);
+
+			let target_depth = match dir {
+				| Direction::Backward => token_depth.max(current_depth),
+				| Direction::Forward => token_depth.min(current_depth),
+			};
+
 			Ok(Self::topo_pducount_key(current, target_depth))
 		}
 	}

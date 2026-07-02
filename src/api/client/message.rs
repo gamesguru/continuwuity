@@ -142,9 +142,10 @@ pub(crate) async fn get_message_events_route(
 			.ok();
 	}
 
-	// TODO: Fix topo depth computation for events arriving via federation with
-	// missing prev_events (partition recovery, backfill). Currently they all get
-	// depth=1, making seek_topo_key fail. See development-gg/topo_depth_fix.md
+	// NOTE: seek_topo_key now accounts for DAG forks by using
+	// max(token_depth, current_depth) for backward scans, which handles
+	// the common case of federation events arriving at lower depths than
+	// local events on a parallel branch.
 	let it = match body.dir {
 		| Direction::Forward => services
 			.rooms
