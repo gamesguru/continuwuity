@@ -202,11 +202,18 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 			.get_pdu_outlier(event_id)
 			.await
 			.unwrap();
-		if !self.services.pdu_metadata.is_event_accepted(event_id).await {
+		let is_accepted = self.services.pdu_metadata.is_event_accepted(event_id).await;
+		let is_rejected = self.services.pdu_metadata.is_event_rejected(event_id).await;
+		info!(
+			"Native retry interception: event {event_id} is_accepted={is_accepted} \
+			 is_rejected={is_rejected}"
+		);
+		if !is_accepted {
 			// Fast local check: are all auth events AND prev_events NOW in the timeline?
 			let mut all_deps_satisfied = true;
 			for aid in pdu.auth_events() {
 				if !self.services.pdu_metadata.is_event_accepted(aid).await {
+					info!("Native retry: auth event {aid} not accepted");
 					all_deps_satisfied = false;
 					break;
 				}
@@ -216,6 +223,7 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 					// Prev must exist in the timeline (not just as outlier)
 					// for the unreject upgrade to have the state it needs.
 					if self.services.timeline.get_pdu_id(prev_id).await.is_err() {
+						info!("Native retry: prev event {prev_id} not in timeline");
 						all_deps_satisfied = false;
 						break;
 					}
@@ -253,8 +261,11 @@ pub(super) async fn handle_incoming_pdu_inner<'a>(
 			}
 			// Still missing/rejected dependencies. Return Ok(None) to ACK the transaction
 			// instantly WITHOUT triggering network fetches or state resolution lockups.
+			info!("Native retry: deps not satisfied for {event_id}, returning Ok(None)");
 			return Ok(None);
 		}
+	} else if is_timeline_event {
+		info!("Native retry interception SKIPPED: outlier not found for {event_id}");
 	}
 	if !pdu_fits(&mut value.clone()) {
 		warn!(
