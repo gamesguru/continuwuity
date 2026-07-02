@@ -226,7 +226,8 @@ pub async fn user_can_see_state_events(&self, user_id: &UserId, room_id: &RoomId
 
 #[implement(super::Service)]
 pub async fn user_can_invite(&self, room_id: &RoomId, sender: &UserId) -> bool {
-	let Ok(state) = crate::rooms::auth_adapter::RoomStateProvider::new(room_id, self).await else {
+	let Ok(state) = crate::rooms::auth_adapter::RoomStateProvider::new(room_id, self).await
+	else {
 		return false;
 	};
 	rezzy::auth::user::user_can_invite(sender.as_str(), &state.provider, state.version)

@@ -1039,15 +1039,9 @@ async fn join_room_by_id_helper_local(
 				| Ok(Some(allowed_rooms)) => {
 					// User qualifies via allowed room membership. Try to find a
 					// local user who can issue the authorising invite.
-					auth_user = select_authorising_user(
-						services,
-						room_id,
-						sender_user,
-						allowed_rooms,
-						&state_lock,
-					)
-					.await
-					.ok();
+					auth_user = select_authorising_user(services, room_id, allowed_rooms)
+						.await
+						.ok();
 
 					// User qualifies but no local authorizer found.
 					// A local user with invite power may exist but their power level
@@ -1056,15 +1050,9 @@ async fn join_room_by_id_helper_local(
 					if auth_user.is_none() {
 						for _ in 0..5 {
 							tokio::time::sleep(Duration::from_millis(150)).await;
-							auth_user = select_authorising_user(
-								services,
-								room_id,
-								sender_user,
-								allowed_rooms,
-								&state_lock,
-							)
-							.await
-							.ok();
+							auth_user = select_authorising_user(services, room_id, allowed_rooms)
+								.await
+								.ok();
 							if auth_user.is_some() {
 								break;
 							}
