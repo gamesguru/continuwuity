@@ -1432,10 +1432,25 @@ impl Data {
 				Self::topo_pducount_key(&current, until.depth)
 			};
 
+			// Stream count ceiling: for legacy tokens with u64::MAX seek depth,
+			// events at high depths but with pdu_count > token_count arrived
+			// AFTER the sync position and must be excluded from backward
+			// pagination. This mirrors Synapse's SQL:
+			//   WHERE (topo, stream) <= (from_topo, from_stream)
+			let count_ceiling = until.pdu_count;
+
 			let raw_stream = self
 				.roomid_topologicalorder_pducount
 				.rev_raw_stream_from(&topo_key);
-			Ok(self.parse_topo_stream(raw_stream, prefix))
+			Ok(self
+				.parse_topo_stream(raw_stream, prefix)
+				.ready_try_filter_map(move |item| {
+					if item.0.pdu_count <= count_ceiling {
+						Ok(Some(item))
+					} else {
+						Ok(None)
+					}
+				}))
 		};
 		stream.try_flatten_stream()
 	}
@@ -1621,14 +1636,19 @@ impl Data {
 				},
 			};
 
-			// Use the exact token depth. The topo index key is
-			// [room][depth][count], and the reverse iterator yields
-			// events with key < (token_depth, token_count).
+			// For backward pagination, start from the TOP of the topo index
+			// (u64::MAX depth) so we capture events at ANY depth — including
+			// high-depth remote branch events. The stream count filter in
+			// topo_pdus_rev ensures we don't return events that arrived
+			// after the sync position.
 			//
-			// Events at higher depths but with stream counts <= token_count
-			// (remote partition branch events) are handled by the stream
-			// count filter in the caller (topo_pdus_rev), not here.
-			Ok(Self::topo_pducount_key(current, token_depth))
+			// For forward pagination, use exact depth to avoid re-scanning.
+			let seek_depth = match dir {
+				| Direction::Backward => u64::MAX,
+				| Direction::Forward => token_depth,
+			};
+
+			Ok(Self::topo_pducount_key(current, seek_depth))
 		}
 	}
 
@@ -2041,8 +2061,13 @@ mod tests {
 				let effective_depth = if inflate_depth {
 					// OLD BUG: max(token_depth, adjacent_depth)
 					token_depth.max(adjacent_depth)
+				} else if pages.is_empty() && start_from.is_some() {
+					// First page from mid-stream position — seek from
+					// top of topo index to capture events at any depth.
+					// Stream count filter (below) excludes post-sync events.
+					u64::MAX
 				} else {
-					// Use exact token depth for seek position
+					// Subsequent pages or first page from MAX: exact depth
 					token_depth
 				};
 
@@ -2060,7 +2085,7 @@ mod tests {
 				.filter(|(key, _, _, count)| {
 					// Stream count filter: skip events after the sync position
 					if let Some(ceil) = count_ceiling {
-						if *count > ceil {
+						if *count >= ceil {
 							return false;
 						}
 					}
