@@ -2009,6 +2009,7 @@ mod tests {
 		topo_entries: &[(String, u64, i64)],
 		limit: usize,
 		inflate_depth: bool,
+		start_from: Option<(u64, i64)>,
 	) -> Option<Vec<Vec<String>>> {
 		const MAX_PAGES: usize = 20;
 
@@ -2027,7 +2028,7 @@ mod tests {
 			topo_entries.iter().map(|(_, d, c)| (*c, *d)).collect();
 
 		let mut pages: Vec<Vec<String>> = Vec::new();
-		let mut seek_from: Option<(u64, i64)> = None;
+		let mut seek_from: Option<(u64, i64)> = start_from;
 
 		loop {
 			if pages.len() >= MAX_PAGES {
@@ -2083,7 +2084,7 @@ mod tests {
 	#[test]
 	fn inflated_seek_causes_infinite_loop() {
 		let (_, topo_entries) = build_forked_dag();
-		let result = simulate_backward_pagination(1, &topo_entries, 2, true);
+		let result = simulate_backward_pagination(1, &topo_entries, 2, true, None);
 
 		assert!(
 			result.is_none(),
@@ -2099,7 +2100,7 @@ mod tests {
 	#[test]
 	fn fixed_seek_terminates_with_no_violations() {
 		let (events_map, topo_entries) = build_forked_dag();
-		let pages = simulate_backward_pagination(1, &topo_entries, 2, false);
+		let pages = simulate_backward_pagination(1, &topo_entries, 2, false, None);
 
 		let pages =
 			pages.expect("fixed exact-depth seek logic must terminate, but hit loop guard");
@@ -2114,5 +2115,191 @@ mod tests {
 			violations.is_empty(),
 			"fixed seek logic must produce no pagination violations, got: {violations:?}"
 		);
+	}
+
+	/// Build a network partition DAG:
+	///
+	/// ```text
+	///         A (depth=1, create)
+	///         |
+	///         B (depth=2, join)
+	///        / \
+	///       C   E  (C local depth=3, E remote depth=3)
+	///       |   |
+	///       D   F  (D local depth=4, F remote depth=4)
+	///        \ /
+	///         G (depth=5, merge after partition heals)
+	/// ```
+	///
+	/// Events arrive in timeline order:
+	///   A(1), B(2), C(3), D(4) — during partition (local branch)
+	///   E(5), F(6) — received from remote after partition heals
+	///   G(7) — merge event
+	///
+	/// The remote events E,F have lower depth (3,4) but higher count (5,6).
+	/// In the topo index, they sort BEFORE the merge event G but AFTER local
+	/// events at the same depth. When sync delivers G and the client paginates
+	/// backward from G's topo token, exact-depth seek works fine here because
+	/// all prior events have depth <= 5.
+	///
+	/// The REAL problem: sync delivers G at topo token (depth=5, count=7).
+	/// The client's first backward page returns events at depth=5 and below.
+	/// No events are missed because G has the highest depth.
+	///
+	/// But what if the remote branch has HIGHER depth than local?
+	fn build_partition_dag() -> (HashMap<String, LeanEvent>, Vec<(String, u64, i64)>) {
+		let events: Vec<LeanEvent<String>> = vec![
+			LeanEvent {
+				event_id: "A".into(),
+				depth: 1,
+				prev_events: vec![],
+				event_type: "m.room.create".into(),
+				state_key: Some(String::new()),
+				sender: "@x:x".into(),
+				content: serde_json::json!({"room_version": "10", "creator": "@x:x"}),
+				..Default::default()
+			},
+			LeanEvent {
+				event_id: "B".into(),
+				depth: 2,
+				prev_events: vec!["A".into()],
+				event_type: "m.room.message".into(),
+				sender: "@x:x".into(),
+				..Default::default()
+			},
+			// Local branch (low depth)
+			LeanEvent {
+				event_id: "C".into(),
+				depth: 3,
+				prev_events: vec!["B".into()],
+				event_type: "m.room.message".into(),
+				sender: "@local:x".into(),
+				..Default::default()
+			},
+			LeanEvent {
+				event_id: "D".into(),
+				depth: 4,
+				prev_events: vec!["C".into()],
+				event_type: "m.room.message".into(),
+				sender: "@local:x".into(),
+				..Default::default()
+			},
+			// Remote branch (HIGH depth — remote server had more activity)
+			LeanEvent {
+				event_id: "E".into(),
+				depth: 6,
+				prev_events: vec!["B".into()],
+				event_type: "m.room.message".into(),
+				sender: "@remote:y".into(),
+				..Default::default()
+			},
+			LeanEvent {
+				event_id: "F".into(),
+				depth: 7,
+				prev_events: vec!["E".into()],
+				event_type: "m.room.message".into(),
+				sender: "@remote:y".into(),
+				..Default::default()
+			},
+			// Merge event
+			LeanEvent {
+				event_id: "G".into(),
+				depth: 8,
+				prev_events: vec!["D".into(), "F".into()],
+				event_type: "m.room.message".into(),
+				sender: "@local:x".into(),
+				..Default::default()
+			},
+		];
+
+		let mut events_map = HashMap::new();
+		for ev in &events {
+			events_map.insert(ev.event_id.clone(), ev.clone());
+		}
+
+		// Timeline insertion order:
+		// A, B, C, D arrived during partition (counts 1-4)
+		// E, F arrived from remote after partition heals (counts 5-6)
+		// G is the merge (count 7)
+		let topo_entries = vec![
+			("A".into(), 1_u64, 1_i64),
+			("B".into(), 2, 2),
+			("C".into(), 3, 3),
+			("D".into(), 4, 4),
+			("E".into(), 6, 5), // remote: high depth, arrived late
+			("F".into(), 7, 6), // remote: high depth, arrived late
+			("G".into(), 8, 7), // merge
+		];
+
+		(events_map, topo_entries)
+	}
+
+	/// Simulate backward pagination starting from a specific topo token
+	/// (not MAX). This models what happens when sync delivers recent events
+	/// and the client paginates backward from a mid-stream position.
+	///
+	/// `start_from`: (depth, count) of the topo token to start from.
+	/// If None, starts from MAX (same as original
+	/// simulate_backward_pagination).
+	fn simulate_backward_pagination_from(
+		room: u64,
+		topo_entries: &[(String, u64, i64)],
+		limit: usize,
+		inflate_depth: bool,
+		start_from: (u64, i64),
+	) -> Option<Vec<Vec<String>>> {
+		simulate_backward_pagination(room, topo_entries, limit, inflate_depth, Some(start_from))
+	}
+
+	/// Regression test for TestNetworkPartitionOrdering.
+	///
+	/// After a network partition heals, backward pagination from a mid-stream
+	/// topo token must return ALL events — including those from the remote
+	/// branch at higher depths that arrived after the sync position.
+	///
+	/// Currently FAILS: exact-depth seek skips E, F, G.
+	/// Remove `#[ignore]` once the seek logic is fixed.
+	#[test]
+	#[ignore = "known regression: exact-depth seek skips remote partition branch"]
+	fn partition_backward_pagination_returns_all_events() {
+		let (events_map, topo_entries) = build_partition_dag();
+
+		// Client got D (depth=4, count=4) from sync and paginates backward.
+		let pages = simulate_backward_pagination_from(1, &topo_entries, 3, false, (4, 4));
+
+		let pages = pages.expect("must terminate");
+		let all_events: Vec<String> = pages.iter().flatten().cloned().collect();
+
+		// ALL 7 events must be yielded — including remote branch E, F and merge G
+		assert_eq!(
+			all_events.len(),
+			7,
+			"backward pagination must return all 7 events (got {all_events:?})"
+		);
+
+		let violations = verify_pagination(&events_map, &pages);
+		assert!(violations.is_empty(), "pagination must have no violations, got: {violations:?}");
+	}
+
+	/// max() seek recovers remote branch events in the partition scenario,
+	/// but only when the adjacent event has the right depth.
+	#[test]
+	fn partition_inflated_seek_recovers_some_events() {
+		let (_, topo_entries) = build_partition_dag();
+
+		// Start from G (the merge at depth=8, count=7) — this is the normal
+		// case where sync delivers the merge event. Backward pagination from
+		// MAX should capture everything regardless of seek strategy.
+		let pages_exact = simulate_backward_pagination(1, &topo_entries, 3, false, None);
+		let pages_inflate = simulate_backward_pagination(1, &topo_entries, 3, true, None);
+
+		let exact = pages_exact.expect("must terminate");
+		let inflate = pages_inflate.expect("must terminate with partition DAG");
+
+		let exact_total: usize = exact.iter().map(Vec::len).sum();
+		let inflate_total: usize = inflate.iter().map(Vec::len).sum();
+
+		assert_eq!(exact_total, 7, "exact seek from MAX must return all 7 events");
+		assert_eq!(inflate_total, 7, "inflated seek from MAX must also return all 7 events");
 	}
 }
