@@ -180,6 +180,10 @@
 
 # This item is undocumented. Please contribute documentation for it.
 #
+#leanevent_cache_capacity =
+
+# This item is undocumented. Please contribute documentation for it.
+#
 #auth_chain_cache_capacity = varies by system
 
 # This item is undocumented. Please contribute documentation for it.

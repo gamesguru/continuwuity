@@ -350,6 +350,9 @@ features = ["future"]
 [workspace.dependencies.dashmap]
 version = "6.1.0"
 
+[workspace.dependencies.typed-arena]
+version = "2.0.2"
+
 # Used for matrix spec type definitions and helpers (legacy=libsodium compat)
 [workspace.dependencies.ed25519-dalek]
 version = "2.2.0"

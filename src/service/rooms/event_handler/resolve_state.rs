@@ -168,57 +168,18 @@ where
 		return Ok(state_sets_vec[0].clone());
 	}
 
-	// Pre-separate unconflicted/conflicted keys
-	let mut counts: HashMap<(String, String, String), usize> = HashMap::new();
-	let mut key_to_ids: HashMap<(String, String), HashSet<String>> = HashMap::new();
-
-	for map in &state_sets_vec {
-		for ((ty, sk), id) in *map {
-			let ty_s = ty.to_string();
-			let sk_s = sk.to_string();
-			let id_s = id.to_string();
-			let entry = counts
-				.entry((ty_s.clone(), sk_s.clone(), id_s.clone()))
-				.or_insert(0);
-			*entry = entry.saturating_add(1);
-			key_to_ids.entry((ty_s, sk_s)).or_default().insert(id_s);
-		}
-	}
-
-	let mut unconflicted: SharedState = SharedState::new();
-	let mut conflicted_keys: HashSet<(String, String)> = HashSet::new();
-
-	for (key, ids) in &key_to_ids {
-		if ids.len() == 1 {
-			let id = ids.iter().next().unwrap();
-			let count = counts
-				.get(&(key.0.clone(), key.1.clone(), id.clone()))
-				.copied()
-				.unwrap_or(0);
-			if count == num_maps {
-				unconflicted.insert((key.0.clone(), key.1.clone()), id.clone());
-				continue;
+	let lean_state_sets: Vec<rezzy::SharedState<String>> = state_sets_vec
+		.iter()
+		.map(|map| {
+			let mut ss = rezzy::SharedState::new();
+			for ((ty, sk), id) in *map {
+				ss.insert((ty.to_string(), sk.to_string()), id.to_string());
 			}
-		}
-		conflicted_keys.insert(key.clone());
-	}
+			ss
+		})
+		.collect();
 
-	// Collect all conflicted event IDs (state map differences)
-	let mut conflicted_eids: HashSet<OwnedEventId> = HashSet::new();
-	for map in &state_sets_vec {
-		for ((ty, sk), id) in *map {
-			if conflicted_keys.contains(&(ty.to_string(), sk.to_string())) {
-				conflicted_eids.insert(id.clone());
-			}
-		}
-	}
-
-	// Early exit: no conflicts
-	if conflicted_eids.is_empty() {
-		return Ok(state_sets_vec[0].clone());
-	}
-
-	// Map room version early — needed to decide auth chain diff vs subgraph
+	// Map room version early
 	let version = match room_version.as_str() {
 		| "1" => rezzy::StateResVersion::V1,
 		| "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "10" | "11" =>
@@ -226,85 +187,51 @@ where
 		| "12" => rezzy::StateResVersion::V2_1,
 		| _ => rezzy::StateResVersion::V2_1_1,
 	};
-	let is_v2_1_plus = matches!(
-		version,
-		rezzy::StateResVersion::V2_1
-			| rezzy::StateResVersion::V2_1_1
-			| rezzy::StateResVersion::V2_2
-	);
 
-	// Fetch auth chains for all state sets. Needed both for:
-	// - V2: auth chain diff (adds diff events to conflicted set)
-	// - V2_1+: subgraph computation & auth_context for rezzy
-	let mut per_set_chains: Vec<HashSet<OwnedEventId>> = Vec::with_capacity(num_maps);
-	for map in &state_sets_vec {
-		let state_eids: Vec<OwnedEventId> = map.values().cloned().collect();
-		let chain: HashSet<OwnedEventId> = self
-			.services
-			.auth_chain
-			.event_ids_iter(room_id, state_eids.iter().map(|id| &**id))
-			.try_collect()
-			.await
-			.unwrap_or_default();
-		per_set_chains.push(chain);
+	struct LocalArenaProvider<'a> {
+		global_cache: &'a moka::sync::Cache<OwnedEventId, Arc<rezzy::LeanEvent<String>>>,
+		arena: typed_arena::Arena<Arc<rezzy::LeanEvent<String>>>,
+		fetch_pdu: Box<dyn Fn(&OwnedEventId) -> Option<conduwuit_core::PduEvent> + 'a>,
 	}
 
-	let mut union_auth: HashSet<OwnedEventId> = HashSet::new();
-	let mut intersect_auth: HashSet<OwnedEventId> = per_set_chains[0].clone();
-	for chain in &per_set_chains {
-		union_auth.extend(chain.iter().cloned());
-		intersect_auth.retain(|eid| chain.contains(eid));
-	}
+	impl<'a> rezzy::basespec::rezzy_types::EventProvider<String, serde_json::Value>
+		for LocalArenaProvider<'a>
+	{
+		fn get_event(&self, id: &String) -> Option<&rezzy::LeanEvent<String>> {
+			let event_id = OwnedEventId::try_from(id.as_str()).ok()?;
 
-	// V2 only: auth chain diff events are also conflicted.
-	// V2_1+ (MSC4297): uses conflicted state subgraph instead — computed below
-	// after we have the full LeanEvent map.
-	if !is_v2_1_plus {
-		for eid in &union_auth {
-			if !intersect_auth.contains(eid) {
-				conflicted_eids.insert(eid.clone());
+			if let Some(cached_arc) = self.global_cache.get(&event_id) {
+				let local_arc = self.arena.alloc(cached_arc);
+				return Some(&**local_arc);
 			}
+
+			let pdu = (self.fetch_pdu)(&event_id)?;
+			let lean = Arc::new(pdu_to_lean(&pdu));
+
+			self.global_cache.insert(event_id, lean.clone());
+
+			let local_arc = self.arena.alloc(lean);
+			Some(&**local_arc)
 		}
 	}
 
-	// Collect all event IDs we need to fetch
-	let mut fetch_ids: HashSet<OwnedEventId> = union_auth;
-	fetch_ids.extend(conflicted_eids.iter().cloned());
-	for map in &state_sets_vec {
-		fetch_ids.extend(map.values().cloned());
-	}
-
-	// Fetch PDUs (honor prefetch cache)
+	let timeline = &self.services.timeline;
+	let prefetch_cache_ref = prefetch_cache.as_ref();
 	let meta = &self.services.pdu_metadata;
-	let pdu_map: HashMap<OwnedEventId, conduwuit_core::PduEvent> =
-		if let Some(cache) = prefetch_cache {
-			let cached = cache.read().await;
-			let mut map: HashMap<OwnedEventId, conduwuit_core::PduEvent> = cached
-				.iter()
-				.filter(|(eid, _)| fetch_ids.contains(*eid))
-				.map(|(eid, pdu)| (eid.clone(), (**pdu).clone()))
-				.collect();
+	let handle = tokio::runtime::Handle::current();
 
-			// Fetch any missing from DB
-			let missing: Vec<OwnedEventId> = fetch_ids
-				.iter()
-				.filter(|eid| !map.contains_key(*eid))
-				.cloned()
-				.collect();
-			drop(cached);
+	let fetch_pdu = Box::new(move |eid: &OwnedEventId| -> Option<conduwuit_core::PduEvent> {
+		tokio::task::block_in_place(|| {
+			handle.block_on(async {
+				if let Some(cache) = prefetch_cache_ref {
+					if let Some(pdu) = cache.read().await.get(eid) {
+						return Some((**pdu).clone());
+					}
+				}
 
-			if !missing.is_empty() {
-				let fetched: Vec<conduwuit_core::PduEvent> = self
-					.services
-					.timeline
-					.multi_get_pdus(Some(room_id), futures::stream::iter(missing))
-					.filter_map(|r| async move { r.ok() })
-					.collect()
-					.await;
-				for mut pdu in fetched {
-					// Clear stale rejection flags for timeline events
+				if let Ok(mut pdu) = timeline.get_pdu(eid).await {
 					if meta.is_event_rejected(&pdu.event_id).await
-						&& self.services.timeline.pdu_exists(&pdu.event_id).await
+						&& timeline.pdu_exists(&pdu.event_id).await
 					{
 						warn!(
 							event_id = %pdu.event_id,
@@ -313,92 +240,23 @@ where
 						meta.unmark_event_rejected(&pdu.event_id);
 						pdu.rejected = false;
 					}
-					map.insert(pdu.event_id.clone(), pdu);
+					Some(pdu)
+				} else {
+					None
 				}
-			}
-			map
-		} else {
-			// Build fresh cache
-			self.services
-				.timeline
-				.multi_get_pdus(Some(room_id), fetch_ids.into_iter().stream())
-				.filter_map(|r| async move { r.ok() })
-				.then(|mut pdu| async move {
-					let is_rejected = meta.is_event_rejected(&pdu.event_id).await;
-					if is_rejected && self.services.timeline.pdu_exists(&pdu.event_id).await {
-						warn!(
-							event_id = %pdu.event_id,
-							"state_res: clearing stale rejection flag on timeline event"
-						);
-						meta.unmark_event_rejected(&pdu.event_id);
-						pdu.rejected = false;
-					}
-					(pdu.event_id.clone(), pdu)
-				})
-				.collect()
-				.await
-		};
-
-	// Convert PduEvent → LeanEvent
-	let to_lean = |pdu: &conduwuit_core::PduEvent| -> rezzy::LeanEvent {
-		let content_val: serde_json::Value =
-			serde_json::from_str(pdu.content.get()).unwrap_or(serde_json::Value::Null);
-		let power_level = content_val
-			.get("power_level")
-			.and_then(|pl| {
-				pl.as_i64()
-					.or_else(|| pl.as_str().and_then(|s| s.parse().ok()))
 			})
-			.unwrap_or(0);
-		rezzy::LeanEvent {
-			event_id: pdu.event_id.to_string(),
-			event_type: pdu.kind.to_string(),
-			state_key: pdu.state_key.as_ref().map(ToString::to_string),
-			power_level,
-			origin_server_ts: pdu.origin_server_ts.into(),
-			sender: pdu.sender.to_string(),
-			content: content_val,
-			prev_events: pdu.prev_events.iter().map(ToString::to_string).collect(),
-			auth_events: pdu.auth_events.iter().map(ToString::to_string).collect(),
-			depth: u64::from(pdu.depth),
-		}
+		})
+	});
+
+	let provider = LocalArenaProvider {
+		global_cache: &self.services.short.leanevent_cache,
+		arena: typed_arena::Arena::new(),
+		fetch_pdu,
 	};
 
-	// Build the full background context ONCE
-	let mut auth_context: HashMap<String, rezzy::LeanEvent> = pdu_map
-		.iter()
-		.map(|(eid, pdu)| (eid.to_string(), to_lean(pdu)))
-		.collect();
-
-	// Extract the exact conflicted_events map
-	let conflicted_events: HashMap<String, rezzy::LeanEvent> = if is_v2_1_plus {
-		// MSC4297 (V2.1+): rezzy computes the exact HashMap we need
-		let direct_conflicted: Vec<String> =
-			conflicted_eids.iter().map(ToString::to_string).collect();
-		let v2_1_conflicted_subgraph =
-			rezzy::compute_v2_1_conflicted_subgraph(&auth_context, &direct_conflicted);
-
-		// Remove conflicted events from auth_context (mutually exclusive)
-		for id in v2_1_conflicted_subgraph.keys() {
-			auth_context.remove(id);
-		}
-
-		v2_1_conflicted_subgraph
-	} else {
-		// V1 or V2: pull known conflicted_eids (state diff + auth chain diff) out
-		let mut v2_conflicted_auth_context = HashMap::with_capacity(conflicted_eids.len());
-		for eid in &conflicted_eids {
-			let id_str = eid.to_string();
-			if let Some(lean) = auth_context.remove(&id_str) {
-				v2_conflicted_auth_context.insert(id_str, lean);
-			}
-		}
-		v2_conflicted_auth_context
-	};
-
-	// Call rezzy (sync -- no async overhead)
+	// Call rezzy (sync -- no async overhead, lazy BFS loading)
 	let resolved_lean =
-		rezzy::resolve_iterative_sort(unconflicted, conflicted_events, &auth_context, version);
+		rezzy::resolve::multi::resolve_state_maps_lazy(&lean_state_sets, &provider, version);
 
 	// Convert back to Ruma StateMap
 	let mut resolved = StateMap::new();
@@ -411,4 +269,28 @@ where
 	}
 
 	Ok(resolved)
+}
+
+fn pdu_to_lean(pdu: &conduwuit_core::PduEvent) -> rezzy::LeanEvent<String> {
+	let content_val: serde_json::Value =
+		serde_json::from_str(pdu.content.get()).unwrap_or(serde_json::Value::Null);
+	let power_level = content_val
+		.get("power_level")
+		.and_then(|pl| {
+			pl.as_i64()
+				.or_else(|| pl.as_str().and_then(|s| s.parse().ok()))
+		})
+		.unwrap_or(0);
+	rezzy::LeanEvent {
+		event_id: pdu.event_id.to_string(),
+		event_type: pdu.kind.to_string(),
+		state_key: pdu.state_key.as_ref().map(ToString::to_string),
+		power_level,
+		origin_server_ts: pdu.origin_server_ts.into(),
+		sender: pdu.sender.to_string(),
+		content: content_val,
+		prev_events: pdu.prev_events.iter().map(ToString::to_string).collect(),
+		auth_events: pdu.auth_events.iter().map(ToString::to_string).collect(),
+		depth: u64::from(pdu.depth),
+	}
 }

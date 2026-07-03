@@ -244,6 +244,9 @@ pub struct Config {
 	#[serde(default = "default_pdu_cache_capacity")]
 	pub pdu_cache_capacity: u32,
 
+	#[serde(default = "default_leanevent_cache_capacity")]
+	pub leanevent_cache_capacity: u32,
+
 	/// default: varies by system
 	#[serde(default = "default_auth_chain_cache_capacity")]
 	pub auth_chain_cache_capacity: u32,
@@ -2893,6 +2896,10 @@ fn default_db_write_buffer_capacity_mb() -> f64 { 48.0 + parallelism_scaled_f64(
 fn default_db_cache_capacity_mb() -> f64 { 128.0 + parallelism_scaled_f64(64.0) }
 
 fn default_pdu_cache_capacity() -> u32 { parallelism_scaled_u32(10_000).saturating_add(100_000) }
+
+fn default_leanevent_cache_capacity() -> u32 {
+	parallelism_scaled_u32(10_000).saturating_add(50_000)
+}
 
 fn default_cache_capacity_modifier() -> f64 { 1.0 }
 

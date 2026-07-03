@@ -80,6 +80,7 @@ zstd_compression = [
 ]
 
 [dependencies]
+typed-arena = { workspace = true }
 askama.workspace = true
 async-trait.workspace = true
 base64.workspace = true
