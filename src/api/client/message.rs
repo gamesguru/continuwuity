@@ -145,10 +145,6 @@ pub(crate) async fn get_message_events_route(
 			.ok();
 	}
 
-	// NOTE: seek_topo_key now accounts for DAG forks by using
-	// max(token_depth, current_depth) for backward scans, which handles
-	// the common case of federation events arriving at lower depths than
-	// local events on a parallel branch.
 	let it = match body.dir {
 		| Direction::Forward => services
 			.rooms

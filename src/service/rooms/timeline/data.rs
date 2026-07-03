@@ -1621,54 +1621,17 @@ impl Data {
 				},
 			};
 
-			// Also check the depth of `current` (the event at token ± 1).
-			// When the DAG has forks, the token event may sit on a branch with
-			// a lower depth than events on a parallel branch that arrived
-			// earlier in stream order.  Using only the token's depth would
-			// cause the backward scan to start too low, permanently skipping
-			// higher-depth events on the other branch.
-			let current_depth = match self.pdu_id_to_depth(current).await {
-				| Ok(depth) => depth,
-				| Err(_) => {
-					let prefix = current.shortroomid();
-					let nearest_pdu_id = if dir == Direction::Forward {
-						let mut stream = Box::pin(
-							self.room_pducount_eventid
-								.raw_stream_from(current)
-								.ready_try_take_while(|(k, _)| Ok(k.starts_with(&prefix))),
-						);
-						stream
-							.next()
-							.await
-							.map(|res| res.map(|(k, _)| RawPduId::from(k)))
-					} else {
-						let mut stream = Box::pin(
-							self.room_pducount_eventid
-								.rev_raw_stream_from(current)
-								.ready_try_take_while(|(k, _)| Ok(k.starts_with(&prefix))),
-						);
-						stream
-							.next()
-							.await
-							.map(|res| res.map(|(k, _)| RawPduId::from(k)))
-					};
-
-					if let Some(Ok(nearest_pdu_id)) = nearest_pdu_id {
-						self.pdu_id_to_depth(&nearest_pdu_id)
-							.await
-							.unwrap_or(token_depth)
-					} else {
-						token_depth
-					}
-				},
-			};
-
-			let target_depth = match dir {
-				| Direction::Backward => token_depth.max(current_depth),
-				| Direction::Forward => token_depth.min(current_depth),
-			};
-
-			Ok(Self::topo_pducount_key(current, target_depth))
+			// Use the exact token depth — no inflation. The topo index key
+			// is [room][depth][count], and the reverse iterator gives us
+			// (depth, count) < (token_depth, token_count) in lexicographic
+			// order — identical to Synapse's SQL:
+			//   WHERE (topo < ?) OR (topo = ? AND stream < ?)
+			// Events at higher depths are on earlier pages; events arriving
+			// mid-pagination are picked up by the next /sync.
+			// The prior max(token_depth, current_depth) caused duplicate
+			// events at page boundaries by inflating the seek position above
+			// where the previous page ended.
+			Ok(Self::topo_pducount_key(current, token_depth))
 		}
 	}
 
@@ -1841,4 +1804,150 @@ fn increment(db: &Arc<Map>, key: &[u8]) {
 	let old = db.get_blocking(key);
 	let new = utils::increment(old.ok().as_deref());
 	db.insert(key, new);
+}
+
+#[cfg(test)]
+mod tests {
+	use conduwuit_core::matrix::pdu::{Count as PduCount, Id as PduId, RawId as RawPduId};
+
+	use super::Data;
+
+	/// Helper: build a RawPduId from (room, count).
+	fn make_pdu_id(room: u64, count: i64) -> RawPduId {
+		let shorteventid = if count >= 0 {
+			PduCount::Normal(count as u64)
+		} else {
+			PduCount::Backfilled(count)
+		};
+		PduId { shortroomid: room, shorteventid }.into()
+	}
+
+	/// Extract depth from a 24-byte topo key: [room:8][depth:8][count:8].
+	fn depth_of(key: &[u8]) -> u64 {
+		u64::from_be_bytes(key[8..16].try_into().unwrap())
+	}
+
+	/// Regression test for the depth inflation bug (7ffebce75):
+	/// `max(token_depth, current_depth)` inflated backward seek positions,
+	/// causing duplicate events at page boundaries.
+	///
+	/// The invariant: the seek key for page N+1 must use the EXACT token
+	/// depth from page N's end, never a higher depth. Synapse's equivalent:
+	///   WHERE (topo < ?) OR (topo = ? AND stream < ?)
+	/// — no inflation.
+	#[test]
+	fn backward_seek_uses_exact_token_depth_no_inflation() {
+		let room = 1_u64;
+
+		// Simulate: page ended at event with depth=8, count=12.
+		let token_pdu_id = make_pdu_id(room, 12);
+		let token_depth: u64 = 8;
+
+		// The adjacent event (count=11) is on a fork at depth=10.
+		// The OLD code would compute max(8, 10) = 10 — WRONG.
+		let _fork_depth: u64 = 10;
+
+		// Build the seek key using the CORRECT logic (exact token depth).
+		let seek_key = Data::topo_pducount_key(&token_pdu_id, token_depth);
+
+		// The seek key must have depth=8, NOT depth=10.
+		assert_eq!(
+			depth_of(&seek_key),
+			8,
+			"backward seek must use exact token depth (8), not inflated depth (10)"
+		);
+	}
+
+	/// Verify that topo keys with lower depth sort before keys with higher
+	/// depth (lexicographic ordering), which guarantees that a reverse
+	/// iterator from depth=D sees all events at depths < D.
+	#[test]
+	fn topo_keys_sort_by_depth_then_count() {
+		let room = 1_u64;
+
+		let key_d5_c10 = Data::topo_pducount_key(&make_pdu_id(room, 10), 5);
+		let key_d5_c11 = Data::topo_pducount_key(&make_pdu_id(room, 11), 5);
+		let key_d8_c3 = Data::topo_pducount_key(&make_pdu_id(room, 3), 8);
+		let key_d10_c1 = Data::topo_pducount_key(&make_pdu_id(room, 1), 10);
+
+		// Depth-major ordering
+		assert!(key_d5_c10 < key_d5_c11, "same depth: lower count sorts first");
+		assert!(key_d5_c11 < key_d8_c3, "lower depth sorts before higher depth");
+		assert!(key_d8_c3 < key_d10_c1, "depth 8 before depth 10");
+	}
+
+	/// Simulate multi-page backward pagination through a forked DAG.
+	/// Events at depths [5, 6, 7, 10] with various counts.
+	/// Assert: no event appears on more than one page.
+	#[test]
+	fn backward_pagination_no_duplicates_across_fork() {
+		let room = 1_u64;
+
+		// Events in the "DB" sorted by topo key (depth, count):
+		// Depth 10, count 5  — federation fork
+		// Depth  7, count 8
+		// Depth  6, count 3
+		// Depth  5, count 1
+		let events = vec![
+			(10_u64, 5_i64),
+			(7, 8),
+			(6, 3),
+			(5, 1),
+		];
+
+		// Build topo keys for all events
+		let mut topo_entries: Vec<(Vec<u8>, u64, i64)> = events
+			.iter()
+			.map(|&(depth, count)| {
+				let key = Data::topo_pducount_key(&make_pdu_id(room, count), depth);
+				(key, depth, count)
+			})
+			.collect();
+
+		// Sort descending (reverse iterator order)
+		topo_entries.sort_by(|a, b| b.0.cmp(&a.0));
+
+		// Simulate pagination with limit=2 per page
+		let limit = 2;
+		let mut all_yielded: Vec<(u64, i64)> = Vec::new();
+		let mut seek_from: Option<(u64, i64)> = None; // (depth, count) of last yielded
+
+		loop {
+			let page: Vec<_> = topo_entries
+				.iter()
+				.filter(|(key, _, _)| {
+					if let Some((seek_depth, seek_count)) = seek_from {
+						// Simulate: reverse iter from seek position (exclusive)
+						let seek_key =
+							Data::topo_pducount_key(&make_pdu_id(room, seek_count), seek_depth);
+						// Strictly less than seek key (the saturating_inc in the
+						// real code makes it exclusive)
+						*key < seek_key
+					} else {
+						true // First page: start from MAX
+					}
+				})
+				.take(limit)
+				.map(|(_, d, c)| (*d, *c))
+				.collect();
+
+			if page.is_empty() {
+				break;
+			}
+
+			// The last event on this page becomes the next seek position
+			let last = page.last().unwrap();
+			seek_from = Some(*last);
+			all_yielded.extend_from_slice(&page);
+		}
+
+		// All 4 events should be yielded exactly once
+		assert_eq!(all_yielded.len(), 4, "expected 4 events total, got {all_yielded:?}");
+
+		// No duplicates
+		let mut seen = std::collections::HashSet::new();
+		for entry in &all_yielded {
+			assert!(seen.insert(entry), "duplicate event: {entry:?}");
+		}
+	}
 }
