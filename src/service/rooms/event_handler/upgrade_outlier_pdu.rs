@@ -495,7 +495,8 @@ where
 							&room_version,
 							&incoming_pdu,
 						))
-						.await?;
+						.await
+						.unwrap_or(false);
 
 						if !auth_check_current {
 							warn!(

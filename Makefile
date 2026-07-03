@@ -175,6 +175,33 @@ test:   ##H Run tests
 		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
 		cargo test --locked --all-targets $(if $(p),,$(if $(CRATE),,--features full)) --timings $(CARGO_FLAGS) $(CARGO_SCOPE)
 
+.PHONY: cov
+cov:    ##H Run tests with llvm-cov coverage (text summary)
+	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+		AWS_LC_SYS_LDFLAGS="-L$(PREFIX)/lib -lssl -lcrypto" \
+		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
+		AWS_LC_RS_NO_BUNDLE=1 \
+		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
+		cargo +nightly llvm-cov --lib --all-features \
+			--ignore-filename-regex 'src/admin|/tests\.rs' \
+			$(CARGO_SCOPE)
+
+.PHONY: cov/html
+cov/html:       ##H Run tests with llvm-cov and open HTML report
+	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
+		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
+		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
+		AWS_LC_SYS_LDFLAGS="-L$(PREFIX)/lib -lssl -lcrypto" \
+		AWS_LC_SYS_INCLUDES="$(PREFIX)/include" \
+		AWS_LC_RS_NO_BUNDLE=1 \
+		AWS_LC_RS_PREBUILT_PATH=$(PREFIX) \
+		cargo +nightly llvm-cov --lib --all-features \
+			--ignore-filename-regex 'src/admin|/tests\.rs' \
+			--html --open \
+			$(CARGO_SCOPE)
+
 
 PREFIX ?= /usr/local
 ROCKSDB_LIB_DIR ?= $(PREFIX)/lib

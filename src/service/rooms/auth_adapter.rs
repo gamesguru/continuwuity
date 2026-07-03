@@ -216,3 +216,114 @@ impl RoomStateProvider {
 		Ok(Self { provider, version })
 	}
 }
+
+#[cfg(test)]
+mod tests {
+	use std::collections::HashMap;
+
+	use rezzy::{LeanEvent, StateResVersion, auth::StateProvider};
+
+	use super::*;
+
+	/// Build a minimal LeanEvent for testing.
+	fn make_lean(event_type: &str, state_key: Option<&str>, sender: &str) -> LeanEvent<String> {
+		LeanEvent {
+			event_id: format!("$test_{event_type}:example.org"),
+			event_type: event_type.to_owned(),
+			sender: sender.to_owned(),
+			state_key: state_key.map(str::to_owned),
+			content: serde_json::json!({}),
+			prev_events: vec![],
+			auth_events: vec![],
+			origin_server_ts: 1_000_000,
+			depth: 1,
+			..Default::default()
+		}
+	}
+
+	// -----------------------------------------------------------------
+	// Regression: PduStateProvider lookups must not panic on missing keys
+	// -----------------------------------------------------------------
+	// The `check_current_state_auth` bug (fixed in the `.unwrap_or(false)`
+	// change) was caused by error propagation turning auth lookup failures
+	// into hard rejections. This test verifies the StateProvider impl
+	// gracefully returns None for missing state keys instead of panicking.
+	#[test]
+	fn state_provider_returns_none_for_missing_keys() {
+		let provider = PduStateProvider { events: HashMap::new() };
+
+		assert!(
+			provider.get_event("m.room.create", "").is_none(),
+			"empty state provider must return None, not panic"
+		);
+		assert!(
+			provider.get_event("m.room.power_levels", "").is_none(),
+			"missing power levels must return None"
+		);
+		assert!(
+			provider
+				.get_event("m.room.member", "@alice:example.org")
+				.is_none(),
+			"missing member must return None"
+		);
+	}
+
+	// -----------------------------------------------------------------
+	// Regression: rezzy_auth_check must return false (not panic) on
+	// completely empty state — matching the old ruma .unwrap_or(false)
+	// -----------------------------------------------------------------
+	// When check_current_state_auth encounters an error building the
+	// state provider (e.g. room version lookup fails during federation
+	// join setup), the contract is: return false → soft-fail. The auth
+	// check itself must also handle degenerate inputs gracefully.
+	#[test]
+	fn auth_check_with_empty_state_returns_false() {
+		let provider = PduStateProvider { events: HashMap::new() };
+
+		// A non-create event with no auth state should fail auth, not panic
+		let lean = make_lean("m.room.message", None, "@alice:example.org");
+		let pdu_json = serde_json::to_string(&serde_json::json!({
+			"event_id": lean.event_id,
+			"type": lean.event_type,
+			"sender": lean.sender,
+			"room_id": "!test:example.org",
+			"origin_server_ts": lean.origin_server_ts,
+			"depth": lean.depth,
+			"prev_events": lean.prev_events,
+			"auth_events": lean.auth_events,
+			"content": lean.content,
+			"hashes": {"sha256": "test"},
+			"signatures": {},
+		}))
+		.unwrap();
+
+		// We can't easily construct a PduEvent here without the full
+		// deserialization pipeline, but we CAN verify the StateProvider +
+		// rezzy contract directly:
+		let result = rezzy::auth::check_auth(&lean, &provider, StateResVersion::V2, None);
+
+		// Must be Err (auth fails), not panic
+		assert!(result.is_err(), "auth check with no state must fail gracefully, got Ok");
+	}
+
+	// -----------------------------------------------------------------
+	// Verify state_key mapping: Some("") must NOT become None
+	// -----------------------------------------------------------------
+	// The rezzy migration had a bug where empty state_keys were mapped
+	// to None instead of Some(""). This test ensures the PduStateProvider
+	// always wraps state_keys as Some().
+	#[test]
+	fn state_provider_maps_empty_state_key_as_some() {
+		let mut events = HashMap::new();
+		let lean = make_lean("m.room.create", Some(""), "@alice:example.org");
+		events.insert(("m.room.create".to_owned(), Some(String::new())), lean);
+
+		let provider = PduStateProvider { events };
+
+		// Lookup with empty string must find the event
+		assert!(
+			provider.get_event("m.room.create", "").is_some(),
+			"empty state_key must be stored as Some(\"\"), not None"
+		);
+	}
+}
