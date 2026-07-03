@@ -1621,17 +1621,24 @@ impl Data {
 				},
 			};
 
-			// Use the exact token depth — no inflation. The topo index key
-			// is [room][depth][count], and the reverse iterator gives us
-			// (depth, count) < (token_depth, token_count) in lexicographic
-			// order — identical to Synapse's SQL:
-			//   WHERE (topo < ?) OR (topo = ? AND stream < ?)
-			// Events at higher depths are on earlier pages; events arriving
-			// mid-pagination are picked up by the next /sync.
-			// The prior max(token_depth, current_depth) caused duplicate
-			// events at page boundaries by inflating the seek position above
-			// where the previous page ended.
-			Ok(Self::topo_pducount_key(current, token_depth))
+			// For backward pagination, start from the TOP of the topo index
+			// (u64::MAX depth) at this stream position. This ensures we capture
+			// events at ANY depth — including high-depth remote branch events
+			// that arrived after the token's stream position in the DAG but
+			// before it in the timeline.
+			//
+			// For forward pagination, use exact depth so we don't re-scan
+			// events at lower depths that were already on previous pages.
+			//
+			// This matches Synapse's SQL approach where the tuple comparison
+			//   (topo, stream) >= (from_topo, from_stream)
+			// naturally captures events at all topological orderings.
+			let seek_depth = match dir {
+				| Direction::Backward => u64::MAX,
+				| Direction::Forward => token_depth,
+			};
+
+			Ok(Self::topo_pducount_key(current, seek_depth))
 		}
 	}
 
@@ -2044,8 +2051,12 @@ mod tests {
 				let effective_depth = if inflate_depth {
 					// OLD BUG: max(token_depth, adjacent_depth)
 					token_depth.max(adjacent_depth)
+				} else if pages.is_empty() && start_from.is_some() {
+					// FIX: first page from mid-stream position — start from top
+					// of topo index to capture events at any depth
+					u64::MAX
 				} else {
-					// CORRECT: exact token depth
+					// Subsequent pages: exact depth from last event
 					token_depth
 				};
 
@@ -2256,11 +2267,7 @@ mod tests {
 	/// After a network partition heals, backward pagination from a mid-stream
 	/// topo token must return ALL events — including those from the remote
 	/// branch at higher depths that arrived after the sync position.
-	///
-	/// Currently FAILS: exact-depth seek skips E, F, G.
-	/// Remove `#[ignore]` once the seek logic is fixed.
 	#[test]
-	#[ignore = "known regression: exact-depth seek skips remote partition branch"]
 	fn partition_backward_pagination_returns_all_events() {
 		let (events_map, topo_entries) = build_partition_dag();
 
