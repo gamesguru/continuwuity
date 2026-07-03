@@ -123,8 +123,9 @@ pub async fn backfill_if_required(
 	let mut budget = 5_u32;
 
 	loop {
-		// Phase 1: Collect scanned PDUs into an in-memory event map for rezzy.
-		let mut event_map: std::collections::HashMap<String, rezzy::LeanEvent<String>> =
+		// Phase 1: Collect scanned PDUs into an event map. With `impl DagNode
+		// for Pdu`, rezzy operates directly on PduEvent — no LeanEvent conversion.
+		let mut event_map: std::collections::HashMap<OwnedEventId, PduEvent> =
 			std::collections::HashMap::new();
 		let mut scanned = 0_usize;
 		let mut pdus = self
@@ -133,28 +134,24 @@ pub async fn backfill_if_required(
 			.boxed();
 		while let Some(Ok((_, pdu))) = pdus.next().await {
 			scanned = scanned.saturating_add(1);
-			let lean = crate::rooms::auth_adapter::pdu_to_lean(&pdu);
-			event_map.insert(lean.event_id.clone(), lean);
+			event_map.insert(pdu.event_id.clone(), pdu);
 		}
 
 		// Phase 2: Pre-collect which prev_event IDs exist in the DB so the
 		// rezzy `exists` predicate is synchronous.
-		let mut all_prev_ids: std::collections::HashSet<String> =
-			std::collections::HashSet::new();
-		for lean in event_map.values() {
-			for prev_id in &lean.prev_events {
+		let mut all_prev_ids: Vec<OwnedEventId> = Vec::new();
+		for pdu in event_map.values() {
+			for prev_id in &pdu.prev_events {
 				if !event_map.contains_key(prev_id) {
-					all_prev_ids.insert(prev_id.clone());
+					all_prev_ids.push(prev_id.clone());
 				}
 			}
 		}
-		let mut known_ids: std::collections::HashSet<String> =
+		let mut known_ids: std::collections::HashSet<OwnedEventId> =
 			std::collections::HashSet::with_capacity(all_prev_ids.len());
-		for prev_id_str in &all_prev_ids {
-			if let Ok(eid) = <&EventId>::try_from(prev_id_str.as_str()) {
-				if self.get_pdu_id(eid).await.is_ok() {
-					known_ids.insert(prev_id_str.clone());
-				}
+		for prev_id in &all_prev_ids {
+			if self.get_pdu_id(prev_id).await.is_ok() {
+				known_ids.insert(prev_id.clone());
 			}
 		}
 
@@ -168,13 +165,11 @@ pub async fn backfill_if_required(
 
 		// Build the /backfill request: send child event IDs (events that have
 		// missing parents), which is what the /backfill API expects.
-		let backwards_extremities: Vec<OwnedEventId> = gaps
+		let backwards_extremities: Vec<OwnedEventId> =
+			gaps.iter().map(|gap| gap.event_id.clone()).collect();
+		let unique_missing: std::collections::HashSet<&EventId> = gaps
 			.iter()
-			.filter_map(|gap| gap.event_id.as_str().try_into().ok())
-			.collect();
-		let unique_missing: std::collections::HashSet<&str> = gaps
-			.iter()
-			.flat_map(|gap| gap.missing_prev_events.iter().map(String::as_str))
+			.flat_map(|gap| gap.missing_prev_events.iter().map(AsRef::as_ref))
 			.collect();
 
 		if budget == 0 {

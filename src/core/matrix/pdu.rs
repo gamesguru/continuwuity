@@ -183,6 +183,30 @@ impl rezzy::RawEvent for Pdu {
 	fn raw_origin_server_ts(&self) -> u64 { self.origin_server_ts.into() }
 }
 
+/// Direct [`DagNode`](rezzy::DagNode) implementation on `Pdu`, enabling
+/// rezzy's traversal and topological functions (`find_backward_extremities`,
+/// `compute_topo_positions`, `reverse_topological_order`, etc.) to operate
+/// on `HashMap<OwnedEventId, Pdu>` with zero conversion overhead.
+///
+/// For auth checking and content-aware operations, use
+/// `rezzy::ParsedEvent::new(&pdu)` which provides the full `EventLike` trait
+/// via the [`RawEvent`](rezzy::RawEvent) impl above.
+impl rezzy::DagNode for Pdu {
+	type Id = OwnedEventId;
+
+	#[inline]
+	fn event_id(&self) -> &OwnedEventId { &self.event_id }
+
+	#[inline]
+	fn depth(&self) -> u64 { self.depth.into() }
+
+	#[inline]
+	fn prev_events(&self) -> &[OwnedEventId] { &self.prev_events }
+
+	#[inline]
+	fn auth_events(&self) -> &[OwnedEventId] { &self.auth_events }
+}
+
 macro_rules! impl_event_delegates {
 	() => {
 		#[inline]
