@@ -14,6 +14,10 @@ It's the official community continuation of the `conduwuit <https://github.com/g
 
 |comp_fg|
 
+|comp_dev|
+
+|unittest_dev|
+
 Why the fork?
 ~~~~~~~~~~~~~
 
@@ -67,3 +71,11 @@ Chats to join (my fork)
 .. |comp_fg| image:: https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadge-main-upstream.json
    :target: https://forgejo.ellis.link/gamesguru/continuwuity/actions?workflow=complement.yml&actor=0&status=0
    :alt: Complement Tests (Forge)
+
+.. |comp_dev| image:: https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadge-guru-dev-2026-03-27-b1-presence-b2-federation.json
+   :target: https://github.com/gamesguru/continuwuity/actions/workflows/complement.yml?query=branch%3Aguru%2Fdev-2026-03-27%2Bb1-presence%2Bb2-federation
+   :alt: Complement Tests (dev)
+
+.. |unittest_dev| image:: https://raw.githubusercontent.com/gamesguru/continuwuity/badges/tests.svg
+   :target: https://github.com/gamesguru/continuwuity/actions/workflows/test.yml?query=branch%3Amain
+   :alt: Unit Tests
