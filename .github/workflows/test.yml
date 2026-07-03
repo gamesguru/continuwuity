@@ -142,7 +142,7 @@ jobs:
         run: make lint
 
   publish-badge:
-    needs: checks
+    needs: clippy-checks
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
