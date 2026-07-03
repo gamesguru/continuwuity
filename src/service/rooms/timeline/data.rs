@@ -1809,6 +1809,7 @@ fn increment(db: &Arc<Map>, key: &[u8]) {
 #[cfg(test)]
 mod tests {
 	use conduwuit_core::matrix::pdu::{Count as PduCount, Id as PduId, RawId as RawPduId};
+	use rezzy::{HashMap, LeanEvent, verify_pagination};
 
 	use super::Data;
 
@@ -1822,45 +1823,165 @@ mod tests {
 		PduId { shortroomid: room, shorteventid }.into()
 	}
 
-	/// Extract depth from a 24-byte topo key: [room:8][depth:8][count:8].
-	fn depth_of(key: &[u8]) -> u64 {
-		u64::from_be_bytes(key[8..16].try_into().unwrap())
+	/// Build a forked DAG for pagination testing:
+	///
+	/// ```text
+	///         A (depth=1)
+	///        / \
+	///       B   C  (B at depth 2, C at depth 5 — federation fork)
+	///       |
+	///       D      (depth 3)
+	///       |
+	///       E      (depth 4, the tip we paginate from)
+	/// ```
+	///
+	/// The fork at C (depth=5) is the scenario that triggers max() inflation:
+	/// when paginating backward from E and hitting C's depth, the old code
+	/// would inflate the seek position.
+	fn build_forked_dag() -> (HashMap<String, LeanEvent>, Vec<(String, u64, i64)>) {
+		let events: Vec<LeanEvent<String>> = vec![
+			LeanEvent {
+				event_id: "A".into(),
+				depth: 1,
+				prev_events: vec![],
+				event_type: "m.room.create".into(),
+				state_key: Some(String::new()),
+				sender: "@x:x".into(),
+				content: serde_json::json!({"room_version": "10", "creator": "@x:x"}),
+				..Default::default()
+			},
+			LeanEvent {
+				event_id: "B".into(),
+				depth: 2,
+				prev_events: vec!["A".into()],
+				event_type: "m.room.message".into(),
+				sender: "@x:x".into(),
+				..Default::default()
+			},
+			LeanEvent {
+				event_id: "C".into(),
+				depth: 5,
+				prev_events: vec!["A".into()],
+				event_type: "m.room.message".into(),
+				sender: "@x:x".into(),
+				..Default::default()
+			},
+			LeanEvent {
+				event_id: "D".into(),
+				depth: 3,
+				prev_events: vec!["B".into()],
+				event_type: "m.room.message".into(),
+				sender: "@x:x".into(),
+				..Default::default()
+			},
+			LeanEvent {
+				event_id: "E".into(),
+				depth: 4,
+				prev_events: vec!["D".into()],
+				event_type: "m.room.message".into(),
+				sender: "@x:x".into(),
+				..Default::default()
+			},
+		];
+
+		let mut events_map = HashMap::new();
+		for ev in &events {
+			events_map.insert(ev.event_id.clone(), ev.clone());
+		}
+
+		// Topo index entries: (event_id, depth, pdu_count)
+		// pdu_count simulates insertion order. C (the fork at depth 5)
+		// arrived via federation at count=3, making it adjacent to E at count=4.
+		// This triggers max(token_depth=4, adjacent_depth=5) = 5 in the old code.
+		let topo_entries = vec![
+			("A".into(), 1_u64, 1_i64),
+			("B".into(), 2, 2),
+			("C".into(), 5, 3), // federation fork: high depth, mid-stream count
+			("E".into(), 4, 4),
+			("D".into(), 3, 5),
+		];
+
+		(events_map, topo_entries)
 	}
 
-	/// Regression test for the depth inflation bug (7ffebce75):
-	/// `max(token_depth, current_depth)` inflated backward seek positions,
-	/// causing duplicate events at page boundaries.
-	///
-	/// The invariant: the seek key for page N+1 must use the EXACT token
-	/// depth from page N's end, never a higher depth. Synapse's equivalent:
-	///   WHERE (topo < ?) OR (topo = ? AND stream < ?)
-	/// — no inflation.
+	/// Extract the ordering that c10y's topo keys would produce for
+	/// the given `(event_id, federation_depth, pdu_count)` entries.
+	/// This is the order a RocksDB iterator would yield.
+	fn c10y_topo_order(room: u64, topo_entries: &[(String, u64, i64)]) -> Vec<String> {
+		let mut keyed: Vec<(Vec<u8>, String)> = topo_entries
+			.iter()
+			.map(|(id, depth, count)| {
+				(Data::topo_pducount_key(&make_pdu_id(room, *count), *depth), id.clone())
+			})
+			.collect();
+		keyed.sort_by(|a, b| a.0.cmp(&b.0));
+		keyed.into_iter().map(|(_, id)| id).collect()
+	}
+
+	/// When federation depth is honest, c10y's topo key ordering matches
+	/// rezzy's DAG-derived ordering (parents before children).
 	#[test]
-	fn backward_seek_uses_exact_token_depth_no_inflation() {
-		let room = 1_u64;
+	fn honest_depth_matches_rezzy_ordering() {
+		let (events_map, _) = build_forked_dag();
 
-		// Simulate: page ended at event with depth=8, count=12.
-		let token_pdu_id = make_pdu_id(room, 12);
-		let token_depth: u64 = 8;
+		// Honest depths: use rezzy's compute_depths (derived from prev_events)
+		let depths = rezzy::compute_depths(&events_map);
+		let honest_entries: Vec<(String, u64, i64)> = vec![
+			("A".into(), depths["A"], 1),
+			("B".into(), depths["B"], 2),
+			("C".into(), depths["C"], 3),
+			("D".into(), depths["D"], 4),
+			("E".into(), depths["E"], 5),
+		];
 
-		// The adjacent event (count=11) is on a fork at depth=10.
-		// The OLD code would compute max(8, 10) = 10 — WRONG.
-		let _fork_depth: u64 = 10;
+		let c10y_order = c10y_topo_order(1, &honest_entries);
+		let rezzy_order =
+			rezzy::compute_topo_positions(&events_map, |a: &String, b: &String| a.cmp(b));
 
-		// Build the seek key using the CORRECT logic (exact token depth).
-		let seek_key = Data::topo_pducount_key(&token_pdu_id, token_depth);
-
-		// The seek key must have depth=8, NOT depth=10.
 		assert_eq!(
-			depth_of(&seek_key),
-			8,
-			"backward seek must use exact token depth (8), not inflated depth (10)"
+			c10y_order, rezzy_order,
+			"with honest depths, c10y key ordering must match rezzy's topo ordering"
 		);
 	}
 
-	/// Verify that topo keys with lower depth sort before keys with higher
-	/// depth (lexicographic ordering), which guarantees that a reverse
-	/// iterator from depth=D sees all events at depths < D.
+	/// When federation depth is inflated (C claims depth=5 instead of 2),
+	/// c10y's topo key ordering diverges from rezzy's DAG-derived ordering.
+	/// This is the P0.1 bug: the RocksDB index sorts C after D and E,
+	/// but rezzy knows C is at the same level as B (both are children of A).
+	///
+	/// Regression test for 7ffebce75.
+	#[test]
+	fn inflated_depth_diverges_from_rezzy_ordering() {
+		let (events_map, topo_entries) = build_forked_dag();
+
+		// c10y uses federation-supplied depth (C has depth=5, INFLATED)
+		let c10y_order = c10y_topo_order(1, &topo_entries);
+
+		// rezzy derives depth from prev_events (C has depth=2, CORRECT)
+		let rezzy_order =
+			rezzy::compute_topo_positions(&events_map, |a: &String, b: &String| a.cmp(b));
+
+		assert_ne!(
+			c10y_order, rezzy_order,
+			"inflated federation depth MUST produce a different ordering than rezzy's \
+			 DAG-derived order — that's the bug. c10y={c10y_order:?}, rezzy={rezzy_order:?}"
+		);
+
+		// Specifically: rezzy puts C at position 2 (sibling of B), but c10y's
+		// key ordering puts C after D/E due to inflated depth=5.
+		let c10y_pos = |id: &str| c10y_order.iter().position(|x| x == id).unwrap();
+		let rezzy_pos = |id: &str| rezzy_order.iter().position(|x| x == id).unwrap();
+
+		assert!(
+			rezzy_pos("C") < c10y_pos("C"),
+			"rezzy places C earlier (depth=2) than c10y (depth=5): rezzy_pos={}, c10y_pos={}",
+			rezzy_pos("C"),
+			c10y_pos("C")
+		);
+	}
+
+	/// Verify that topo keys sort by depth first, then count — the
+	/// structural invariant that makes Synapse-style pagination correct.
 	#[test]
 	fn topo_keys_sort_by_depth_then_count() {
 		let room = 1_u64;
@@ -1870,84 +1991,128 @@ mod tests {
 		let key_d8_c3 = Data::topo_pducount_key(&make_pdu_id(room, 3), 8);
 		let key_d10_c1 = Data::topo_pducount_key(&make_pdu_id(room, 1), 10);
 
-		// Depth-major ordering
 		assert!(key_d5_c10 < key_d5_c11, "same depth: lower count sorts first");
 		assert!(key_d5_c11 < key_d8_c3, "lower depth sorts before higher depth");
 		assert!(key_d8_c3 < key_d10_c1, "depth 8 before depth 10");
 	}
 
-	/// Simulate multi-page backward pagination through a forked DAG.
-	/// Events at depths [5, 6, 7, 10] with various counts.
-	/// Assert: no event appears on more than one page.
-	#[test]
-	fn backward_pagination_no_duplicates_across_fork() {
-		let room = 1_u64;
+	/// Simulate backward pagination through the topo index.
+	///
+	/// Returns `None` if the loop guard fires (more than `max_pages` pages),
+	/// indicating the seek logic diverges (infinite loop).
+	///
+	/// When `inflate_depth` is true, uses the old buggy `max(token_depth,
+	/// adjacent_depth)` seek logic. When false, uses the fixed exact-depth
+	/// seek.
+	fn simulate_backward_pagination(
+		room: u64,
+		topo_entries: &[(String, u64, i64)],
+		limit: usize,
+		inflate_depth: bool,
+	) -> Option<Vec<Vec<String>>> {
+		const MAX_PAGES: usize = 20;
 
-		// Events in the "DB" sorted by topo key (depth, count):
-		// Depth 10, count 5  — federation fork
-		// Depth  7, count 8
-		// Depth  6, count 3
-		// Depth  5, count 1
-		let events = vec![
-			(10_u64, 5_i64),
-			(7, 8),
-			(6, 3),
-			(5, 1),
-		];
-
-		// Build topo keys for all events
-		let mut topo_entries: Vec<(Vec<u8>, u64, i64)> = events
+		// Build sorted key index (descending — backward pagination reads high→low)
+		let mut keyed: Vec<(Vec<u8>, String, u64, i64)> = topo_entries
 			.iter()
-			.map(|&(depth, count)| {
-				let key = Data::topo_pducount_key(&make_pdu_id(room, count), depth);
-				(key, depth, count)
+			.map(|(id, depth, count)| {
+				let key = Data::topo_pducount_key(&make_pdu_id(room, *count), *depth);
+				(key, id.clone(), *depth, *count)
 			})
 			.collect();
+		keyed.sort_by(|a, b| b.0.cmp(&a.0)); // descending
 
-		// Sort descending (reverse iterator order)
-		topo_entries.sort_by(|a, b| b.0.cmp(&a.0));
+		// Depth lookup by count (simulates pdu_id_to_depth)
+		let depth_by_count: HashMap<i64, u64> =
+			topo_entries.iter().map(|(_, d, c)| (*c, *d)).collect();
 
-		// Simulate pagination with limit=2 per page
-		let limit = 2;
-		let mut all_yielded: Vec<(u64, i64)> = Vec::new();
-		let mut seek_from: Option<(u64, i64)> = None; // (depth, count) of last yielded
+		let mut pages: Vec<Vec<String>> = Vec::new();
+		let mut seek_from: Option<(u64, i64)> = None;
 
 		loop {
-			let page: Vec<_> = topo_entries
+			if pages.len() >= MAX_PAGES {
+				return None; // loop guard fired — divergent
+			}
+
+			let seek_key = seek_from.map(|(token_depth, token_count)| {
+				let adjacent_depth = depth_by_count
+					.get(&(token_count - 1))
+					.copied()
+					.unwrap_or(token_depth);
+
+				let effective_depth = if inflate_depth {
+					// OLD BUG: max(token_depth, adjacent_depth)
+					token_depth.max(adjacent_depth)
+				} else {
+					// CORRECT: exact token depth
+					token_depth
+				};
+
+				Data::topo_pducount_key(&make_pdu_id(room, token_count), effective_depth)
+			});
+
+			let page: Vec<_> = keyed
 				.iter()
-				.filter(|(key, _, _)| {
-					if let Some((seek_depth, seek_count)) = seek_from {
-						// Simulate: reverse iter from seek position (exclusive)
-						let seek_key =
-							Data::topo_pducount_key(&make_pdu_id(room, seek_count), seek_depth);
-						// Strictly less than seek key (the saturating_inc in the
-						// real code makes it exclusive)
-						*key < seek_key
+				.filter(|(key, ..)| {
+					if let Some(ref sk) = seek_key {
+						*key < *sk
 					} else {
 						true // First page: start from MAX
 					}
 				})
 				.take(limit)
-				.map(|(_, d, c)| (*d, *c))
+				.map(|(_, id, depth, count)| (id.clone(), *depth, *count))
 				.collect();
 
 			if page.is_empty() {
 				break;
 			}
 
-			// The last event on this page becomes the next seek position
 			let last = page.last().unwrap();
-			seek_from = Some(*last);
-			all_yielded.extend_from_slice(&page);
+			seek_from = Some((last.1, last.2));
+			pages.push(page.iter().map(|(id, ..)| id.clone()).collect());
 		}
 
-		// All 4 events should be yielded exactly once
-		assert_eq!(all_yielded.len(), 4, "expected 4 events total, got {all_yielded:?}");
+		Some(pages)
+	}
 
-		// No duplicates
-		let mut seen = std::collections::HashSet::new();
-		for entry in &all_yielded {
-			assert!(seen.insert(entry), "duplicate event: {entry:?}");
-		}
+	/// The OLD buggy max() seek logic causes an infinite loop (the loop guard
+	/// fires before all events are yielded).
+	///
+	/// Regression test for commit 250e12817 — proves the bug diverges.
+	#[test]
+	fn inflated_seek_causes_infinite_loop() {
+		let (_, topo_entries) = build_forked_dag();
+		let result = simulate_backward_pagination(1, &topo_entries, 2, true);
+
+		assert!(
+			result.is_none(),
+			"buggy max() seek logic must hit the loop guard (infinite loop), but it terminated \
+			 — the simulation does not reproduce the bug"
+		);
+	}
+
+	/// The FIXED exact-depth seek logic terminates correctly and produces
+	/// no pagination violations (no duplicates, correct ordering).
+	///
+	/// Regression test for commit 250e12817 — proves the fix works.
+	#[test]
+	fn fixed_seek_terminates_with_no_violations() {
+		let (events_map, topo_entries) = build_forked_dag();
+		let pages = simulate_backward_pagination(1, &topo_entries, 2, false);
+
+		let pages =
+			pages.expect("fixed exact-depth seek logic must terminate, but hit loop guard");
+
+		// All 5 events must be yielded
+		let total: usize = pages.iter().map(Vec::len).sum();
+		assert_eq!(total, 5, "all 5 events must be yielded across pages");
+
+		// No duplicates or ordering violations
+		let violations = verify_pagination(&events_map, &pages);
+		assert!(
+			violations.is_empty(),
+			"fixed seek logic must produce no pagination violations, got: {violations:?}"
+		);
 	}
 }
