@@ -12,7 +12,7 @@ use conduwuit_core::{
 };
 use futures::{FutureExt, StreamExt};
 use ruma::{
-	CanonicalJsonObject, EventId, Int, OwnedEventId, RoomId, ServerName, UInt,
+	CanonicalJsonObject, EventId, Int, OwnedEventId, RoomId, RoomVersionId, ServerName, UInt,
 	api::federation,
 	events::{
 		StateEventType,
@@ -540,8 +540,8 @@ pub async fn promote_outlier(&self, room_id: &RoomId, event_id: &EventId) -> Res
 pub async fn promote_outliers_sorted(
 	&self,
 	room_id: &RoomId,
-	event_ids: &[ruma::OwnedEventId],
-	room_version: &ruma::RoomVersionId,
+	event_ids: &[OwnedEventId],
+	room_version: &RoomVersionId,
 ) -> Result<usize> {
 	use conduwuit_core::debug;
 

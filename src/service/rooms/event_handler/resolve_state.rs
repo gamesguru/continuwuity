@@ -1,8 +1,4 @@
-use std::{
-	borrow::Borrow,
-	collections::{HashMap, HashSet},
-	sync::Arc,
-};
+use std::{borrow::Borrow, collections::HashMap, sync::Arc};
 
 use conduwuit::{
 	Error, Result, err, implement, info,
@@ -156,8 +152,6 @@ pub async fn state_resolution<'a, StateSets>(
 where
 	StateSets: Iterator<Item = &'a StateMap<OwnedEventId>> + Clone + Send,
 {
-	use rezzy::SharedState;
-
 	let state_sets_vec: Vec<&StateMap<OwnedEventId>> = state_sets.collect();
 	let num_maps = state_sets_vec.len();
 
@@ -188,14 +182,16 @@ where
 		| _ => rezzy::StateResVersion::V2_1_1,
 	};
 
-	struct LocalArenaProvider<'a> {
+	struct LocalArenaProvider<'a, F> {
 		global_cache: &'a moka::sync::Cache<OwnedEventId, Arc<rezzy::LeanEvent<String>>>,
 		arena: typed_arena::Arena<Arc<rezzy::LeanEvent<String>>>,
-		fetch_pdu: Box<dyn Fn(&OwnedEventId) -> Option<conduwuit_core::PduEvent> + 'a>,
+		fetch_pdu: F,
 	}
 
-	impl<'a> rezzy::basespec::rezzy_types::EventProvider<String, serde_json::Value>
-		for LocalArenaProvider<'a>
+	impl<F> rezzy::basespec::rezzy_types::EventProvider<String, serde_json::Value>
+		for LocalArenaProvider<'_, F>
+	where
+		F: Fn(&OwnedEventId) -> Option<conduwuit_core::PduEvent>,
 	{
 		fn get_event(&self, id: &String) -> Option<&rezzy::LeanEvent<String>> {
 			let event_id = OwnedEventId::try_from(id.as_str()).ok()?;
@@ -220,7 +216,7 @@ where
 	let meta = &self.services.pdu_metadata;
 	let handle = tokio::runtime::Handle::current();
 
-	let fetch_pdu = Box::new(move |eid: &OwnedEventId| -> Option<conduwuit_core::PduEvent> {
+	let fetch_pdu = move |eid: &OwnedEventId| -> Option<conduwuit_core::PduEvent> {
 		tokio::task::block_in_place(|| {
 			handle.block_on(async {
 				if let Some(cache) = prefetch_cache_ref {
@@ -246,7 +242,7 @@ where
 				}
 			})
 		})
-	});
+	};
 
 	let provider = LocalArenaProvider {
 		global_cache: &self.services.short.leanevent_cache,

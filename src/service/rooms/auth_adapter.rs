@@ -282,7 +282,7 @@ mod tests {
 
 		// A non-create event with no auth state should fail auth, not panic
 		let lean = make_lean("m.room.message", None, "@alice:example.org");
-		let pdu_json = serde_json::to_string(&serde_json::json!({
+		let _pdu_json = serde_json::to_string(&serde_json::json!({
 			"event_id": lean.event_id,
 			"type": lean.event_type,
 			"sender": lean.sender,
