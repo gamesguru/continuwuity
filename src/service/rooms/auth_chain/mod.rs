@@ -146,6 +146,85 @@ where
 }
 
 #[implement(Service)]
+#[tracing::instrument(name = "auth_chain_bitmap", level = "debug", skip_all, fields(room_id = %room_id))]
+pub async fn get_auth_chain_bitmap<'a, I>(
+	&'a self,
+	room_id: &RoomId,
+	starting_events: I,
+) -> Result<RoaringTreemap>
+where
+	I: Iterator<Item = &'a EventId> + Clone + Debug + ExactSizeIterator + Send + 'a,
+{
+	let started = Instant::now();
+	let starting_ids: Vec<(ShortEventId, &EventId)> = self
+		.services
+		.short
+		.multi_get_or_create_shorteventid(starting_events.clone())
+		.zip(starting_events.stream())
+		.collect()
+		.await;
+
+	debug!(
+		starting_events = ?starting_ids.len(),
+		elapsed = ?started.elapsed(),
+		"start",
+	);
+
+	let mut full_auth_chain = RoaringTreemap::new();
+	let mut uncached = Vec::new();
+
+	// Parallel check for starting events already in cache
+	let cache_checks = starting_ids
+		.into_iter()
+		.try_stream::<conduwuit::Error>()
+		.broad_and_then(|(shortid, event_id)| async move {
+			let res = self.get_cached_eventid_authchain(&[shortid]).await;
+			Ok((shortid, event_id, res))
+		})
+		.try_collect::<Vec<_>>()
+		.await?;
+
+	for (shortid, event_id, cache_res) in cache_checks {
+		if let Ok(cached) = cache_res {
+			full_auth_chain |= cached.as_ref();
+			full_auth_chain.insert(shortid);
+		} else {
+			uncached.push((shortid, event_id));
+		}
+	}
+
+	// Sequential walk for uncached starting events
+	for (shortid, event_id) in uncached {
+		let _guard = self.mutex_fetch.lock(event_id).await;
+
+		// Re-check cache under lock in case a concurrent walk populated it
+		if let Ok(cached) = self.get_cached_eventid_authchain(&[shortid]).await {
+			full_auth_chain |= cached.as_ref();
+			full_auth_chain.insert(shortid);
+			continue;
+		}
+
+		let (auth_chain, is_complete) = self
+			.get_auth_chain_inner(room_id, event_id, shortid)
+			.await?;
+		if is_complete {
+			self.cache_auth_chain_bitmap(vec![shortid], &auth_chain);
+		}
+
+		full_auth_chain |= &auth_chain;
+		full_auth_chain.insert(shortid);
+	}
+
+	info!(
+		chain_length = ?full_auth_chain.len(),
+		elapsed = ?started.elapsed(),
+		"done",
+	);
+
+	Ok(full_auth_chain)
+}
+
+#[implement(Service)]
 #[tracing::instrument(name = "inner", level = "trace", skip(self, room_id))]
 async fn get_auth_chain_inner(
 	&self,

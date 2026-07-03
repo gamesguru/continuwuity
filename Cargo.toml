@@ -360,7 +360,7 @@ features = ["legacy_compatibility"]
 
 [workspace.dependencies.ruma]
 git = "https://forgejo.ellis.link/continuwuation/ruwuma"
-#branch = "conduwuit-changes"
+#
 rev = "d00b51a8669b21689c4eb47fb81f3a8b27c3e371"
 features = [
     "compat",
@@ -405,8 +405,8 @@ features = [
 ]
 
 [workspace.dependencies.rezzy]
-git = "https://github.com/gamesguru/rezzy"
-branch = "dev"
+path = "../ruma-lean"
+
 
 [workspace.dependencies.rust-rocksdb]
 git = "https://forgejo.ellis.link/continuwuation/rust-rocksdb-zaidoon1"
