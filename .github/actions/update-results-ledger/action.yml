@@ -196,28 +196,29 @@ runs:
             failed_count: ($fail|tonumber)
           }' >> runs.jsonl
 
-        # Generate badge JSON (shields.io endpoint schema)
-        if [ "$BRANCH_NAME" = "main" ] || [ "$BRANCH_NAME" = "main-upstream" ]; then
-          if [ "$FAIL" -gt 0 ]; then COLOR="red"
-          elif [ "$SKIP" -gt 0 ]; then COLOR="yellow"
-          else COLOR="green"
-          fi
-
-          # shields.io compatible schema
-          jq -n \
-            --arg pass "$PASS" \
-            --arg skip "$SKIP" \
-            --arg fail "$FAIL" \
-            --arg color "$COLOR" \
-            --arg provider_name "$PROVIDER" \
-            '{
-              schemaVersion: 1,
-              label: "Complement Tests (\($provider_name))",
-              message: "\($pass) pass, \($skip) skip, \($fail) fail",
-              color: $color
-            }' > "badge-${BRANCH_NAME}.json"
-          git add "badge-${BRANCH_NAME}.json"
+        # Generate badge JSON (shields.io endpoint schema) for every branch
+        if [ "$FAIL" -gt 0 ]; then COLOR="red"
+        elif [ "$SKIP" -gt 0 ]; then COLOR="yellow"
+        else COLOR="green"
         fi
+
+        # Sanitize branch name for filename (slashes → dashes, etc.)
+        SAFE_BRANCH=$(echo "$BRANCH_NAME" | sed 's|[/+]|-|g; s|[^a-zA-Z0-9._-]|_|g')
+
+        # shields.io compatible schema
+        jq -n \
+          --arg pass "$PASS" \
+          --arg skip "$SKIP" \
+          --arg fail "$FAIL" \
+          --arg color "$COLOR" \
+          --arg provider_name "$PROVIDER" \
+          '{
+            schemaVersion: 1,
+            label: "Complement Tests (\($provider_name))",
+            message: "\($pass) pass, \($skip) skip, \($fail) fail",
+            color: $color
+          }' > "badge-${SAFE_BRANCH}.json"
+        git add "badge-${SAFE_BRANCH}.json"
 
         # Commit and push, retrying
         git add runs.jsonl runs_data/ 2>/dev/null || true
