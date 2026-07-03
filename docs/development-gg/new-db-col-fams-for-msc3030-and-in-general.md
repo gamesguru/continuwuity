@@ -285,8 +285,8 @@ impl super::Service {
 
     @@ -241,14 +227,12 @@ fn rebuild_auth_chains(
 
-                                    if all_resolved {
-                                            let mut chain = roaring::RoaringBitmap::new();
+                                      if all_resolved {
+                                              let mut chain = roaring::RoaringBitmap::new();
 
 -                                       if let Some(pdu) = event_cache.get(eid) {
 -                                               for auth_id in &pdu.auth_events {
@@ -320,7 +320,7 @@ impl super::Service {
     @@ -287,14 +274,11 @@ async fn rebuild_walk_and_write(
     let mut cork = Some(self.db.db.cork());
 
-                    // ── Pre-cache short IDs ──
+                      // ── Pre-cache short IDs ──
 
 -               // Collect all (type, state_key) pairs from state events + all event IDs
                 let precache_start = Instant::now();
@@ -405,7 +405,7 @@ impl super::Service {
     @@ -519,14 +498,9 @@ async fn rebuild_walk_and_write(
     };
 
-                            // ── Apply state event or inherit parent group ──
+                              // ── Apply state event or inherit parent group ──
 
 -                       let group_after = if let Some(sk) = state_key {
 -                               let Some(pdu) = ctx.event_cache.get(eid) else {
@@ -426,23 +426,24 @@ impl super::Service {
     @@ -552,7 +526,6 @@ async fn rebuild_walk_and_write(
     event_group.insert(eid.clone(), group_after);
 
-                            // ── Track group liveness ──
+                              // ── Track group liveness ──
 
 -                       // If this event has children, mark its group as live
-                          if children_remaining.get(eid).copied().unwrap_or(0) > 0 {
-                                  let refs = group_live_refs.entry(group_after).or_insert(0);
-                                  *refs = refs.saturating_add(1);
+                            if children_remaining.get(eid).copied().unwrap_or(0) > 0 {
+                                    let refs = group_live_refs.entry(group_after).or_insert(0);
+                                    *refs = refs.saturating_add(1);
 
-    @@ -600,18 +573,16 @@ async fn rebuild_walk_and_write(
+      @@ -600,18 +573,16 @@ async fn rebuild_walk_and_write(
 
-                            // Write pdu_shortstatehash for this event
-                            if state_key.is_some() {`
+                              // Write pdu_shortstatehash for this event
+                              if state_key.is_some() {`
 
-    Ran command: `gs
-On branch guru/dev-2026-03-27+b1-presence+b2-federation
-Your branch is ahead of 'origin/guru/dev-2026-03-27+b1-presence+b2-federation' by 6 commits.
-  (use "git push" to publish your local commits)
-nothing to commit, working tree clean`
+      Ran command: `gs
+
+    On branch guru/dev-2026-03-27+b1-presence+b2-federation
+    Your branch is ahead of 'origin/guru/dev-2026-03-27+b1-presence+b2-federation' by 6 commits.
+    (use "git push" to publish your local commits)
+    nothing to commit, working tree clean`
 
 Good question — let me check what actually uses those tables:
 
