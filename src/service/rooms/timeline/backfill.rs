@@ -12,7 +12,7 @@ use conduwuit_core::{
 };
 use futures::{FutureExt, StreamExt};
 use ruma::{
-	CanonicalJsonObject, EventId, Int, RoomId, ServerName, UInt,
+	CanonicalJsonObject, EventId, Int, OwnedEventId, RoomId, ServerName, UInt,
 	api::federation,
 	events::{
 		StateEventType,
@@ -123,7 +123,12 @@ pub async fn backfill_if_required(
 	let mut budget = 5_u32;
 
 	loop {
-		let mut backwards_extremities = Vec::new();
+		// Collect backward extremities: events whose prev_events are missing
+		// from the timeline. Use a set to deduplicate (multiple children can
+		// reference the same missing parent).
+		let mut backwards_extremities: Vec<OwnedEventId> = Vec::new();
+		let mut seen_gaps: std::collections::HashSet<OwnedEventId> =
+			std::collections::HashSet::new();
 		let mut scanned = 0_usize;
 		let mut pdus = self
 			.pdus_rev(room_id, Some(from.saturating_inc(ruma::api::Direction::Forward)))
@@ -132,13 +137,14 @@ pub async fn backfill_if_required(
 		while let Some(Ok((_, pdu))) = pdus.next().await {
 			scanned = scanned.saturating_add(1);
 			for prev_event_id in &pdu.prev_events {
-				if self.get_pdu_id(prev_event_id).await.is_err() {
+				if self.get_pdu_id(prev_event_id).await.is_err()
+					&& seen_gaps.insert(prev_event_id.clone())
+				{
 					info!(
 						"backfill: gap at {} (missing prev_event {}) in {room_id}",
 						pdu.event_id, prev_event_id
 					);
 					backwards_extremities.push(pdu.event_id.clone());
-					break;
 				}
 			}
 		}
@@ -150,17 +156,20 @@ pub async fn backfill_if_required(
 
 		if budget == 0 {
 			info!(
-				"backfill: budget exhausted for {room_id} with {} remaining gaps",
-				backwards_extremities.len()
+				"backfill: budget exhausted for {room_id} with {} remaining gaps ({} unique \
+				 missing parents)",
+				backwards_extremities.len(),
+				seen_gaps.len()
 			);
 			return Ok(());
 		}
 		budget = budget.saturating_sub(1);
 
 		info!(
-			"backfill: {room_id} has {} gaps (scanned {scanned}, budget {budget}): {:?}",
+			"backfill: {room_id} has {} gaps ({} unique missing parents, scanned {scanned}, \
+			 budget {budget})",
 			backwards_extremities.len(),
-			backwards_extremities
+			seen_gaps.len()
 		);
 
 		let mut servers = self
