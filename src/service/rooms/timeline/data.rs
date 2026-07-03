@@ -1621,24 +1621,14 @@ impl Data {
 				},
 			};
 
-			// For backward pagination, start from the TOP of the topo index
-			// (u64::MAX depth) at this stream position. This ensures we capture
-			// events at ANY depth — including high-depth remote branch events
-			// that arrived after the token's stream position in the DAG but
-			// before it in the timeline.
+			// Use the exact token depth. The topo index key is
+			// [room][depth][count], and the reverse iterator yields
+			// events with key < (token_depth, token_count).
 			//
-			// For forward pagination, use exact depth so we don't re-scan
-			// events at lower depths that were already on previous pages.
-			//
-			// This matches Synapse's SQL approach where the tuple comparison
-			//   (topo, stream) >= (from_topo, from_stream)
-			// naturally captures events at all topological orderings.
-			let seek_depth = match dir {
-				| Direction::Backward => u64::MAX,
-				| Direction::Forward => token_depth,
-			};
-
-			Ok(Self::topo_pducount_key(current, seek_depth))
+			// Events at higher depths but with stream counts <= token_count
+			// (remote partition branch events) are handled by the stream
+			// count filter in the caller (topo_pdus_rev), not here.
+			Ok(Self::topo_pducount_key(current, token_depth))
 		}
 	}
 
@@ -2051,21 +2041,30 @@ mod tests {
 				let effective_depth = if inflate_depth {
 					// OLD BUG: max(token_depth, adjacent_depth)
 					token_depth.max(adjacent_depth)
-				} else if pages.is_empty() && start_from.is_some() {
-					// FIX: first page from mid-stream position — start from top
-					// of topo index to capture events at any depth
-					u64::MAX
 				} else {
-					// Subsequent pages: exact depth from last event
+					// Use exact token depth for seek position
 					token_depth
 				};
 
 				Data::topo_pducount_key(&make_pdu_id(room, token_count), effective_depth)
 			});
 
+			// Stream count ceiling: when starting from a mid-stream position,
+			// events with count > start_count arrived AFTER the sync token and
+			// must be excluded from backward pagination. This models Synapse's
+			// SQL: WHERE (topo, stream) <= (from_topo, from_stream)
+			let count_ceiling: Option<i64> = start_from.map(|(_, c)| c);
+
 			let page: Vec<_> = keyed
 				.iter()
-				.filter(|(key, ..)| {
+				.filter(|(key, _, _, count)| {
+					// Stream count filter: skip events after the sync position
+					if let Some(ceil) = count_ceiling {
+						if *count > ceil {
+							return false;
+						}
+					}
+					// Topo key filter: skip events at or above seek position
 					if let Some(ref sk) = seek_key {
 						*key < *sk
 					} else {
@@ -2264,24 +2263,41 @@ mod tests {
 
 	/// Regression test for TestNetworkPartitionOrdering.
 	///
-	/// After a network partition heals, backward pagination from a mid-stream
-	/// topo token must return ALL events — including those from the remote
-	/// branch at higher depths that arrived after the sync position.
+	/// Models the real complement scenario:
+	///   1. Sync delivers events A,B,C,D (counts 1-4) during partition
+	///   2. Partition heals, remote events E,F arrive (counts 5-6)
+	///   3. Merge G arrives (count 7)
+	///   4. Client paginates backward from sync position (count=4)
+	///
+	/// Backward pagination from count=4 must return ONLY events at or
+	/// before the sync position (D,C,B,A), NOT events that arrived later
+	/// (E,F,G). Events E,F,G will be delivered via the next /sync.
 	#[test]
-	fn partition_backward_pagination_returns_all_events() {
+	fn partition_backward_pagination_excludes_future_events() {
 		let (events_map, topo_entries) = build_partition_dag();
 
-		// Client got D (depth=4, count=4) from sync and paginates backward.
-		let pages = simulate_backward_pagination_from(1, &topo_entries, 3, false, (4, 4));
+		// Sync token is ONE PAST the last delivered event (D at count=4).
+		// So from=5 means "give me everything before count 5."
+		// Events E(count=5), F(count=6), G(count=7) arrived AFTER this position.
+		let pages = simulate_backward_pagination_from(1, &topo_entries, 3, false, (4, 5));
 
 		let pages = pages.expect("must terminate");
 		let all_events: Vec<String> = pages.iter().flatten().cloned().collect();
 
-		// ALL 7 events must be yielded — including remote branch E, F and merge G
+		// Only events at count <= 4 should be returned: D, C, B, A
 		assert_eq!(
 			all_events.len(),
-			7,
-			"backward pagination must return all 7 events (got {all_events:?})"
+			4,
+			"backward pagination from count=4 must return only 4 events (D,C,B,A), got \
+			 {all_events:?}"
+		);
+
+		// Must not contain any post-sync events
+		assert!(
+			!all_events.contains(&"E".to_string())
+				&& !all_events.contains(&"F".to_string())
+				&& !all_events.contains(&"G".to_string()),
+			"backward pagination must NOT return events after sync position (got {all_events:?})"
 		);
 
 		let violations = verify_pagination(&events_map, &pages);
