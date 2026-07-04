@@ -48,19 +48,15 @@ pub async fn backfill_if_required(
 		"backfill: evaluating"
 	);
 
-	if self
-		.services
-		.state_cache
-		.room_joined_count(room_id)
-		.await
-		.is_ok_and(|count| count <= 1)
+	// NOTE: this is the best check for previously joined.
+	if !has_remote_servers
 		&& !self
 			.services
 			.state_accessor
 			.is_world_readable(room_id)
 			.await
 	{
-		info!("backfill: SKIPPING room {room_id} -- joined_count={joined_count} <= 1");
+		info!("backfill: SKIPPING room {room_id} -- no remote servers in room");
 		return Ok(());
 	}
 
@@ -281,20 +277,24 @@ pub async fn get_remote_pdu(&self, room_id: &RoomId, event_id: &EventId) -> Resu
 	debug!("Preparing to fetch event {event_id} in room {room_id} from remote servers.");
 	// Similar to backfill_if_required, but only for a single PDU
 	// Fetch a list of servers to try
-	if self
+	let has_remote_servers = self
 		.services
 		.state_cache
-		.room_joined_count(room_id)
-		.await
-		.is_ok_and(|count| count <= 1)
+		.room_servers(room_id)
+		.ready_any(|server| !self.services.globals.server_is_ours(server))
+		.await;
+
+	if !has_remote_servers
 		&& !self
 			.services
 			.state_accessor
 			.is_world_readable(room_id)
 			.await
 	{
-		// Room is empty (1 user or none), there is no one that can backfill
-		return Err!(Request(NotFound("No one can backfill this PDU, room is empty.")));
+		// No remote servers in the room, there is no one that can backfill
+		return Err!(Request(NotFound(
+			"No one can backfill this PDU, no remote servers in room."
+		)));
 	}
 
 	let power_levels: RoomPowerLevelsEventContent = self
