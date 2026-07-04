@@ -631,12 +631,7 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 				count_bytes.copy_from_slice(&pdu_id_bytes[8..16]);
 			}
 
-			let pdu_count_i64 = i64::from_be_bytes(count_bytes);
-			let unsigned_pdu_count = if pdu_count_i64 < 0 {
-				(-pdu_count_i64) as u64
-			} else {
-				pdu_count_i64 as u64
-			};
+			let unsigned_pdu_count = i64::from_be_bytes(count_bytes).unsigned_abs();
 
 			// eventid_pdu: event_id -> PDU JSON
 			eventid_pdu.insert(event_id_bytes, pdu_json_bytes);
@@ -754,6 +749,8 @@ const POPULATE_TOPOLOGICAL_INDEX_MARKER: &[u8] = b"populate_topological_index_v2
 const POPULATE_SHORTPREVEVENTS_MARKER: &[u8] = b"populate_shortprevevents";
 
 async fn populate_topological_index(services: &Services) -> Result<()> {
+	const BATCH_SIZE: usize = 1000;
+
 	info!("Starting migration to populate roomid_topologicalorder_pducount...");
 	let db = &services.db;
 	let room_pducount_eventid = db["room_pducount_eventid"].clone();
@@ -774,8 +771,6 @@ async fn populate_topological_index(services: &Services) -> Result<()> {
 	let stream = room_pducount_eventid.raw_stream();
 	pin_mut!(stream);
 	let mut total_migrated: usize = 0;
-
-	const BATCH_SIZE: usize = 1000;
 	let mut batch_entries: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(BATCH_SIZE);
 
 	loop {
@@ -784,8 +779,7 @@ async fn populate_topological_index(services: &Services) -> Result<()> {
 		while batch_entries.len() < BATCH_SIZE {
 			match stream.next().await {
 				| Some(Ok((pdu_id_bytes, event_id_bytes))) => {
-					batch_entries
-						.push((pdu_id_bytes.to_vec(), event_id_bytes.to_vec()));
+					batch_entries.push((pdu_id_bytes.to_vec(), event_id_bytes.to_vec()));
 				},
 				| _ => break,
 			}
@@ -796,19 +790,20 @@ async fn populate_topological_index(services: &Services) -> Result<()> {
 		}
 
 		// Batch-fetch all metadata for this batch
-		let meta_keys: Vec<&[u8]> =
-			batch_entries.iter().map(|(_, eid)| eid.as_slice()).collect();
-		let meta_results: Vec<_> = eventid_metadata
-			.get_batch_blocking(meta_keys.iter().copied())
+		let meta_keys: Vec<&[u8]> = batch_entries
+			.iter()
+			.map(|(_, eid)| eid.as_slice())
 			.collect();
 
-		for (i, meta_result) in meta_results.into_iter().enumerate() {
+		for (i, meta_result) in eventid_metadata
+			.get_batch_blocking(meta_keys.iter().copied())
+			.enumerate()
+		{
 			let Ok(meta_handle) = meta_result else {
 				continue;
 			};
 
-			let Ok(meta) =
-				crate::rooms::timeline::EventMetadata::from_bincode(&meta_handle)
+			let Ok(meta) = crate::rooms::timeline::EventMetadata::from_bincode(&meta_handle)
 			else {
 				continue;
 			};
@@ -831,8 +826,7 @@ async fn populate_topological_index(services: &Services) -> Result<()> {
 			topo_key.extend_from_slice(&global_depth.to_be_bytes());
 			topo_key.extend_from_slice(&count_bytes);
 
-			roomid_topologicalorder_pducount
-				.put(&topo_key, batch_entries[i].1.clone());
+			roomid_topologicalorder_pducount.put(&topo_key, batch_entries[i].1.clone());
 
 			total_migrated = total_migrated.saturating_add(1);
 			if total_migrated.is_multiple_of(10000) {
@@ -850,6 +844,8 @@ async fn populate_topological_index(services: &Services) -> Result<()> {
 const POPULATE_PDU_COUNT_IN_METADATA_MARKER: &[u8] = b"populate_pdu_count_in_metadata";
 
 async fn populate_pdu_count_in_metadata(services: &Services) -> Result<()> {
+	const BATCH_SIZE: usize = 1000;
+
 	info!("Starting migration to populate pdu_count in EventMetadata from eventid_pduid...");
 
 	let db = &services.db;
@@ -864,8 +860,6 @@ async fn populate_pdu_count_in_metadata(services: &Services) -> Result<()> {
 	let mut migrated: usize = 0;
 	let mut skipped: usize = 0;
 	let mut missing_meta: usize = 0;
-
-	const BATCH_SIZE: usize = 1000;
 	let mut batch_entries: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(BATCH_SIZE);
 
 	loop {
@@ -873,8 +867,7 @@ async fn populate_pdu_count_in_metadata(services: &Services) -> Result<()> {
 		while batch_entries.len() < BATCH_SIZE {
 			match stream.next().await {
 				| Some(Ok((event_id_bytes, pdu_id_bytes))) => {
-					batch_entries
-						.push((event_id_bytes.to_vec(), pdu_id_bytes.to_vec()));
+					batch_entries.push((event_id_bytes.to_vec(), pdu_id_bytes.to_vec()));
 				},
 				| _ => break,
 			}
@@ -885,20 +878,21 @@ async fn populate_pdu_count_in_metadata(services: &Services) -> Result<()> {
 		}
 
 		// Batch-fetch all metadata
-		let meta_keys: Vec<&[u8]> =
-			batch_entries.iter().map(|(eid, _)| eid.as_slice()).collect();
-		let meta_results: Vec<_> = eventid_metadata
-			.get_batch_blocking(meta_keys.iter().copied())
+		let meta_keys: Vec<&[u8]> = batch_entries
+			.iter()
+			.map(|(eid, _)| eid.as_slice())
 			.collect();
 
-		for (i, meta_result) in meta_results.into_iter().enumerate() {
+		for (i, meta_result) in eventid_metadata
+			.get_batch_blocking(meta_keys.iter().copied())
+			.enumerate()
+		{
 			let Ok(meta_handle) = meta_result else {
 				missing_meta = missing_meta.saturating_add(1);
 				continue;
 			};
 
-			let Ok(mut meta) =
-				crate::rooms::timeline::EventMetadata::from_bincode(&meta_handle)
+			let Ok(mut meta) = crate::rooms::timeline::EventMetadata::from_bincode(&meta_handle)
 			else {
 				missing_meta = missing_meta.saturating_add(1);
 				continue;
@@ -916,12 +910,7 @@ async fn populate_pdu_count_in_metadata(services: &Services) -> Result<()> {
 			} else {
 				count_bytes.copy_from_slice(&pdu_id_bytes[8..16]);
 			}
-			let pdu_count_i64 = i64::from_be_bytes(count_bytes);
-			let count = if pdu_count_i64 < 0 {
-				(-pdu_count_i64) as u64
-			} else {
-				pdu_count_i64 as u64
-			};
+			let count = i64::from_be_bytes(count_bytes).unsigned_abs();
 			meta.pdu_count = Some(count);
 
 			if let Ok(new_bytes) = bincode::serialize(&meta) {
