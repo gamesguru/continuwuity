@@ -13,6 +13,7 @@ mod open;
 mod options;
 mod qry;
 mod qry_batch;
+mod recursive_get;
 mod remove;
 mod rev_keys;
 mod rev_keys_from;

@@ -330,6 +330,17 @@ async fn migrate(services: &Services) -> Result<()> {
 	}
 
 	if db["global"]
+		.get(UNIFY_RAW_PDU_ID_MARKER)
+		.await
+		.is_not_found()
+	{
+		info!("Running migration 'unify_raw_pdu_id_16_byte'");
+		unify_raw_pdu_id_16_byte(services)
+			.await
+			.map_err(|e| err!("Failed to run 'unify_raw_pdu_id_16_byte': {e}"))?;
+	}
+
+	if db["global"]
 		.get(POPULATE_TOPOLOGICAL_INDEX_MARKER)
 		.await
 		.is_not_found()
@@ -349,17 +360,6 @@ async fn migrate(services: &Services) -> Result<()> {
 		populate_pdu_count_in_metadata(services)
 			.await
 			.map_err(|e| err!("Failed to run 'populate_pdu_count_in_metadata': {e}"))?;
-	}
-
-	if db["global"]
-		.get(UNIFY_RAW_PDU_ID_MARKER)
-		.await
-		.is_not_found()
-	{
-		info!("Running migration 'unify_raw_pdu_id_16_byte'");
-		unify_raw_pdu_id_16_byte(services)
-			.await
-			.map_err(|e| err!("Failed to run 'unify_raw_pdu_id_16_byte': {e}"))?;
 	}
 
 	if services.globals.db.database_version().await != DATABASE_VERSION {

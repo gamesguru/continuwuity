@@ -10,7 +10,8 @@ use conduwuit::{
 };
 use futures::StreamExt;
 use ruma::{
-	EventId, OwnedEventId, RoomId, ServerName, api::federation::event::get_room_state,
+	EventId, OwnedEventId, RoomId, ServerName,
+	api::federation::event::{get_event, get_room_state_ids},
 	events::StateEventType,
 };
 
@@ -48,42 +49,124 @@ where
 		("consecutive_picks", 100.0),
 	];
 
-	let res = 'found: {
+	let (state_pdu_ids, fetched_unknown_events): (
+		Vec<OwnedEventId>,
+		Vec<(OwnedEventId, Box<serde_json::value::RawValue>)>,
+	) = 'found: {
 		while let Some(server) = pool.next_scored(weights) {
 			let req = self.services.sending.send_federation_request(
 				&server,
-				get_room_state::v1::Request::new(event_id.to_owned(), room_id.to_owned()),
+				get_room_state_ids::v1::Request::new(event_id.to_owned(), room_id.to_owned()),
 			);
 
 			let timeout = Duration::from_secs(self.services.server.config.federation_timeout);
-			match tokio::time::timeout(timeout, req).await {
-				| Ok(Ok(res)) => {
-					pool.record_success(&server);
-					if server != *origin {
-						debug!(%server, "fetch_state: used fallback server for /state");
-					}
-					break 'found res;
-				},
+			let state_ids_res = match tokio::time::timeout(timeout, req).await {
+				| Ok(Ok(res)) => res,
 				| Ok(Err(e)) => {
-					info!(%server, "fetch_state /state failed: {e}");
+					info!(%server, "fetch_state /state_ids failed: {e}");
 					if super::server_pool::ServerPool::is_rate_limit(&e.to_string()) {
 						pool.record_rate_limit(&server);
 					} else {
 						pool.record_error(&server);
 					}
 					last_err = e;
+					continue;
 				},
 				| Err(_) => {
-					let e = err!(Request(Unknown("Server took too long to return /state")));
-					info!(%server, "fetch_state /state failed: {e}");
+					let e = err!(Request(Unknown("Server took too long to return /state_ids")));
+					info!(%server, "fetch_state /state_ids failed: {e}");
 					pool.record_dead_end(&server);
 					last_err = e;
+					continue;
 				},
+			};
+
+			let mut missing_ids = Vec::new();
+			let mut known_count: usize = 0;
+
+			let all_ids = state_ids_res
+				.auth_chain_ids
+				.iter()
+				.chain(state_ids_res.pdu_ids.iter());
+
+			for id in all_ids {
+				if !self.services.timeline.pdu_exists(id).await
+					&& self.services.outlier.get_pdu_outlier(id).await.is_err()
+				{
+					missing_ids.push(id.clone());
+				} else {
+					known_count = known_count.saturating_add(1);
+				}
 			}
+
+			missing_ids.sort_unstable();
+			missing_ids.dedup();
+
+			debug!(
+				auth_chain_count = state_ids_res.auth_chain_ids.len(),
+				state_count = state_ids_res.pdu_ids.len(),
+				missing_count = missing_ids.len(),
+				known_count = known_count,
+				"Processing /state_ids response from remote server"
+			);
+
+			let fetch_futures = missing_ids.into_iter().map(|eid| {
+				let server = server.clone();
+				async move {
+					let req = ruma::api::federation::event::get_event::v1::Request::new(
+						(*eid).to_owned(),
+						None,
+					);
+					match self
+						.services
+						.sending
+						.send_federation_request(&server, req)
+						.await
+					{
+						| Ok(res) => Ok::<_, (OwnedEventId, conduwuit::Error)>((
+							(*eid).to_owned(),
+							res.pdu,
+						)),
+						| Err(e) => Err(((*eid).to_owned(), e)),
+					}
+				}
+			});
+
+			let mut fetch_stream = futures::stream::iter(fetch_futures).buffer_unordered(20);
+			let mut fetched_events: Vec<(OwnedEventId, Box<serde_json::value::RawValue>)> =
+				Vec::new();
+			let mut failed_event = None;
+
+			while let Some(result) = fetch_stream.next().await {
+				match result {
+					| Ok((eid, raw_json)) => {
+						fetched_events.push((eid, raw_json));
+					},
+					| Err((eid, e)) => {
+						info!(%server, "fetch_state /event/{eid} failed: {e}");
+						failed_event = Some(e);
+						break;
+					},
+				}
+			}
+
+			if let Some(e) = failed_event {
+				pool.record_error(&server);
+				last_err = e;
+				continue;
+			}
+
+			pool.record_success(&server);
+			if server != *origin {
+				debug!(%server, "fetch_state: used fallback server for /state_ids -> /event/ ladder");
+			}
+
+			break 'found (state_ids_res.pdu_ids, fetched_events);
 		}
 
 		warn!(
-			"fetch_state: all servers failed /state for {event_id}. pool stats:\n{}",
+			"fetch_state: all servers failed /state_ids -> /event/ for {event_id}. pool \
+			 stats:\n{}",
 			pool.summary()
 		);
 		return Err(last_err);
@@ -91,36 +174,23 @@ where
 
 	let room_version_id = self.services.state.get_room_version(room_id).await?;
 
-	debug!(
-		auth_chain_count = res.auth_chain.len(),
-		state_count = res.pdus.len(),
-		"Processing state and auth chain events from remote server"
-	);
-
-	// Deduplicate known events across auth_chain and state events
+	// Reconstruct unknown_events
 	let mut unknown_events = Vec::new();
-	let mut known_count: usize = 0;
-	for raw_json in res
-		.auth_chain
-		.into_iter()
-		.chain(res.pdus.clone().into_iter())
-	{
-		if let Ok((eid, val)) =
+	for (eid, raw_json) in fetched_unknown_events {
+		if let Ok((parsed_eid, val)) =
 			conduwuit::matrix::event::gen_event_id_canonical_json(&raw_json, &room_version_id)
 		{
-			if !self.services.timeline.pdu_exists(&eid).await
-				&& self.services.outlier.get_pdu_outlier(&eid).await.is_err()
-			{
+			if parsed_eid == eid {
 				unknown_events.push((eid, val));
 			} else {
-				known_count = known_count.saturating_add(1);
+				warn!("Event ID mismatch for fetched event: expected {eid}, got {parsed_eid}");
 			}
 		}
 	}
+
 	debug!(
-		"fetch_state: {} newly missing events, {} already known",
+		"fetch_state: {} newly missing events fetched successfully",
 		unknown_events.len(),
-		known_count
 	);
 
 	// Concurrently parse and verify signatures (Pure CPU and network keys fetch)
@@ -271,40 +341,37 @@ where
 	}
 
 	// Construct the returned state map
-	let mut state: HashMap<ShortStateKey, OwnedEventId> = HashMap::with_capacity(res.pdus.len());
-	for raw_json in res.pdus {
-		if let Ok((eid, _)) =
-			conduwuit::matrix::event::gen_event_id_canonical_json(&raw_json, &room_version_id)
-		{
-			// Read from our outlier store or timeline
-			let pdu = match self.services.timeline.get_pdu(&eid).await {
-				| Ok(pdu) => Ok(pdu),
-				| Err(_) => self.services.outlier.get_pdu_outlier(&eid).await,
-			};
-			if let Ok(pdu) = pdu {
-				let state_key = pdu
-					.state_key()
-					.ok_or_else(|| err!(Database("Found non-state pdu in state events.")))?;
+	let mut state: HashMap<ShortStateKey, OwnedEventId> =
+		HashMap::with_capacity(state_pdu_ids.len());
+	for eid in state_pdu_ids {
+		// Read from our outlier store or timeline
+		let pdu = match self.services.timeline.get_pdu(&eid).await {
+			| Ok(pdu) => Ok(pdu),
+			| Err(_) => self.services.outlier.get_pdu_outlier(&eid).await,
+		};
+		if let Ok(pdu) = pdu {
+			let state_key = pdu
+				.state_key()
+				.ok_or_else(|| err!(Database("Found non-state pdu in state events.")))?;
 
-				let shortstatekey = self
-					.services
-					.short
-					.get_or_create_shortstatekey(&pdu.kind().to_string().into(), state_key)
-					.await;
+			let shortstatekey = self
+				.services
+				.short
+				.get_or_create_shortstatekey(&pdu.kind().to_string().into(), state_key)
+				.await;
 
-				match state.entry(shortstatekey) {
-					| hash_map::Entry::Vacant(v) => {
-						v.insert(eid.clone());
-					},
-					| hash_map::Entry::Occupied(_) => {
-						return Err!(Database(
-							"State event's type and state_key combination exists multiple \
-							 times: {}, {}",
-							pdu.kind(),
-							state_key
-						));
-					},
-				}
+			match state.entry(shortstatekey) {
+				| hash_map::Entry::Vacant(v) => {
+					v.insert(eid.clone());
+				},
+				| hash_map::Entry::Occupied(_) => {
+					return Err!(Database(
+						"State event's type and state_key combination exists multiple times: \
+						 {}, {}",
+						pdu.kind(),
+						state_key
+					));
+				},
 			}
 		}
 	}
