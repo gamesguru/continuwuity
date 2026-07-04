@@ -5,9 +5,9 @@ use tokio::task;
 
 #[implement(super::Map)]
 #[tracing::instrument(skip_all, level = "trace")]
-pub async fn recursive_multi_get<K, V, P, F>(
+pub async fn recursive_multi_get<K, V, P, F, I: IntoIterator<Item = K>>(
 	self: &Arc<Self>,
-	roots: impl IntoIterator<Item = K>,
+	roots: I,
 	parse_value: P,
 	extract_children: F,
 ) -> Result<Vec<V>>
@@ -16,6 +16,7 @@ where
 	V: Send + 'static,
 	P: Fn(&[u8]) -> V + Send + Sync + 'static,
 	F: Fn(&V) -> Vec<K> + Send + Sync + 'static,
+
 {
 	let map = self.clone();
 	let mut current_batch: Vec<K> = roots.into_iter().collect();
