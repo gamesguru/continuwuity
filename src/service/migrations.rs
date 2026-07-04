@@ -621,13 +621,28 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 			};
 
 			let event_id_bytes = pdu.event_id.as_bytes();
-			let pdu_id: crate::rooms::timeline::RawPduId = pdu_id_bytes.into();
+			let mut shortroomid = [0_u8; 8];
+			shortroomid.copy_from_slice(&pdu_id_bytes[0..8]);
+
+			let mut count_bytes = [0_u8; 8];
+			if pdu_id_bytes.len() == 24 {
+				count_bytes.copy_from_slice(&pdu_id_bytes[16..24]);
+			} else {
+				count_bytes.copy_from_slice(&pdu_id_bytes[8..16]);
+			}
+
+			let pdu_count_i64 = i64::from_be_bytes(count_bytes);
+			let unsigned_pdu_count = if pdu_count_i64 < 0 {
+				(-pdu_count_i64) as u64
+			} else {
+				pdu_count_i64 as u64
+			};
 
 			// eventid_pdu: event_id -> PDU JSON
 			eventid_pdu.insert(event_id_bytes, pdu_json_bytes);
 
 			// room_pducount_eventid: pdu_id -> event_id
-			room_pducount_eventid.insert(&pdu_id, event_id_bytes);
+			room_pducount_eventid.insert(&pdu_id_bytes, event_id_bytes);
 
 			// eventid_metadata with topological depth
 			let mut max_depth: u64 = 0;
@@ -640,7 +655,7 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 			depth_cache.insert(event_id_bytes.to_vec(), deprecated_local_topo_depth);
 
 			let metadata = crate::rooms::timeline::EventMetadata {
-				short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
+				short_room_id: u64::from_be_bytes(shortroomid),
 				is_outlier: false,
 				origin_server_ts: pdu.origin_server_ts().0,
 				depth: pdu.depth(),
@@ -649,7 +664,7 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 				redacted_by: pdu.redacts().map(ToOwned::to_owned),
 				short_state_hash: None,
 				deprecated_local_topo_depth,
-				pdu_count: Some(pdu_id.pdu_count().into_unsigned()),
+				pdu_count: Some(unsigned_pdu_count),
 				soft_fail_reason: String::new(),
 				rejection_reason: String::new(),
 			};
@@ -659,9 +674,9 @@ async fn migrate_event_store_to_ssot(services: &Services) -> Result<()> {
 
 			// roomid_topologicalorder_pducount
 			let mut topo_key = Vec::with_capacity(32);
-			topo_key.extend_from_slice(&pdu_id.shortroomid());
+			topo_key.extend_from_slice(&shortroomid);
 			topo_key.extend_from_slice(&deprecated_local_topo_depth.to_be_bytes());
-			topo_key.extend_from_slice(&pdu_id.shorteventid());
+			topo_key.extend_from_slice(&count_bytes);
 			roomid_topologicalorder_pducount.insert(&topo_key, event_id_bytes);
 
 			timeline_event_ids.insert(event_id_bytes.to_vec());

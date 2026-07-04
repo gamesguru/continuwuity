@@ -16,7 +16,6 @@ where
 	V: Send + 'static,
 	P: Fn(&[u8]) -> V + Send + Sync + 'static,
 	F: Fn(&V) -> Vec<K> + Send + Sync + 'static,
-
 {
 	let map = self.clone();
 	let mut current_batch: Vec<K> = roots.into_iter().collect();
