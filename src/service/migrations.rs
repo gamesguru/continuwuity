@@ -771,33 +771,73 @@ async fn populate_topological_index(services: &Services) -> Result<()> {
 	}
 	info!("Cleared {cleared} old entries from topological index to prepare for rebuild.");
 
-	let mut stream = room_pducount_eventid.raw_stream();
+	let stream = room_pducount_eventid.raw_stream();
+	pin_mut!(stream);
 	let mut total_migrated: usize = 0;
 
-	while let Some(Ok((pdu_id_bytes, event_id_bytes))) = stream.next().await {
-		let pdu_id: crate::rooms::timeline::RawPduId = pdu_id_bytes.into();
+	const BATCH_SIZE: usize = 1000;
+	let mut batch_entries: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(BATCH_SIZE);
 
-		let Ok(metadata_bytes) = eventid_metadata.get_blocking(&event_id_bytes) else {
-			continue;
-		};
+	loop {
+		// Collect a batch of entries from the stream
+		batch_entries.clear();
+		while batch_entries.len() < BATCH_SIZE {
+			match stream.next().await {
+				| Some(Ok((pdu_id_bytes, event_id_bytes))) => {
+					batch_entries
+						.push((pdu_id_bytes.to_vec(), event_id_bytes.to_vec()));
+				},
+				| _ => break,
+			}
+		}
 
-		let Ok(meta) = crate::rooms::timeline::EventMetadata::from_bincode(&metadata_bytes)
-		else {
-			continue;
-		};
+		if batch_entries.is_empty() {
+			break;
+		}
 
-		let global_depth: u64 = meta.depth.into();
+		// Batch-fetch all metadata for this batch
+		let meta_keys: Vec<&[u8]> =
+			batch_entries.iter().map(|(_, eid)| eid.as_slice()).collect();
+		let meta_results: Vec<_> = eventid_metadata
+			.get_batch_blocking(meta_keys.iter().copied())
+			.collect();
 
-		let mut topo_key = Vec::with_capacity(32);
-		topo_key.extend_from_slice(&pdu_id.shortroomid());
-		topo_key.extend_from_slice(&global_depth.to_be_bytes());
-		topo_key.extend_from_slice(&pdu_id.shorteventid());
+		for (i, meta_result) in meta_results.into_iter().enumerate() {
+			let Ok(meta_handle) = meta_result else {
+				continue;
+			};
 
-		roomid_topologicalorder_pducount.put(&topo_key, event_id_bytes.to_vec());
+			let Ok(meta) =
+				crate::rooms::timeline::EventMetadata::from_bincode(&meta_handle)
+			else {
+				continue;
+			};
 
-		total_migrated = total_migrated.saturating_add(1);
-		if total_migrated.is_multiple_of(10000) {
-			info!("Migrated {} events to topological index...", total_migrated);
+			let pdu_id_bytes = &batch_entries[i].0;
+			let mut shortroomid = [0_u8; 8];
+			shortroomid.copy_from_slice(&pdu_id_bytes[0..8]);
+
+			let mut count_bytes = [0_u8; 8];
+			if pdu_id_bytes.len() == 24 {
+				count_bytes.copy_from_slice(&pdu_id_bytes[16..24]);
+			} else {
+				count_bytes.copy_from_slice(&pdu_id_bytes[8..16]);
+			}
+
+			let global_depth: u64 = meta.depth.into();
+
+			let mut topo_key = Vec::with_capacity(24);
+			topo_key.extend_from_slice(&shortroomid);
+			topo_key.extend_from_slice(&global_depth.to_be_bytes());
+			topo_key.extend_from_slice(&count_bytes);
+
+			roomid_topologicalorder_pducount
+				.put(&topo_key, batch_entries[i].1.clone());
+
+			total_migrated = total_migrated.saturating_add(1);
+			if total_migrated.is_multiple_of(10000) {
+				info!("Migrated {} events to topological index...", total_migrated);
+			}
 		}
 	}
 
@@ -818,41 +858,80 @@ async fn populate_pdu_count_in_metadata(services: &Services) -> Result<()> {
 
 	let _cork = db.cork_and_sync();
 
-	let mut stream = eventid_pduid.raw_stream();
+	let stream = eventid_pduid.raw_stream();
+	pin_mut!(stream);
 
 	let mut migrated: usize = 0;
 	let mut skipped: usize = 0;
 	let mut missing_meta: usize = 0;
 
-	while let Some(Ok((event_id_bytes, pdu_id_bytes))) = stream.next().await {
-		let pdu_id: crate::rooms::timeline::RawPduId = pdu_id_bytes.into();
-		let count = pdu_id.pdu_count().into_unsigned();
+	const BATCH_SIZE: usize = 1000;
+	let mut batch_entries: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(BATCH_SIZE);
 
-		let Ok(meta_bytes) = eventid_metadata.get_blocking(event_id_bytes) else {
-			missing_meta = missing_meta.saturating_add(1);
-			continue;
-		};
-
-		let Ok(mut meta) = crate::rooms::timeline::EventMetadata::from_bincode(&meta_bytes)
-		else {
-			missing_meta = missing_meta.saturating_add(1);
-			continue;
-		};
-
-		if meta.pdu_count.is_some() {
-			skipped = skipped.saturating_add(1);
-			continue;
+	loop {
+		batch_entries.clear();
+		while batch_entries.len() < BATCH_SIZE {
+			match stream.next().await {
+				| Some(Ok((event_id_bytes, pdu_id_bytes))) => {
+					batch_entries
+						.push((event_id_bytes.to_vec(), pdu_id_bytes.to_vec()));
+				},
+				| _ => break,
+			}
 		}
 
-		meta.pdu_count = Some(count);
-
-		if let Ok(new_bytes) = bincode::serialize(&meta) {
-			eventid_metadata.insert(event_id_bytes, new_bytes);
+		if batch_entries.is_empty() {
+			break;
 		}
 
-		migrated = migrated.saturating_add(1);
-		if migrated.is_multiple_of(10000) {
-			info!("Migrated {migrated} events pdu_count into metadata...");
+		// Batch-fetch all metadata
+		let meta_keys: Vec<&[u8]> =
+			batch_entries.iter().map(|(eid, _)| eid.as_slice()).collect();
+		let meta_results: Vec<_> = eventid_metadata
+			.get_batch_blocking(meta_keys.iter().copied())
+			.collect();
+
+		for (i, meta_result) in meta_results.into_iter().enumerate() {
+			let Ok(meta_handle) = meta_result else {
+				missing_meta = missing_meta.saturating_add(1);
+				continue;
+			};
+
+			let Ok(mut meta) =
+				crate::rooms::timeline::EventMetadata::from_bincode(&meta_handle)
+			else {
+				missing_meta = missing_meta.saturating_add(1);
+				continue;
+			};
+
+			if meta.pdu_count.is_some() {
+				skipped = skipped.saturating_add(1);
+				continue;
+			}
+
+			let pdu_id_bytes = &batch_entries[i].1;
+			let mut count_bytes = [0_u8; 8];
+			if pdu_id_bytes.len() == 24 {
+				count_bytes.copy_from_slice(&pdu_id_bytes[16..24]);
+			} else {
+				count_bytes.copy_from_slice(&pdu_id_bytes[8..16]);
+			}
+			let pdu_count_i64 = i64::from_be_bytes(count_bytes);
+			let count = if pdu_count_i64 < 0 {
+				(-pdu_count_i64) as u64
+			} else {
+				pdu_count_i64 as u64
+			};
+			meta.pdu_count = Some(count);
+
+			if let Ok(new_bytes) = bincode::serialize(&meta) {
+				eventid_metadata.insert(&batch_entries[i].0, new_bytes);
+			}
+
+			migrated = migrated.saturating_add(1);
+			if migrated.is_multiple_of(10000) {
+				info!("Migrated {migrated} events pdu_count into metadata...");
+			}
 		}
 	}
 

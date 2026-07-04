@@ -428,7 +428,7 @@ pub async fn backfill_pdu(
 		.await
 	{
 		| Ok(result) => result,
-		| Err(conduwuit::Error::MissingAuthEvents(_)) => {
+		| Err(Error::MissingAuthEvents(_)) => {
 			// Missing auth events are expected during backfill (we don't have
 			// the room's full history yet). Insert the raw PDU directly.
 			info!(
