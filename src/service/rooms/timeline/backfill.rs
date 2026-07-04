@@ -428,10 +428,13 @@ pub async fn backfill_pdu(
 		.await
 	{
 		| Ok(result) => result,
-		| Err(e) => {
+		| Err(conduwuit::Error::MissingAuthEvents(_)) => {
 			// Missing auth events are expected during backfill (we don't have
 			// the room's full history yet). Insert the raw PDU directly.
-			debug!("handle_outlier_pdu failed for backfill event {event_id}, inserting raw: {e}");
+			info!(
+				target: "backfill_debug",
+				"handle_outlier_pdu failed for backfill event {event_id} due to missing auth events, inserting raw"
+			);
 			let mut raw = value;
 			raw.insert(
 				"event_id".to_owned(),
@@ -441,6 +444,10 @@ pub async fn backfill_pdu(
 				serde_json::from_value(serde_json::to_value(&raw).expect("valid json"))
 					.map_err(|e| err!(Database("Bad backfill PDU {event_id}: {e}")))?;
 			(parsed, raw)
+		},
+		| Err(e) => {
+			warn!("handle_outlier_pdu rejected backfill event {event_id}: {e}");
+			return Err(e);
 		},
 	};
 

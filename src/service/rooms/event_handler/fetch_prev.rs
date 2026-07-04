@@ -41,9 +41,7 @@ where
 		if self.services.pdu_metadata.is_event_rejected(id).await {
 			continue; // TODO: don't fetch rejected events from federation?
 		}
-		if !self.services.timeline.pdu_exists(id).await
-			&& self.services.outlier.get_pdu_outlier(id).await.is_err()
-		{
+		if !self.services.timeline.pdu_exists(id).await {
 			remaining.push(id.clone());
 		}
 	}
@@ -140,9 +138,7 @@ where
 		if let Ok((eid, val)) =
 			conduwuit::matrix::event::gen_event_id_canonical_json(&raw_json, &room_version_id)
 		{
-			if !self.services.timeline.pdu_exists(&eid).await
-				&& self.services.outlier.get_pdu_outlier(&eid).await.is_err()
-			{
+			if !self.services.timeline.pdu_exists(&eid).await {
 				unknown_events.push((eid, val));
 			}
 		}

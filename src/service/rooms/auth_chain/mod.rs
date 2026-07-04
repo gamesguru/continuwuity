@@ -26,7 +26,6 @@ pub struct Service {
 struct Services {
 	short: Dep<rooms::short::Service>,
 	timeline: Dep<rooms::timeline::Service>,
-	outlier: Dep<rooms::outlier::Service>,
 }
 
 impl crate::Service for Service {
@@ -35,7 +34,6 @@ impl crate::Service for Service {
 			services: Services {
 				short: args.depend::<rooms::short::Service>("rooms::short"),
 				timeline: args.depend::<rooms::timeline::Service>("rooms::timeline"),
-				outlier: args.depend::<rooms::outlier::Service>("rooms::outlier"),
 			},
 			db: Data::new(&args),
 			mutex_fetch: MutexMap::new(),
@@ -310,19 +308,11 @@ async fn get_auth_chain_inner(
 				.broad_and_then(|missing_event_id| async move {
 					trace!(%missing_event_id, "processing legacy auth event");
 
-					let pdu_result = match self
+					let pdu_result = self
 						.services
 						.timeline
 						.get_pdu_in_room(Some(room_id), &missing_event_id)
-						.await
-					{
-						| Ok(pdu) => Ok(pdu),
-						| Err(_) =>
-							self.services
-								.outlier
-								.get_pdu_outlier(&missing_event_id)
-								.await,
-					};
+						.await;
 
 					Ok((missing_event_id, pdu_result))
 				})

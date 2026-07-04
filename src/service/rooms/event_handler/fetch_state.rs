@@ -10,8 +10,7 @@ use conduwuit::{
 };
 use futures::StreamExt;
 use ruma::{
-	EventId, OwnedEventId, RoomId, ServerName,
-	api::federation::event::{get_event, get_room_state_ids},
+	EventId, OwnedEventId, RoomId, ServerName, api::federation::event::get_room_state_ids,
 	events::StateEventType,
 };
 
@@ -90,9 +89,7 @@ where
 				.chain(state_ids_res.pdu_ids.iter());
 
 			for id in all_ids {
-				if !self.services.timeline.pdu_exists(id).await
-					&& self.services.outlier.get_pdu_outlier(id).await.is_err()
-				{
+				if !self.services.timeline.pdu_exists(id).await {
 					missing_ids.push(id.clone());
 				} else {
 					known_count = known_count.saturating_add(1);
@@ -345,10 +342,7 @@ where
 		HashMap::with_capacity(state_pdu_ids.len());
 	for eid in state_pdu_ids {
 		// Read from our outlier store or timeline
-		let pdu = match self.services.timeline.get_pdu(&eid).await {
-			| Ok(pdu) => Ok(pdu),
-			| Err(_) => self.services.outlier.get_pdu_outlier(&eid).await,
-		};
+		let pdu = self.services.timeline.get_pdu(&eid).await;
 		if let Ok(pdu) = pdu {
 			let state_key = pdu
 				.state_key()
