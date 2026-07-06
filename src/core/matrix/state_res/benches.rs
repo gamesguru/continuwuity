@@ -417,6 +417,7 @@ where
 		unsigned: None,
 		auth_events,
 		prev_events,
+		prev_state_events: None,
 		depth: uint!(0),
 		hashes: EventHash { sha256: String::new() },
 		signatures: None,
