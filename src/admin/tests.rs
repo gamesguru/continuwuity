@@ -1107,12 +1107,14 @@ async fn test_unredacted_lounge_dag_resolution() {
 		println!("Skipping test_unredacted_lounge_dag_resolution: test DAG file not found");
 		return;
 	}
+	eprintln!("[LOUNGE] setup_test_services...");
 	let (services, _guard) = setup_test_services("unredacted_lounge").await;
+	eprintln!("[LOUNGE] services ready");
 
 	let room_id = RoomId::parse("!sM2LwqNHGQOgLf35gqxPMy9D7oYde2q9ADg8HPBM3kE").unwrap();
 
 	// 1. Import the DAG
-	println!("Starting import-pdus...");
+	eprintln!("[LOUNGE] >>> import-pdus");
 	let start_import = std::time::Instant::now();
 	let res = services
 		.admin
@@ -1126,10 +1128,10 @@ async fn test_unredacted_lounge_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "import-pdus failed: {res:?}");
-	println!("import-pdus took {:?}", start_import.elapsed());
+	eprintln!("[LOUNGE] <<< import-pdus took {:?}", start_import.elapsed());
 
 	// Build derived data (auth chain roaring bitmaps)
-	println!("Starting reindex-short...");
+	eprintln!("[LOUNGE] >>> reindex-short");
 	let start_reindex = std::time::Instant::now();
 	let res = services
 		.admin
@@ -1140,11 +1142,11 @@ async fn test_unredacted_lounge_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "reindex-short failed: {res:?}");
-	println!("reindex-short took {:?}", start_reindex.elapsed());
+	eprintln!("[LOUNGE] <<< reindex-short took {:?}", start_reindex.elapsed());
 
 	// Reorder PDU index by origin_server_ts so rebuild-state processes
 	// parents before children (it walks events in pdu_count order)
-	println!("Starting reorder-timeline...");
+	eprintln!("[LOUNGE] >>> reorder-timeline");
 	let start_reorder = std::time::Instant::now();
 	let res = services
 		.admin
@@ -1155,10 +1157,10 @@ async fn test_unredacted_lounge_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "reorder-timeline failed: {res:?}");
-	println!("reorder-timeline took {:?}", start_reorder.elapsed());
+	eprintln!("[LOUNGE] <<< reorder-timeline took {:?}", start_reorder.elapsed());
 
 	// Run rebuild-state
-	println!("Starting rebuild-state...");
+	eprintln!("[LOUNGE] >>> rebuild-state");
 	let start_rebuild = std::time::Instant::now();
 	let res = services
 		.admin
@@ -1169,7 +1171,7 @@ async fn test_unredacted_lounge_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "rebuild-state failed: {res:?}");
-	println!("rebuild-state took {:?}", start_rebuild.elapsed());
+	eprintln!("[LOUNGE] <<< rebuild-state took {:?}", start_rebuild.elapsed());
 
 	// Find the SSH with the most state entries by scanning timeline events
 	// (forward extremities in this merged DAG are orphan tips with 0 state;
@@ -1180,21 +1182,32 @@ async fn test_unredacted_lounge_dag_resolution() {
 	let mut seen_sshs = std::collections::HashSet::new();
 	{
 		use futures::StreamExt;
-		// Scan the last 2000 events in reverse timeline order
+		eprintln!("[LOUNGE] >>> SSH scan (up to 100K events)");
+		let scan_start = std::time::Instant::now();
 		let stream = services.rooms.timeline.pdus_rev(room_id, None);
 		futures::pin_mut!(stream);
 		let mut scanned = 0u32;
+		let mut with_ssh = 0u32;
 		while let Some(Ok((_count, pdu))) = stream.next().await {
 			if scanned >= 100000 {
 				break;
 			}
 			scanned += 1;
+			if scanned % 5000 == 0 {
+				eprintln!(
+					"[LOUNGE]   scan progress: {scanned} events, {with_ssh} with SSH, {} unique \
+					 SSHs, best={best_entries} entries | {:?}",
+					seen_sshs.len(),
+					scan_start.elapsed(),
+				);
+			}
 			if let Ok(event_ssh) = services
 				.rooms
 				.state_accessor
 				.pdu_shortstatehash(pdu.event_id())
 				.await
 			{
+				with_ssh += 1;
 				if seen_sshs.insert(event_ssh) {
 					let count = services
 						.rooms
@@ -1210,10 +1223,16 @@ async fn test_unredacted_lounge_dag_resolution() {
 				}
 			}
 		}
+		eprintln!(
+			"[LOUNGE] <<< SSH scan done: {scanned} events, {with_ssh} with SSH, {} unique SSHs \
+			 | {:?}",
+			seen_sshs.len(),
+			scan_start.elapsed(),
+		);
 	}
 	assert!(best_ssh != 0, "No event with state found");
 	let ssh = best_ssh;
-	println!("Densest state at {best_eid}: SSH={ssh}, entries={best_entries}");
+	eprintln!("[LOUNGE] Densest state at {best_eid}: SSH={ssh}, entries={best_entries}");
 
 	let state_lock = services.rooms.state.mutex.lock(room_id).await;
 	services
@@ -1226,7 +1245,7 @@ async fn test_unredacted_lounge_dag_resolution() {
 	// with orphan extremities. Just validate rebuild-state's output directly.
 
 	// Run check-rooms (to check sanity)
-	println!("Starting check-rooms...");
+	eprintln!("[LOUNGE] >>> check-rooms");
 	let start_check = std::time::Instant::now();
 	let res = services
 		.admin
@@ -1237,10 +1256,10 @@ async fn test_unredacted_lounge_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "check-rooms failed: {res:?}");
-	println!("check-rooms took {:?}", start_check.elapsed());
+	eprintln!("[LOUNGE] <<< check-rooms took {:?}", start_check.elapsed());
 
 	// Run audit-membership
-	println!("Starting audit-membership...");
+	eprintln!("[LOUNGE] >>> audit-membership");
 	let start_audit = std::time::Instant::now();
 	let res = services
 		.admin
@@ -1251,7 +1270,7 @@ async fn test_unredacted_lounge_dag_resolution() {
 		)
 		.await;
 	assert!(res.is_ok(), "audit-membership failed: {res:?}");
-	println!("audit-membership took {:?}", start_audit.elapsed());
+	eprintln!("[LOUNGE] <<< audit-membership took {:?}", start_audit.elapsed());
 
 	// Verify forward extremities count is small and not bloated (e.g. 2000 heads)
 	let exts_count = services
@@ -1260,7 +1279,7 @@ async fn test_unredacted_lounge_dag_resolution() {
 		.get_forward_extremities(room_id)
 		.count()
 		.await;
-	println!("Unredacted Lounge DAG resolved. Final forward extremities count: {exts_count}");
+	eprintln!("[LOUNGE] forward extremities: {exts_count}");
 	assert!(exts_count <= 15, "expected few forward extremities, got: {exts_count}");
 
 	let expected_present = [
@@ -1293,7 +1312,7 @@ async fn test_unredacted_lounge_dag_resolution() {
 		.collect()
 		.await;
 
-	println!("Total resolved state entries: {}", resolved_state_pdus.len());
+	eprintln!("[LOUNGE] Total resolved state entries: {}", resolved_state_pdus.len());
 
 	let resolved_state_ids: std::collections::HashSet<ruma::OwnedEventId> = resolved_state_pdus
 		.iter()

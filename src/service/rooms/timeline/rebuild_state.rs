@@ -87,14 +87,18 @@ impl super::Service {
 			.ok();
 
 		// Phase 1: Stream events and extract metadata + keep state PDUs
+		eprintln!("[rebuild_state] Phase 1: streaming events...");
 		let (events_meta, room_version, state_pdus) = self.rebuild_stream_events(room_id).await;
+		eprintln!("[rebuild_state] Phase 1 done: {} events", events_meta.len());
 
 		let event_set: HashSet<OwnedEventId> =
 			events_meta.iter().map(|(eid, ..)| eid.clone()).collect();
 
 		// Phase 2b: Pre-compute auth chains bottom-up (iterative DFS)
+		eprintln!("[rebuild_state] Phase 2b: computing auth chains...");
 		let (eid_to_idx, idx_to_eid, auth_chain_bitmaps) =
 			Self::rebuild_auth_chains(&events_meta);
+		eprintln!("[rebuild_state] Phase 2b done: {} chains", auth_chain_bitmaps.len());
 
 		let ctx = RebuildCtx {
 			room_version,
@@ -107,13 +111,17 @@ impl super::Service {
 		};
 
 		// Phase 3+4: In-memory state walk with eviction + inline DB writes
+		eprintln!("[rebuild_state] Phase 3+4: walk and write...");
 		let (event_ssh, current_shortstatehash) =
 			self.rebuild_walk_and_write(room_id, &ctx).await?;
+		eprintln!("[rebuild_state] Phase 3+4 done: {} SSHs computed", event_ssh.len());
 
 		// Phase 5: Final multi-head extremity merge
+		eprintln!("[rebuild_state] Phase 5: merge extremities...");
 		let current_shortstatehash = self
 			.rebuild_merge_extremities(room_id, &ctx, &event_ssh, current_shortstatehash)
 			.await?;
+		eprintln!("[rebuild_state] Phase 5 done");
 
 		// Phase 6: Apply final state
 		let (total_added, total_removed) = self
@@ -134,6 +142,7 @@ impl super::Service {
 			)
 			.await?;
 
+		eprintln!("[rebuild_state] Phase 6 done: state applied");
 		Ok(())
 	}
 
@@ -569,8 +578,16 @@ impl super::Service {
 
 		// Early exit: no conflicts means all states agree
 		if conflicted_eids.is_empty() {
+			eprintln!("[resolve_fork] 0 conflicts, early exit");
 			return fork_states[0].clone();
 		}
+
+		eprintln!(
+			"[resolve_fork] {} conflicted keys, {} conflicted eids, {} unconflicted keys",
+			conflicted_keys.len(),
+			conflicted_eids.len(),
+			unconflicted.len(),
+		);
 
 		// 2. Map room version early — needed to decide auth chain diff vs subgraph
 		let version = match ctx.room_version.as_str() {
@@ -645,6 +662,11 @@ impl super::Service {
 				auth_context.insert(ctx.idx_to_eid[to_usize(idx)].to_string(), lean_ev.clone());
 			}
 		}
+		eprintln!(
+			"[resolve_fork] auth_context: {} events (from {} needed indices)",
+			auth_context.len(),
+			all_needed_indices.len(),
+		);
 
 		// 6. Build full context ONCE, then extract conflicted via remove()
 
@@ -652,8 +674,20 @@ impl super::Service {
 			// MSC4297 (V2.1+): rezzy computes the exact HashMap we need
 			let direct_conflicted: Vec<String> =
 				conflicted_eids.iter().map(ToString::to_string).collect();
+			eprintln!(
+				"[resolve_fork] computing V2.1+ conflicted subgraph ({} direct_conflicted, {} \
+				 auth_context)...",
+				direct_conflicted.len(),
+				auth_context.len(),
+			);
+			let subgraph_start = Instant::now();
 			let v2_1_conflicted_subgraph =
 				rezzy::compute_v2_1_conflicted_subgraph(&auth_context, &direct_conflicted);
+			eprintln!(
+				"[resolve_fork] subgraph took {:?}, {} events",
+				subgraph_start.elapsed(),
+				v2_1_conflicted_subgraph.len(),
+			);
 
 			// Remove conflicted events from auth_context (mutually exclusive)
 			for id in v2_1_conflicted_subgraph.keys() {
@@ -673,12 +707,23 @@ impl super::Service {
 			v2_conflicted_auth_context
 		};
 
-		// 7. Call rezzy's resolve_iterative_sort directly
+		eprintln!(
+			"[resolve_fork] conflicted_events={}, auth_context={}, version={:?} — calling \
+			 rezzy::resolve_iterative_sort...",
+			conflicted_events.len(),
+			auth_context.len(),
+			version,
+		);
+		let rezzy_start = Instant::now();
 		let resolved_lean = rezzy::resolve_iterative_sort(
 			unconflicted.into(),
 			conflicted_events,
 			&auth_context,
 			version,
+		);
+		eprintln!(
+			"[resolve_fork] rezzy::resolve_iterative_sort took {:?}",
+			rezzy_start.elapsed()
 		);
 
 		// 8. Convert back to Ruma StateMap
@@ -734,13 +779,18 @@ impl super::Service {
 			.count();
 
 		if extremity_sshs.len() <= 1 {
-			debug!(
-				"rebuild_state: all {} forward extremities share a single SSH — no multi-head \
-				 merge needed",
-				num_extremities,
+			eprintln!(
+				"[rebuild_state] Phase 5: {num_extremities} extremities, all share 1 SSH — skip \
+				 merge",
 			);
 			return Ok(current_shortstatehash);
 		}
+
+		eprintln!(
+			"[rebuild_state] Phase 5: {} extremities, {} unique SSHs — loading state...",
+			num_extremities,
+			extremity_sshs.len(),
+		);
 
 		// Load full compressed state for each unique SSH
 		let mut all_compressed = BTreeSet::new();
@@ -766,11 +816,9 @@ impl super::Service {
 			.collect();
 
 		if conflicting.is_empty() {
-			// No conflicts — trivial union merge
-			debug!(
-				"rebuild_state: trivial merge of {} state entries from {} components",
+			eprintln!(
+				"[rebuild_state] Phase 5: trivial merge, {} state entries, 0 conflicts",
 				ssk_values.len(),
-				extremity_sshs.len(),
 			);
 			let merged_ssh = self
 				.services
@@ -780,6 +828,13 @@ impl super::Service {
 				.shortstatehash;
 			return Ok(merged_ssh);
 		}
+
+		eprintln!(
+			"[rebuild_state] Phase 5: {} conflicts across {} unique SSHs — running N-way \
+			 resolution...",
+			conflicting.len(),
+			extremity_sshs.len(),
+		);
 
 		debug!(
 			"rebuild_state: {} forward extremities with {} unique SSHs ({} conflicts) — merging \
@@ -818,7 +873,18 @@ impl super::Service {
 			.await?;
 
 		let fork_state_refs: Vec<&StateMap<OwnedEventId>> = fork_states.iter().collect();
+		eprintln!(
+			"[rebuild_state] Phase 5: loaded {} fork state maps, calling \
+			 resolve_fork_with_states...",
+			fork_state_refs.len()
+		);
+		let resolve_start = Instant::now();
 		let resolved_map = Self::resolve_fork_with_states(ctx, &fork_state_refs);
+		eprintln!(
+			"[rebuild_state] Phase 5: resolve_fork_with_states took {:?}, {} entries",
+			resolve_start.elapsed(),
+			resolved_map.len()
+		);
 
 		let mut compressed = BTreeSet::new();
 		for ((ty, sk), id) in &resolved_map {
