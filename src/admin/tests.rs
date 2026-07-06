@@ -1173,73 +1173,21 @@ async fn test_unredacted_lounge_dag_resolution() {
 	assert!(res.is_ok(), "rebuild-state failed: {res:?}");
 	eprintln!("[LOUNGE] <<< rebuild-state took {:?}", start_rebuild.elapsed());
 
-	// Find the SSH with the most state entries by scanning timeline events
-	// (forward extremities in this merged DAG are orphan tips with 0 state;
-	// the actual dense branch tip is an interior event)
-	let mut best_ssh = 0u64;
-	let mut best_entries = 0usize;
-	let mut best_eid = String::new();
-	let mut seen_sshs = std::collections::HashSet::new();
-	{
-		use futures::StreamExt;
-		eprintln!("[LOUNGE] >>> SSH scan (up to 100K events)");
-		let scan_start = std::time::Instant::now();
-		let stream = services.rooms.timeline.pdus_rev(room_id, None);
-		futures::pin_mut!(stream);
-		let mut scanned = 0u32;
-		let mut with_ssh = 0u32;
-		while let Some(Ok((_count, pdu))) = stream.next().await {
-			if scanned >= 100000 {
-				break;
-			}
-			scanned += 1;
-			if scanned % 5000 == 0 {
-				eprintln!(
-					"[LOUNGE]   scan progress: {scanned} events, {with_ssh} with SSH, {} unique \
-					 SSHs, best={best_entries} entries | {:?}",
-					seen_sshs.len(),
-					scan_start.elapsed(),
-				);
-			}
-			if let Ok(event_ssh) = services
-				.rooms
-				.state_accessor
-				.pdu_shortstatehash(pdu.event_id())
-				.await
-			{
-				with_ssh += 1;
-				if seen_sshs.insert(event_ssh) {
-					let count = services
-						.rooms
-						.state_accessor
-						.state_full_pdus(event_ssh)
-						.count()
-						.await;
-					if count > best_entries {
-						best_entries = count;
-						best_ssh = event_ssh;
-						best_eid = pdu.event_id().to_string();
-					}
-				}
-			}
-		}
-		eprintln!(
-			"[LOUNGE] <<< SSH scan done: {scanned} events, {with_ssh} with SSH, {} unique SSHs \
-			 | {:?}",
-			seen_sshs.len(),
-			scan_start.elapsed(),
-		);
-	}
-	assert!(best_ssh != 0, "No event with state found");
-	let ssh = best_ssh;
-	eprintln!("[LOUNGE] Densest state at {best_eid}: SSH={ssh}, entries={best_entries}");
-
-	let state_lock = services.rooms.state.mutex.lock(room_id).await;
-	services
+	// rebuild-state Phase 5+6 already merged extremities and set the room SSH.
+	// Just read it back.
+	let ssh = services
 		.rooms
 		.state
-		.set_room_state(room_id, ssh, &state_lock);
-	drop(state_lock);
+		.get_room_shortstatehash(room_id)
+		.await
+		.expect("rebuild-state should have set room SSH");
+	let best_entries = services
+		.rooms
+		.state_accessor
+		.state_full_pdus(ssh)
+		.count()
+		.await;
+	eprintln!("[LOUNGE] Room SSH={ssh}, state entries={best_entries}");
 
 	// Skip force-set-state — it reads room SSH which is stale for merged DAGs
 	// with orphan extremities. Just validate rebuild-state's output directly.
