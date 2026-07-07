@@ -102,6 +102,7 @@ async fn get_signing_keys_for(
 	services: &crate::State,
 	server_name: &ruma::ServerName,
 	minimum_valid_until_ts: Option<MilliSecondsSinceUnixEpoch>,
+	requested_key_ids: &[&ruma::ServerSigningKeyId],
 ) -> Result<ServerSigningKeys> {
 	if services.globals.server_is_ours(server_name) {
 		return Ok(get_our_signing_keys(services).await);
@@ -114,25 +115,44 @@ async fn get_signing_keys_for(
 		.ok();
 
 	let needs_fetch = match &server_key {
-		| Some(keys) =>
-			if let Some(min_valid) = minimum_valid_until_ts {
+		| Some(keys) => {
+			// Re-fetch if any requested key ID is missing from the cached payload
+			let missing_requested_key = !requested_key_ids.is_empty()
+				&& !requested_key_ids.iter().any(|kid| {
+					keys.verify_keys.contains_key(*kid) || keys.old_verify_keys.contains_key(*kid)
+				});
+
+			if missing_requested_key {
+				true
+			} else if let Some(min_valid) = minimum_valid_until_ts {
 				keys.valid_until_ts < min_valid
 			} else {
 				false
-			},
+			}
+		},
 		| None => true,
 	};
 
-	if needs_fetch {
-		if let Ok(new_keys) = services.server_keys.server_request(server_name).await {
-			if services
-				.server_keys
-				.add_signing_keys(new_keys.clone())
-				.await
-				.is_ok()
-			{
-				server_key = Some(new_keys);
-			}
+	if needs_fetch && !services.server_keys.is_in_backoff(server_name).await {
+		match services
+			.server_keys
+			.server_request_coalesced(server_name)
+			.await
+		{
+			| Ok(new_keys) => {
+				services.server_keys.clear_backoff(server_name).await;
+				if services
+					.server_keys
+					.add_signing_keys(new_keys.clone())
+					.await
+					.is_ok()
+				{
+					server_key = Some(new_keys);
+				}
+			},
+			| Err(_) => {
+				services.server_keys.record_backoff(server_name).await;
+			},
 		}
 	}
 
@@ -151,8 +171,9 @@ pub(crate) async fn get_remote_server_keys_route(
 	body: Ruma<get_remote_server_keys::v2::Request>,
 ) -> Result<get_remote_server_keys::v2::Response> {
 	let server_key =
-		get_signing_keys_for(&services, &body.server_name, Some(body.minimum_valid_until_ts))
-			.await?;
+		get_signing_keys_for(&services, &body.server_name, Some(body.minimum_valid_until_ts), &[
+		])
+		.await?;
 	let signed_key = sign_signing_keys(&services, &server_key).await?;
 
 	Ok(get_remote_server_keys::v2::Response { server_keys: vec![signed_key] })
@@ -173,7 +194,12 @@ pub(crate) async fn get_remote_server_keys_batch_route(
 			.filter_map(|c| c.minimum_valid_until_ts)
 			.max();
 
-		if let Ok(server_key) = get_signing_keys_for(&services, server_name, min_valid).await {
+		let requested: Vec<&ruma::ServerSigningKeyId> =
+			key_ids.keys().map(AsRef::as_ref).collect();
+
+		if let Ok(server_key) =
+			get_signing_keys_for(&services, server_name, min_valid, &requested).await
+		{
 			match sign_signing_keys(&services, &server_key).await {
 				| Ok(signed_key) => response_keys.push(signed_key),
 				| Err(e) => {

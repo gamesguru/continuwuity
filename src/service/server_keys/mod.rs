@@ -14,13 +14,14 @@ use conduwuit::{
 use database::{Deserialized, Json, Map};
 use futures::StreamExt;
 use ruma::{
-	CanonicalJsonObject, MilliSecondsSinceUnixEpoch, OwnedServerSigningKeyId, RoomVersionId,
-	ServerName, ServerSigningKeyId,
+	CanonicalJsonObject, MilliSecondsSinceUnixEpoch, OwnedServerName, OwnedServerSigningKeyId,
+	RoomVersionId, ServerName, ServerSigningKeyId,
 	api::federation::discovery::{ServerSigningKeys, VerifyKey},
 	serde::Raw,
 	signatures::{Ed25519KeyPair, PublicKeyMap, PublicKeySet},
 };
 use serde_json::value::RawValue as RawJsonValue;
+use tokio::sync::RwLock;
 
 use crate::{Dep, globals, sending};
 
@@ -28,6 +29,11 @@ pub struct Service {
 	keypair: Box<Ed25519KeyPair>,
 	verify_keys: VerifyKeys,
 	minimum_valid: Duration,
+	/// Tracks servers that recently failed key fetches, mapping to the instant
+	/// the backoff expires. Prevents hammering unreachable origins.
+	fetch_backoff: RwLock<BTreeMap<OwnedServerName, std::time::Instant>>,
+	/// Deduplicates concurrent in-flight key fetches per server name.
+	in_flight: RwLock<BTreeMap<OwnedServerName, Arc<tokio::sync::Notify>>>,
 	services: Services,
 	db: Data,
 }
@@ -46,6 +52,9 @@ pub type VerifyKeys = BTreeMap<OwnedServerSigningKeyId, VerifyKey>;
 pub type PubKeyMap = PublicKeyMap;
 pub type PubKeys = PublicKeySet;
 
+/// Default backoff duration for failed key fetches (60 seconds per MSC4499).
+const FETCH_BACKOFF_SECS: u64 = 60;
+
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
 		let minimum_valid = Duration::from_secs(3600);
@@ -57,6 +66,8 @@ impl crate::Service for Service {
 			keypair,
 			verify_keys,
 			minimum_valid,
+			fetch_backoff: RwLock::new(BTreeMap::new()),
+			in_flight: RwLock::new(BTreeMap::new()),
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
 				sending: args.depend::<sending::Service>("sending"),
@@ -69,6 +80,70 @@ impl crate::Service for Service {
 	}
 
 	fn name(&self) -> &str { crate::service::make_name(std::module_path!()) }
+}
+
+/// Returns true if the server is currently in backoff (a recent fetch failed).
+#[implement(Service)]
+pub async fn is_in_backoff(&self, server: &ServerName) -> bool {
+	let backoff = self.fetch_backoff.read().await;
+	if let Some(expires) = backoff.get(server) {
+		if std::time::Instant::now() < *expires {
+			return true;
+		}
+	}
+	false
+}
+
+/// Records a fetch failure, starting a backoff period for the server.
+#[implement(Service)]
+pub async fn record_backoff(&self, server: &ServerName) {
+	let expires = std::time::Instant::now()
+		.checked_add(Duration::from_secs(FETCH_BACKOFF_SECS))
+		.expect("backoff duration overflows");
+	self.fetch_backoff
+		.write()
+		.await
+		.insert(server.into(), expires);
+}
+
+/// Clears the backoff state for a server after a successful fetch.
+#[implement(Service)]
+pub async fn clear_backoff(&self, server: &ServerName) {
+	self.fetch_backoff.write().await.remove(server);
+}
+
+/// Performs a `server_request` with fetch coalescing: concurrent calls for
+/// the same server share a single in-flight request rather than each making
+/// their own network request.
+#[implement(Service)]
+pub async fn server_request_coalesced(&self, server: &ServerName) -> Result<ServerSigningKeys> {
+	// Check if there's already an in-flight request for this server
+	{
+		let in_flight = self.in_flight.read().await;
+		if let Some(notify) = in_flight.get(server) {
+			let notify = notify.clone();
+			drop(in_flight);
+			// Wait for the in-flight request to finish, then read from cache
+			notify.notified().await;
+			return self.signing_keys_for(server).await;
+		}
+	}
+
+	// Register ourselves as the in-flight request
+	let notify = Arc::new(tokio::sync::Notify::new());
+	self.in_flight
+		.write()
+		.await
+		.insert(server.into(), notify.clone());
+
+	// Perform the actual request
+	let result = self.server_request(server).await;
+
+	// Remove the in-flight entry and notify all waiters
+	self.in_flight.write().await.remove(server);
+	notify.notify_waiters();
+
+	result
 }
 
 #[implement(Service)]
