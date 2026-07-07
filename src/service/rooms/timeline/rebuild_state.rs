@@ -1,6 +1,5 @@
 use std::{
 	collections::{BTreeSet, HashMap, HashSet},
-	hash::{Hash, Hasher},
 	pin::pin,
 	sync::Arc,
 	time::Instant,
@@ -294,6 +293,9 @@ impl super::Service {
 enum StateUpdateOwned {
 	New {
 		state: rezzy::SharedState<String>,
+		/// Incrementally maintained LtHash from rezzy, used as dedup key to
+		/// skip O(N) compression loop if the same state has already been seen.
+		hash: rezzy::LtHash,
 	},
 	Unchanged {
 		parent_event_id: String,
@@ -409,8 +411,8 @@ impl super::Service {
 				version,
 				|id, update| {
 					let owned_update = match update {
-						| rezzy::StateUpdate::New { state, .. } =>
-							StateUpdateOwned::New { state },
+						| rezzy::StateUpdate::New { state, hash } =>
+							StateUpdateOwned::New { state, hash },
 						| rezzy::StateUpdate::Unchanged { parent_event_id, .. } =>
 							StateUpdateOwned::Unchanged {
 								parent_event_id: parent_event_id.clone(),
@@ -436,7 +438,7 @@ impl super::Service {
 			.shortstatehash;
 
 		let mut event_ssh: HashMap<OwnedEventId, u64> = HashMap::new();
-		let mut content_to_ssh: HashMap<u64, u64> = HashMap::new();
+		let mut lthash_to_ssh: HashMap<rezzy::LtHash, u64> = HashMap::new();
 		let mut current_shortstatehash = empty_ssh;
 		let mut groups_compressed = 0_usize;
 		let mut groups_deduped = 0_usize;
@@ -498,30 +500,29 @@ impl super::Service {
 					t_unchanged = t_unchanged.saturating_add(t0.elapsed());
 					result
 				},
-				| StateUpdateOwned::New { state } => {
+				| StateUpdateOwned::New { state, hash } => {
 					n_new = n_new.saturating_add(1);
-					// Compress state to BTreeSet<u128> for storage but hash sequentially
-					// for time.
-					let tc0 = Instant::now();
-					let mut compressed = BTreeSet::new();
-					let mut hasher = std::collections::hash_map::DefaultHasher::new();
-					for (key, ev_id_str) in &state {
-						let ssk = ssk_cache.get(key).copied().unwrap_or(0);
-						let sei = sei_str_cache.get(ev_id_str).copied().unwrap_or(0);
-						let compressed_val =
-							rooms::state_compressor::compress_state_event(ssk, sei);
-						compressed_val.hash(&mut hasher);
-						compressed.insert(compressed_val);
-					}
-					let content_hash = hasher.finish();
-					t_compress = t_compress.saturating_add(tc0.elapsed());
 
-					// Dedupe/compress groups and generate pdu_shortstatehash
-					if let Some(&existing_ssh) = content_to_ssh.get(&content_hash) {
+					// LtHash pre-check: skip the entire O(N) compression loop if
+					// we've already seen this exact state. LtHash is 128 bytes
+					// (cryptographic lattice hash) — collision is a non-issue.
+					if let Some(&existing_ssh) = lthash_to_ssh.get(&hash) {
 						groups_deduped = groups_deduped.saturating_add(1);
 						n_new_deduped = n_new_deduped.saturating_add(1);
 						existing_ssh
 					} else {
+						// Compress state to BTreeSet<u128> for storage.
+						let tc0 = Instant::now();
+						let mut compressed = BTreeSet::new();
+						for (key, ev_id_str) in &state {
+							let ssk = ssk_cache.get(key).copied().unwrap_or(0);
+							let sei = sei_str_cache.get(ev_id_str).copied().unwrap_or(0);
+							let compressed_val =
+								rooms::state_compressor::compress_state_event(ssk, sei);
+							compressed.insert(compressed_val);
+						}
+						t_compress = t_compress.saturating_add(tc0.elapsed());
+
 						let ts0 = Instant::now();
 						let result = self
 							.services
@@ -533,7 +534,7 @@ impl super::Service {
 							)
 							.await?;
 						let ssh = result.shortstatehash;
-						content_to_ssh.insert(content_hash, ssh);
+						lthash_to_ssh.insert(hash, ssh);
 						groups_compressed = groups_compressed.saturating_add(1);
 						t_save = t_save.saturating_add(ts0.elapsed());
 						ssh
