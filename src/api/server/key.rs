@@ -135,7 +135,7 @@ async fn get_signing_keys_for(
 	if needs_fetch && !services.server_keys.is_in_backoff(server_name).await {
 		match services
 			.server_keys
-			.server_request_coalesced(server_name)
+			.server_request_coalesced(server_name, minimum_valid_until_ts, requested_key_ids)
 			.await
 		{
 			| Ok(new_keys) => {

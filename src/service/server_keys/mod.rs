@@ -115,12 +115,32 @@ pub async fn clear_backoff(&self, server: &ServerName) {
 }
 
 /// Performs a `server_request` with fetch coalescing: concurrent calls for
-/// the same server serialize on a per-server mutex. The caller decides
-/// whether a re-fetch is needed; this function only prevents duplicate
-/// concurrent network requests for the same origin.
+/// the same server serialize on a per-server mutex. The second caller
+/// re-evaluates freshness after the first finishes, avoiding redundant
+/// network requests while still allowing sequential re-fetches when the
+/// cached result is stale.
 #[implement(Service)]
-pub async fn server_request_coalesced(&self, server: &ServerName) -> Result<ServerSigningKeys> {
+pub async fn server_request_coalesced(
+	&self,
+	server: &ServerName,
+	minimum_valid_until_ts: Option<MilliSecondsSinceUnixEpoch>,
+	requested_key_ids: &[&ServerSigningKeyId],
+) -> Result<ServerSigningKeys> {
 	let _guard = self.fetching.lock(server).await;
+
+	// Re-check cache — a concurrent caller may have already fetched.
+	// Evaluate using the same freshness criteria as the caller.
+	if let Ok(cached) = self.signing_keys_for(server).await {
+		let missing_key = requested_key_ids.iter().any(|kid| {
+			!cached.verify_keys.contains_key(*kid) && !cached.old_verify_keys.contains_key(*kid)
+		});
+
+		let stale = minimum_valid_until_ts.is_some_and(|min| cached.valid_until_ts < min);
+
+		if !missing_key && !stale {
+			return Ok(cached);
+		}
+	}
 
 	self.server_request(server).await
 }
