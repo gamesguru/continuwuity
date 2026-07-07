@@ -1,0 +1,12 @@
+{"Action":"pass","Test":"TestMSC4499KeyBackoffClearedOnSuccess"}
+{"Action":"pass","Test":"TestMSC4499KeyBindingPromotion"}
+{"Action":"fail","Test":"TestMSC4499KeyDuplicateJSONKeyRejection"}
+{"Action":"pass","Test":"TestMSC4499KeyFetchCoalescing"}
+{"Action":"pass","Test":"TestMSC4499KeyFirstSeenWinsEventPath"}
+{"Action":"pass","Test":"TestMSC4499KeyHistoricalEventVerification"}
+{"Action":"pass","Test":"TestMSC4499KeyIDFirstSeenWinsDirect"}
+{"Action":"pass","Test":"TestMSC4499KeyIdenticalCrossMapIsLegal"}
+{"Action":"fail","Test":"TestMSC4499KeyIntraPayloadRejection"}
+{"Action":"pass","Test":"TestMSC4499KeyNegativeCachingAndBackoff"}
+{"Action":"fail","Test":"TestMSC4499KeyRotation"}
+{"Action":"pass","Test":"TestMSC4499KeyStorageQuotaResilience"}
