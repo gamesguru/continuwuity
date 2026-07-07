@@ -214,7 +214,12 @@ impl Service {
 		let mut true_extremities_set: HashSet<OwnedEventId> =
 			HashSet::with_capacity(true_tips_short.len());
 		for short in true_tips_short {
-			if let Some(eid) = short_to_owned.get(&short) {
+			if let Ok(eid) = self
+				.services
+				.short
+				.get_eventid_from_short::<OwnedEventId>(short)
+				.await
+			{
 				true_extremities_set.insert(eid.clone());
 			}
 		}
@@ -222,18 +227,23 @@ impl Service {
 		// Add current extremities that were outside the graph window (should be 0 now
 		// that we trace infinitely)
 		for eid in &current_set {
-			if !ts_map.contains_key(eid) {
-				true_extremities_set.insert(eid.clone());
-				if let Ok(ts) = self.db.get_origin_server_ts(eid).await {
-					ts_map.insert(eid.clone(), ts);
-				}
-			}
+			true_extremities_set.insert(eid.clone());
 		}
 
 		let mut final_extremities: Vec<OwnedEventId> = true_extremities_set.into_iter().collect();
 
+		let mut final_ts_map = HashMap::with_capacity(final_extremities.len());
+		for eid in &final_extremities {
+			let ts = self
+				.db
+				.get_origin_server_ts(eid)
+				.await
+				.unwrap_or_else(|_| ruma::MilliSecondsSinceUnixEpoch(0_u32.into()));
+			final_ts_map.insert(eid.clone(), ts);
+		}
+
 		final_extremities.sort_by_key(|eid| {
-			ts_map
+			final_ts_map
 				.get(eid)
 				.copied()
 				.unwrap_or_else(|| ruma::MilliSecondsSinceUnixEpoch(0_u32.into()))
@@ -256,99 +266,11 @@ impl Service {
 
 		Ok((true, num_true_extremities))
 	}
-
-	/// Resolves, filters, chronologically sorts, prunes, and updates the
-	/// forward extremities of a room. Returns the final pruned list of
-	/// extremities.
-	#[tracing::instrument(skip(self, graph, sorted, get_ts, state_lock), level = "info")]
-	pub async fn update_true_extremities<F>(
-		&self,
-		room_id: &ruma::RoomId,
-		graph: &HashMap<OwnedEventId, HashSet<OwnedEventId>>,
-		sorted: &[OwnedEventId],
-		get_ts: F,
-		state_lock: &super::RoomMutexGuard,
-	) -> Result<Vec<OwnedEventId>>
-	where
-		F: Fn(ShortEventId, &OwnedEventId) -> u64,
-	{
-		let mut true_extremities: Vec<OwnedEventId> = calculate_true_extremities(graph, sorted)
-			.into_iter()
-			.map(ToOwned::to_owned)
-			.collect();
-
-		// Preserve current/outlier extremities that are not in the timeline
-		let current_exts: Vec<OwnedEventId> = self
-			.services
-			.state
-			.get_forward_extremities(room_id)
-			.collect()
-			.await;
-		let timeline_set: HashSet<&OwnedEventId> = sorted.iter().collect();
-		for ext in current_exts {
-			if !timeline_set.contains(&ext) {
-				true_extremities.push(ext);
-			}
-		}
-
-		// Resolve short IDs for soft-failure check and sorting
-		let mut tips_with_shorts = Vec::with_capacity(true_extremities.len());
-		for tip in true_extremities {
-			if let Ok(short) = self.services.short.get_shorteventid(&tip).await {
-				tips_with_shorts.push((short, tip));
-			}
-		}
-
-		// Filter out soft-failed events (per Spec Server-Server API §Soft Failure:
-		// soft-failed events must not be forward extremities).
-		let mut filtered_tips = Vec::new();
-		for (short, tip) in tips_with_shorts {
-			if let Ok(meta) = self.db.get_event_metadata(&tip).await {
-				if !meta.soft_failed {
-					filtered_tips.push((short, tip));
-				}
-			} else {
-				filtered_tips.push((short, tip));
-			}
-		}
-
-		// Sort by origin_server_ts (oldest first) so that the newest extremities
-		// are at the end of the vector. When set_forward_extremities takes the last N
-		// elements, it will correctly keep the chronologically newest extremities
-		// instead of getting poisoned by recently-inserted backfilled history.
-		filtered_tips.sort_by_key(|(short, eid)| get_ts(*short, eid));
-
-		// Enforce the configured cap to prevent state resolution OOMs.
-		let max_extremities = self.services.globals.max_forward_extremities();
-		let len = filtered_tips.len();
-		if len > max_extremities {
-			let prune_count = len.saturating_sub(max_extremities);
-			info!(
-				"update_true_extremities: pruning {} extremities down to {} for room {}",
-				len, max_extremities, room_id
-			);
-			// Keep the last max_extremities (which are the newest)
-			filtered_tips.drain(0..prune_count);
-		}
-
-		let final_extremities: Vec<OwnedEventId> =
-			filtered_tips.into_iter().map(|(_, eid)| eid).collect();
-
-		if !final_extremities.is_empty() {
-			self.services
-				.state
-				.set_forward_extremities(room_id, final_extremities.iter().cloned(), state_lock)
-				.await;
-		}
-
-		Ok(final_extremities)
-	}
 }
 
 #[cfg(test)]
 mod tests {
-	use std::collections::HashMap;
-
+	use HashMap;
 	use ruma::{OwnedEventId, event_id};
 
 	use super::*;

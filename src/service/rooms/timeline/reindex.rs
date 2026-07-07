@@ -1,7 +1,4 @@
-use std::{
-	collections::{HashMap, HashSet},
-	sync::Arc,
-};
+use std::{collections::HashMap, sync::Arc};
 
 use conduwuit_core::{
 	Result, info,
@@ -79,11 +76,22 @@ impl Service {
 		// Phase 1: Collect all events from the stream index
 		let mut events: Vec<(PduCount, OwnedEventId)> = Vec::new();
 		{
-			let mut stream = std::pin::pin!(self.db.room_event_ids_rev(room_id, None));
-			while let Some(Ok(eid)) = stream.next().await {
-				if let Ok(count) = self.get_pdu_count(&eid).await {
-					events.push((count, eid));
-				}
+			let mut stream =
+				std::pin::pin!(self.db.room_event_ids_rev(room_id, None).chunks(1024));
+			while let Some(chunk) = stream.next().await {
+				let chunk_futures =
+					chunk
+						.into_iter()
+						.filter_map(Result::ok)
+						.map(|eid| async move {
+							if let Ok(count) = self.get_pdu_count(&eid).await {
+								Some((count, eid))
+							} else {
+								None
+							}
+						});
+				let res = futures::future::join_all(chunk_futures).await;
+				events.extend(res.into_iter().flatten());
 			}
 		}
 		events.reverse(); // Forward order (oldest first)
@@ -93,12 +101,8 @@ impl Service {
 		// Phase 2: For each event, read PDU JSON and repair derived data
 		let cork = self.db.db.cork();
 
-		// Graph for extremity computation
-		let mut graph: HashMap<OwnedEventId, HashSet<OwnedEventId>> = HashMap::new();
 		// Auth chain cache for incremental computation (roaring bitmaps)
 		let mut auth_chain_cache: HashMap<ShortEventId, Arc<RoaringTreemap>> = HashMap::new();
-		// Timestamps for chronological extremities sorting
-		let mut ts_map: HashMap<ShortEventId, u64> = HashMap::new();
 
 		for (i, (count, event_id)) in events.iter().enumerate() {
 			if i.is_multiple_of(1000) {
@@ -153,7 +157,7 @@ impl Service {
 				.short
 				.get_or_create_shorteventid(event_id)
 				.await;
-			ts_map.insert(short_eid, pdu.origin_server_ts().0.into());
+
 			if was_missing {
 				stats.repaired_short_ids = stats.repaired_short_ids.saturating_add(1);
 			}
@@ -283,30 +287,13 @@ impl Service {
 			// --- tokenids (search index) ---
 			self.index_pdu_search(shortroomid, &pdu_id, &pdu);
 			stats.repaired_search_index = stats.repaired_search_index.saturating_add(1);
-
-			// Build graph for extremity computation
-			graph.insert(event_id.clone(), prev_event_ids.into_iter().collect());
 		}
 
 		// --- Forward extremities (roomid_pduleaves) ---
-		let event_set: HashSet<&OwnedEventId> = events.iter().map(|(_, e)| e).collect();
-		for parents in graph.values_mut() {
-			parents.retain(|prev_id| event_set.contains(prev_id));
-		}
-
-		let sorted: Vec<OwnedEventId> = events.iter().map(|(_, e)| e.clone()).collect();
-		let final_extremities = self
-			.update_true_extremities(
-				room_id,
-				&graph,
-				&sorted,
-				|short, _| ts_map.get(&short).copied().unwrap_or(0),
-				&state_lock,
-			)
-			.await?;
-
-		stats.extremities_count = final_extremities.len();
-		stats.extremities_updated = true;
+		let (extremities_updated, extremities_count) =
+			self.recalculate_extremities(room_id, true).await?;
+		stats.extremities_count = extremities_count;
+		stats.extremities_updated = extremities_updated;
 
 		drop(cork);
 		drop(state_lock);

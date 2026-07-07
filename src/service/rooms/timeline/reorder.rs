@@ -186,21 +186,13 @@ impl Service {
 		drop(final_sync);
 		debug!("reorder_timeline: topo rebuild complete, calculating forward extremities...");
 
-		let true_extremities = self
-			.update_true_extremities(
-				room_id,
-				&graph,
-				&sorted,
-				|_, eid| entries.get(eid).map_or(0, |(_, _, ts)| *ts),
-				&state_lock,
-			)
-			.await?;
+		let (_, true_extremities_count) = self.recalculate_extremities(room_id, true).await?;
 
 		info!(
 			"reorder_timeline: set forward extremities to {} true DAG tips",
-			true_extremities.len()
+			true_extremities_count
 		);
-		if !true_extremities.is_empty() {
+		if true_extremities_count > 0 {
 			if !no_compute_state {
 				info!("reorder_timeline: bulk rebuilding state using rezzy...");
 				if let Err(e) = self.rebuild_state(room_id).await {
