@@ -112,15 +112,14 @@ pub(super) async fn rescue_room(
 		events.len()
 	))
 	.await?;
-
 	let result = Box::pin(self.services.rooms.timeline.heal_room(
 		&room_id,
 		events,
 		None,
 		&conduwuit_service::rooms::timeline::HealOptions {
 			clear_markers: force,
-			compute_state: true,
-			rebuild_membership: true,
+			compute_state: false,
+			rebuild_membership: false,
 			is_reorder: reorder,
 		},
 	))
@@ -134,6 +133,18 @@ pub(super) async fn rescue_room(
 		result.extremities.len()
 	);
 	self.write_str(&msg).await?;
+
+	self.write_str(&format!("Rebuilding state for {room_id} using rezzy..."))
+		.await?;
+	Box::pin(self.services.rooms.timeline.rebuild_state(&room_id)).await?;
+
+	self.write_str(&format!("Rebuilding membership cache for {room_id}..."))
+		.await?;
+	self.services
+		.rooms
+		.state_cache
+		.reconcile_membership(&room_id)
+		.await;
 
 	if !heal_from.is_empty() {
 		// Find the latest local event to use as at_event for bootstrapping
