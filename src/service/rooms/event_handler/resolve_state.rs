@@ -250,14 +250,46 @@ where
 		fetch_pdu,
 	};
 
-	// Let rezzy BFS-discover the auth context lazily from conflicted events.
-	// A precomputed auth diff (c_auth - u_auth) was previously used here but
-	// was incorrect for V2.1: it strips shared ancestors (create, power levels)
-	// that compute_v2_1_subgraph needs to walk through.
-	let resolved_lean = rezzy::resolve::multi::resolve_state_maps_lazy_with_diff::<
-		String,
-		serde_json::Value,
-	>(&lean_state_sets, &provider, None::<Vec<String>>, version);
+	let resolved_lean = if matches!(
+		version,
+		rezzy::StateResVersion::V2_1
+			| rezzy::StateResVersion::V2_1_1
+			| rezzy::StateResVersion::V2_2
+	) {
+		// V2.1+ subgraph computation needs full auth chain visibility.
+		// Build event context by BFS-walking auth chains from all fork state events.
+		let mut ctx: HashMap<String, rezzy::LeanEvent<String>> = HashMap::new();
+		let mut q: std::collections::VecDeque<String> = lean_state_sets
+			.iter()
+			.flat_map(|ss| ss.values().cloned())
+			.collect();
+		while let Some(eid) = q.pop_front() {
+			if ctx.contains_key(&eid) {
+				continue;
+			}
+			let ev = <_ as rezzy::basespec::rezzy_types::EventProvider<
+				String,
+				serde_json::Value,
+			>>::get_event(&provider, &eid);
+			if let Some(ev) = ev {
+				for aid in &ev.auth_events {
+					if !ctx.contains_key(aid) {
+						q.push_back(aid.clone());
+					}
+				}
+				ctx.insert(eid, ev.clone());
+			}
+		}
+		rezzy::resolve::multi::resolve_state_maps(&lean_state_sets, &ctx, version)
+	} else {
+		// V2 and below: lazy BFS is sufficient.
+		rezzy::resolve::multi::resolve_state_maps_lazy_with_diff(
+			&lean_state_sets,
+			&provider,
+			None::<Vec<String>>,
+			version,
+		)
+	};
 
 	// Convert back to Ruma StateMap
 	let mut resolved = StateMap::new();
