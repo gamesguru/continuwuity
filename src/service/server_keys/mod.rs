@@ -96,10 +96,12 @@ pub async fn is_in_backoff(&self, server: &ServerName) -> bool {
 /// Records a fetch failure, starting a backoff period for the server.
 #[implement(Service)]
 pub async fn record_backoff(&self, server: &ServerName) {
-	let backoff_secs = self.services.server.config.msc4499_backoff_secs;
-	let expires = std::time::Instant::now()
+	let backoff_secs = self.services.server.config.msc4499_backoff_secs.min(86400);
+	let now = std::time::Instant::now();
+	let expires = now
 		.checked_add(Duration::from_secs(backoff_secs))
-		.expect("backoff duration overflows");
+		.or_else(|| now.checked_add(Duration::from_secs(86400)))
+		.unwrap_or(now);
 	self.fetch_backoff
 		.write()
 		.await
