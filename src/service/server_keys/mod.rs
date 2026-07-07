@@ -175,8 +175,31 @@ pub fn active_verify_key(&self) -> (&ServerSigningKeyId, &VerifyKey) {
 }
 
 #[implement(Service)]
-pub async fn add_signing_keys(&self, mut new_keys: ServerSigningKeys) -> Result<()> {
+pub async fn add_signing_keys(
+	&self,
+	mut new_keys: ServerSigningKeys,
+) -> Result<ServerSigningKeys> {
 	let origin = &new_keys.server_name;
+
+	// MSC4499: "A future expired_ts (beyond a 5-minute clock-skew allowance) MUST
+	// be treated as malformed for that specific key entry, but MUST NOT poison
+	// the rest of the response payload."
+	let now_plus_skew_tp =
+		timepoint_from_now(Duration::from_secs(300)).expect("SystemTime should not overflow");
+	let now_plus_skew = MilliSecondsSinceUnixEpoch::from_system_time(now_plus_skew_tp)
+		.expect("UInt should not overflow");
+
+	new_keys.old_verify_keys.retain(|key_id, ok| {
+		if ok.expired_ts > now_plus_skew {
+			conduwuit::warn!(
+				"Ignoring malformed old_verify_key {key_id} for {origin}: expired_ts {ts:?} is \
+				 in the future",
+				ts = ok.expired_ts
+			);
+			return false;
+		}
+		true
+	});
 
 	// Intra-payload collision verification (MSC 00FD)
 	for (key_id, verify_key) in &new_keys.verify_keys {
@@ -322,7 +345,7 @@ pub async fn add_signing_keys(&self, mut new_keys: ServerSigningKeys) -> Result<
 	// Store the (possibly FSW-patched) response under `origin`
 	self.db.server_signingkeys.raw_put(origin, Json(&new_keys));
 
-	Ok(())
+	Ok(new_keys)
 }
 
 #[implement(Service)]

@@ -20,8 +20,15 @@ pub(super) fn check_no_duplicate_json_keys(raw: &str) -> Result {
 	// Scan the raw bytes for duplicate keys within each section.
 	// Operates on bytes to avoid string-slice panics on multi-byte chars.
 	let bytes = raw.as_bytes();
-	check_raw_duplicates(bytes, b"verify_keys")?;
+	let vk_count = check_raw_duplicates(bytes, b"verify_keys")?;
 	check_raw_duplicates(bytes, b"old_verify_keys")?;
+
+	// MSC4499: "If a single key response payload contains more than 50 keys in its
+	// verify_keys dictionary, receiving servers MUST treat the entire response
+	// payload as malformed/hostile and reject it."
+	if vk_count > 50 {
+		return Err!(BadServerResponse("Too many keys in verify_keys (limit: 50)"));
+	}
 
 	// Cross-map collision: same key ID with different body across sections
 	if let (Some(verify_keys), Some(old_verify_keys)) = (
@@ -47,7 +54,7 @@ pub(super) fn check_no_duplicate_json_keys(raw: &str) -> Result {
 
 /// Scan raw JSON bytes for duplicate keys within a named top-level object.
 /// Operates entirely on `&[u8]` with checked/saturating arithmetic.
-fn check_raw_duplicates(bytes: &[u8], section_name: &[u8]) -> Result {
+fn check_raw_duplicates(bytes: &[u8], section_name: &[u8]) -> Result<usize> {
 	// Build the search pattern: `"section_name"`
 	let mut pattern = Vec::with_capacity(section_name.len().saturating_add(2));
 	pattern.push(b'"');
@@ -56,19 +63,19 @@ fn check_raw_duplicates(bytes: &[u8], section_name: &[u8]) -> Result {
 
 	// Find the section in the raw JSON
 	let Some(section_start) = find_subsequence(bytes, &pattern) else {
-		return Ok(());
+		return Ok(0);
 	};
 
 	// Advance past `"section_name"` and find ':'
 	let past_key = section_start.saturating_add(pattern.len());
 	let Some(colon_offset) = find_byte(&bytes[past_key..], b':') else {
-		return Ok(());
+		return Ok(0);
 	};
 
 	// Advance past ':' and find '{'
 	let past_colon = past_key.saturating_add(colon_offset).saturating_add(1);
 	let Some(brace_offset) = find_byte(&bytes[past_colon..], b'{') else {
-		return Ok(());
+		return Ok(0);
 	};
 
 	let obj_bytes = &bytes[past_colon.saturating_add(brace_offset)..];
@@ -77,7 +84,7 @@ fn check_raw_duplicates(bytes: &[u8], section_name: &[u8]) -> Result {
 }
 
 /// Walk a JSON object's top-level keys (depth == 1) and detect duplicates.
-fn scan_object_for_duplicate_keys(obj_bytes: &[u8], section_name: &[u8]) -> Result {
+fn scan_object_for_duplicate_keys(obj_bytes: &[u8], section_name: &[u8]) -> Result<usize> {
 	let mut seen_keys: HashSet<Vec<u8>> = HashSet::new();
 	let mut depth = 0_u32;
 	let mut i = 0_usize;
@@ -131,7 +138,7 @@ fn scan_object_for_duplicate_keys(obj_bytes: &[u8], section_name: &[u8]) -> Resu
 		}
 	}
 
-	Ok(())
+	Ok(seen_keys.len())
 }
 
 /// Find the first occurrence of `needle` in `haystack`.

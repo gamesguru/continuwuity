@@ -205,13 +205,15 @@ async fn get_verify_key_from_notaries(
 ) -> Result<VerifyKey> {
 	for notary in self.services.globals.trusted_servers() {
 		if let Ok(server_keys) = self.notary_request(notary, origin).await {
-			for server_key in server_keys.clone() {
-				if let Err(e) = self.add_signing_keys(server_key).await {
-					debug_error!("Failed to add signing keys: {e}");
-				}
-			}
-
 			for server_key in server_keys {
+				let server_key = match self.add_signing_keys(server_key).await {
+					| Ok(patched) => patched,
+					| Err(e) => {
+						debug_error!("Failed to add signing keys: {e}");
+						continue;
+					},
+				};
+
 				if let Some(result) = extract_key(server_key, key_id) {
 					return Ok(result);
 				}
@@ -229,9 +231,14 @@ async fn get_verify_key_from_origin(
 	key_id: &ServerSigningKeyId,
 ) -> Result<VerifyKey> {
 	if let Ok(server_key) = self.server_request(origin).await {
-		if let Err(e) = self.add_signing_keys(server_key.clone()).await {
-			debug_error!("Failed to add signing keys: {e}");
-		}
+		let server_key = match self.add_signing_keys(server_key).await {
+			| Ok(patched) => patched,
+			| Err(e) => {
+				debug_error!("Failed to add signing keys: {e}");
+				return Err!(BadServerResponse("Failed to add signing keys: {e}"));
+			},
+		};
+
 		if let Some(result) = extract_key(server_key, key_id) {
 			return Ok(result);
 		}
