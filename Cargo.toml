@@ -591,7 +591,7 @@ features = ["std"]
 version = "0.3.0"
 
 [workspace.dependencies.roaring]
-version = "0.11.4"
+version = "0.10" # compatible with Synapse's rustc 1.87.0
 
 #
 # Patches
