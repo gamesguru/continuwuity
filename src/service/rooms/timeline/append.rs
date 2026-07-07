@@ -217,11 +217,12 @@ where
 	let pdu_count = PduCount::Normal(count);
 	let pdu_id: RawPduId = PduId { shortroomid, shorteventid: pdu_count }.into();
 
-	// Insert pdu FIRST to ensure it's in the DB before any secondary writes
-	// unexpectedly wake the sync watcher.
-	self.db.append_pdu(&pdu_id, pdu, &pdu_json, pdu_count).await;
+	// Insert into the cache FIRST so that if the sync watcher is woken
+	// by the db append, it will see the updated timeline count and not
+	// prematurely early-return with an empty pdus list.
 	self.last_timeline_count_cache
 		.insert(room_id.to_owned(), pdu_count);
+	self.db.append_pdu(&pdu_id, pdu, &pdu_json, pdu_count).await;
 
 	// Mark as read first so the sync watcher uses the correct receipt
 	let receipt_content = std::collections::BTreeMap::from_iter([(
