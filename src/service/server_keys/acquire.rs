@@ -149,7 +149,7 @@ where
 	I: Iterator<Item = (OwnedServerName, Vec<OwnedServerSigningKeyId>)> + Send,
 {
 	let timeout = Instant::now()
-		.checked_add(Duration::from_secs(45))
+		.checked_add(Duration::from_secs(10))
 		.expect("timeout overflows");
 
 	let mut requests: FuturesUnordered<_> = batch
@@ -204,24 +204,39 @@ where
 	I: Iterator<Item = (OwnedServerName, Vec<OwnedServerSigningKeyId>)> + Send,
 {
 	let mut missing: Batch = batch.collect();
-	for notary in self.services.globals.trusted_servers() {
-		let missing_keys = keys_count(&missing);
-		let missing_servers = missing.len();
-		debug!(
-			"Asking notary {notary} for {missing_keys} missing keys from {missing_servers} \
-			 servers"
-		);
+	let trusted_servers = self.services.globals.trusted_servers();
+	if trusted_servers.is_empty() {
+		return missing;
+	}
 
-		let batch = missing
+	let mut requests = FuturesUnordered::new();
+	for notary in trusted_servers {
+		let batch: Vec<_> = missing
 			.iter()
-			.map(|(server, keys)| (server.borrow(), keys.iter().map(Borrow::borrow)));
+			.map(|(s, k)| (s.clone(), k.clone()))
+			.collect();
 
-		match self.batch_notary_request(notary, batch).await {
+		requests.push(async move {
+			let req_batch = batch
+				.iter()
+				.map(|(server, keys)| (server.borrow(), keys.iter().map(Borrow::borrow)));
+
+			(notary, self.batch_notary_request(notary, req_batch).await)
+		});
+	}
+
+	while let Some((notary, result)) = requests.next().await {
+		match result {
 			| Err(e) => error!("Failed to contact notary {notary:?}: {e}"),
-			| Ok(results) =>
+			| Ok(results) => {
 				for server_keys in results {
 					self.acquire_notary_result(&mut missing, server_keys).await;
-				},
+				}
+
+				if keys_count(&missing) == 0 {
+					break;
+				}
+			},
 		}
 	}
 
