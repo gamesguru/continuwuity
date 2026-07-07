@@ -54,9 +54,6 @@ pub type VerifyKeys = BTreeMap<OwnedServerSigningKeyId, VerifyKey>;
 pub type PubKeyMap = PublicKeyMap;
 pub type PubKeys = PublicKeySet;
 
-/// Default backoff duration for failed key fetches (60 seconds per MSC4499).
-const FETCH_BACKOFF_SECS: u64 = 60;
-
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
 		let minimum_valid = Duration::from_secs(3600);
@@ -99,8 +96,9 @@ pub async fn is_in_backoff(&self, server: &ServerName) -> bool {
 /// Records a fetch failure, starting a backoff period for the server.
 #[implement(Service)]
 pub async fn record_backoff(&self, server: &ServerName) {
+	let backoff_secs = self.services.server.config.msc4499_backoff_secs;
 	let expires = std::time::Instant::now()
-		.checked_add(Duration::from_secs(FETCH_BACKOFF_SECS))
+		.checked_add(Duration::from_secs(backoff_secs))
 		.expect("backoff duration overflows");
 	self.fetch_backoff
 		.write()
@@ -115,17 +113,12 @@ pub async fn clear_backoff(&self, server: &ServerName) {
 }
 
 /// Performs a `server_request` with fetch coalescing: concurrent calls for
-/// the same server serialize on a per-server mutex (same pattern as the
-/// resolver). The second caller re-checks cache after the first finishes,
-/// avoiding redundant network requests.
+/// the same server serialize on a per-server mutex. The caller decides
+/// whether a re-fetch is needed; this function only prevents duplicate
+/// concurrent network requests for the same origin.
 #[implement(Service)]
 pub async fn server_request_coalesced(&self, server: &ServerName) -> Result<ServerSigningKeys> {
 	let _guard = self.fetching.lock(server).await;
-
-	// Re-check cache — a concurrent caller may have already fetched
-	if let Ok(cached) = self.signing_keys_for(server).await {
-		return Ok(cached);
-	}
 
 	self.server_request(server).await
 }

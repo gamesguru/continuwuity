@@ -917,6 +917,15 @@ pub struct Config {
 	#[serde(default = "true_fn")]
 	pub msc4499_first_seen_wins: bool,
 
+	/// Backoff duration in seconds after a failed federation key fetch.
+	/// During backoff, the server will not re-attempt key fetches for the
+	/// failing origin. MSC4499 recommends 60 seconds. Reduce for faster
+	/// complement testing.
+	///
+	/// default: 60
+	#[serde(default = "default_msc4499_backoff_secs")]
+	pub msc4499_backoff_secs: u64,
+
 	/// Maximum number of keys to request in each trusted server batch query.
 	///
 	/// default: 1024
@@ -2962,6 +2971,8 @@ fn parallelism_scaled_u32(val: u32) -> u32 {
 fn parallelism_scaled(val: usize) -> usize { val.saturating_mul(sys::available_parallelism()) }
 
 fn default_trusted_server_batch_size() -> usize { 256 }
+
+fn default_msc4499_backoff_secs() -> u64 { 60 }
 
 fn default_db_pool_workers() -> usize {
 	sys::available_parallelism()
