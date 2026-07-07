@@ -310,6 +310,7 @@ pub(super) async fn clean_corrupt_rooms(&self, execute: bool) -> Result {
 
 #[admin_command]
 pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result {
+	use conduwuit_core::debug_info;
 	let ours = self.services.globals.server_name();
 
 	let room_ids: Vec<_> = self
@@ -331,6 +332,12 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 	let mut output = String::new();
 
 	for room_id in &room_ids {
+		if !self.services.server.running() {
+			self.write_str("Shutting down... aborted check-rooms early.\n")
+				.await?;
+			break;
+		}
+
 		total_rooms = total_rooms.saturating_add(1);
 		info!(room_id = %room_id, scanned = total_rooms, total = n_rooms, "check-rooms scanning room");
 		let mut issues: Vec<String> = Vec::new();
@@ -345,6 +352,7 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 			continue;
 		}
 
+		debug_info!("checking create event...");
 		// Create event check
 		let create_state = self
 			.services
@@ -352,6 +360,8 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 			.state_accessor
 			.room_state_get(room_id, &StateEventType::RoomCreate, "")
 			.await;
+
+		debug_info!("create event check done.");
 
 		match &create_state {
 			| Ok(create_pdu) => {
@@ -371,6 +381,7 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 			},
 		}
 
+		debug_info!("checking local user cache...");
 		// Local user check
 		let has_local = self
 			.services
@@ -381,6 +392,8 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 			.next()
 			.await
 			.is_some();
+
+		debug_info!("local user cache done.");
 
 		if !has_local {
 			let we_participate = self
@@ -394,14 +407,17 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 			}
 		}
 
+		debug_info!("recalculating extremities...");
 		// Forward extremities check
 		let (would_change, num_true) = self
 			.services
 			.rooms
 			.timeline
-			.recalculate_extremities(room_id, 5000, fix)
+			.recalculate_extremities(room_id, usize::MAX, fix)
 			.await
 			.unwrap_or((false, 0));
+
+		debug_info!("recalculated extremities.");
 
 		if would_change {
 			if fix {
@@ -427,6 +443,7 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 			issues.push(format!("MULTIPLE_EXTREMITIES ({ext_count} tips)"));
 		}
 
+		debug_info!("checking chronological timeline...");
 		// Chronological timeline check (detecting hidden fragmentation/breaks)
 		let mut timeline_breaks = 0_usize;
 		let mut timeline_segments = 1_usize;
@@ -445,6 +462,7 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 			}
 			prev_ts = Some(ts);
 		}
+		debug_info!("chronological timeline check done.");
 
 		if has_timeline_issue {
 			if fix {

@@ -1783,6 +1783,28 @@ impl Data {
 			.insert_into_batch(batch, &key, &val);
 	}
 
+	pub(super) fn multi_get_shortprevevents<'a, I>(
+		&'a self,
+		shorteventids: I,
+	) -> impl Stream<Item = Result<Vec<rooms::short::ShortEventId>>> + Send + 'a
+	where
+		I: Stream<Item = rooms::short::ShortEventId> + Send + 'a,
+	{
+		use futures::StreamExt;
+		self.shorteventid_shortprevevents
+			.get_batch(shorteventids.map(u64::to_be_bytes))
+			.map(|res| {
+				let val = res?;
+				let prev_shorts = val
+					.as_chunks::<{ size_of::<u64>() }>()
+					.0
+					.iter()
+					.map(|c| u64::from_be_bytes(*c))
+					.collect();
+				Ok(prev_shorts)
+			})
+	}
+
 	pub(super) fn multi_get_shortauthevents<'a, I>(
 		&'a self,
 		shorteventids: I,

@@ -601,6 +601,16 @@ impl Service {
 }
 
 impl Service {
+	pub fn multi_get_shortprevevents<'a, I>(
+		&'a self,
+		shorteventids: I,
+	) -> impl Stream<Item = Result<Vec<ShortEventId>>> + Send + 'a
+	where
+		I: Stream<Item = ShortEventId> + Send + 'a,
+	{
+		self.db.multi_get_shortprevevents(shorteventids)
+	}
+
 	pub fn multi_get_shortauthevents<'a, I>(
 		&'a self,
 		shorteventids: I,

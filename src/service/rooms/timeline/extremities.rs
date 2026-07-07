@@ -175,123 +175,68 @@ impl Service {
 	pub async fn recalculate_extremities(
 		&self,
 		room_id: &ruma::RoomId,
-		tail: usize,
+		_tail: usize,
 		update_db: bool,
 	) -> Result<(bool, usize)> {
 		let state_lock = self.services.state.mutex.lock(room_id).await;
 
-		let capacity = if tail == usize::MAX { 0 } else { tail };
-		let mut eids = Vec::with_capacity(capacity);
-
 		let mut stream = std::pin::pin!(self.db.room_event_ids_rev(room_id, None));
+		let mut eids = Vec::new();
 		while let Some(Ok(eid)) = stream.next().await {
 			eids.push(eid);
-			if eids.len() >= tail {
-				break;
-			}
 		}
 
-		// room_event_ids_rev returns newest first. We need oldest for true_extremities
-		eids.reverse();
+		// Fast path: bulk resolve OwnedEventId -> ShortEventId
+		let short_ids_stream = self
+			.services
+			.short
+			.multi_get_or_create_shorteventid(eids.iter().map(|id| &**id));
+		let short_ids: Vec<ShortEventId> = short_ids_stream.collect().await;
 
-		let mut short_ids: Vec<ShortEventId> = Vec::with_capacity(eids.len());
-		for eid in &eids {
-			let short = self.services.short.get_shorteventid(eid).await?;
-			short_ids.push(short);
-		}
-
+		let mut short_to_owned = HashMap::with_capacity(eids.len());
 		let mut ts_map = HashMap::with_capacity(eids.len());
-		let mut id_map: HashMap<ShortEventId, u32> = HashMap::with_capacity(eids.len());
-		let mut reverse_id_map: Vec<ShortEventId> = Vec::with_capacity(eids.len());
 
-		let get_or_insert_id = |short: ShortEventId,
-		                        id_map: &mut HashMap<ShortEventId, u32>,
-		                        reverse_id_map: &mut Vec<ShortEventId>|
-		 -> u32 {
-			if let Some(&id) = id_map.get(&short) {
-				id
-			} else {
-				let id = u32::try_from(reverse_id_map.len()).unwrap_or(0);
-				id_map.insert(short, id);
-				reverse_id_map.push(short);
-				id
+		for (short, eid) in short_ids.iter().zip(eids.iter()) {
+			short_to_owned.insert(*short, eid.clone());
+			if let Ok(ts) = self.db.get_origin_server_ts(eid).await {
+				ts_map.insert(eid.clone(), ts);
 			}
-		};
-
-		let mut graph: Vec<RoaringBitmap> = Vec::with_capacity(eids.len());
-		let mut sorted: Vec<u32> = Vec::with_capacity(eids.len());
-
-		for short in &short_ids {
-			let id = get_or_insert_id(*short, &mut id_map, &mut reverse_id_map);
-			let id_usize = usize::try_from(id).expect("u32 fits in usize");
-
-			if id_usize >= graph.len() {
-				graph.resize(id_usize.saturating_add(1), RoaringBitmap::new());
-			}
-
-			let mut prev_bitmap = RoaringBitmap::new();
-			let prev_shorts = self
-				.db
-				.get_shortprevevents(*short)
-				.await
-				.unwrap_or_default();
-			for prev_short in prev_shorts {
-				prev_bitmap.insert(get_or_insert_id(
-					prev_short,
-					&mut id_map,
-					&mut reverse_id_map,
-				));
-			}
-			graph[id_usize] = prev_bitmap;
-			sorted.push(id);
 		}
 
-		// Calculate true extremities via roaring bitmap intersections
-		let true_extremities_bm = calculate_true_extremities_roaring(&graph, &sorted);
+		// Fast path: bulk resolve ShortEventId -> shortprevevents
+		let prevs_stream = self
+			.db
+			.multi_get_shortprevevents(futures::stream::iter(short_ids.clone()));
+		let all_prevs: Vec<Result<Vec<ShortEventId>>> = prevs_stream.collect().await;
+
+		let mut graph_edges = Vec::with_capacity(short_ids.len());
+		for (short_id, prevs_res) in short_ids.into_iter().zip(all_prevs.into_iter()) {
+			let prevs = prevs_res.unwrap_or_default();
+			graph_edges.push((short_id, prevs));
+		}
+
+		// Lightning fast true forward extremity computation (entire room history) via
+		// rezzy
+		let true_tips_short = rezzy::state::at::find_forward_extremities_roaring(graph_edges);
 
 		let current_extremities = self.services.state.get_forward_extremities(room_id);
 		let current_set: HashSet<_> = current_extremities.collect().await;
 
-		let mut current_bm = RoaringBitmap::new();
-		for eid in &current_set {
-			if let Ok(short) = self.services.short.get_shorteventid(eid).await {
-				if let Some(&id) = id_map.get(&short) {
-					current_bm.insert(id);
-				}
-			}
-		}
-
-		let phantom_tips_bm = detect_phantom_extremities_roaring(&graph, &current_bm);
-		let merged_extremities_bm =
-			merge_true_extremities_roaring(&true_extremities_bm, &current_bm, &phantom_tips_bm);
-
-		let mut true_extremities_set: HashSet<OwnedEventId> = HashSet::with_capacity(
-			usize::try_from(merged_extremities_bm.len()).unwrap_or(usize::MAX),
-		);
-		for id in merged_extremities_bm {
-			let short = reverse_id_map[usize::try_from(id).expect("u32 fits in usize")];
-			if let Ok(eid) = self.services.short.get_eventid_from_short(short).await {
-				true_extremities_set.insert(eid);
-			}
-		}
-
-		// Add current extremities that were outside the graph window
-		for eid in &current_set {
-			if let Ok(short) = self.services.short.get_shorteventid(eid).await {
-				if !id_map.contains_key(&short) {
-					true_extremities_set.insert(eid.clone());
-				}
-			} else {
-				// If we can't even get its shorteventid, still preserve it just in case
+		let mut true_extremities_set: HashSet<OwnedEventId> =
+			HashSet::with_capacity(true_tips_short.len());
+		for short in true_tips_short {
+			if let Some(eid) = short_to_owned.get(&short) {
 				true_extremities_set.insert(eid.clone());
 			}
 		}
 
-		// Ensure we have timestamps for all tips we intend to keep
-		for eid in &true_extremities_set {
+		// Add current extremities that were outside the graph window (should be 0 now
+		// that we trace infinitely)
+		for eid in &current_set {
 			if !ts_map.contains_key(eid) {
+				true_extremities_set.insert(eid.clone());
 				if let Ok(ts) = self.db.get_origin_server_ts(eid).await {
-					ts_map.insert(eid.to_owned(), ts);
+					ts_map.insert(eid.clone(), ts);
 				}
 			}
 		}
@@ -314,8 +259,6 @@ impl Service {
 		}
 
 		if update_db {
-			// STRICT OVERWRITE: Erases phantom tips that fell out of the window.
-			// set_forward_extremities enforces MAX_FORWARD_EXTREMITIES cap.
 			self.services
 				.state
 				.set_forward_extremities(room_id, final_extremities.into_iter(), &state_lock)
