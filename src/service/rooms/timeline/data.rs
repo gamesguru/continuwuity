@@ -1696,6 +1696,32 @@ impl Data {
 			.try_flatten_stream()
 	}
 
+	pub(super) fn room_shorteventids_rev<'a>(
+		&'a self,
+		room_id: &'a RoomId,
+		until: Option<PduCount>,
+	) -> impl Stream<Item = Result<rooms::short::ShortEventId>> + Send + 'a {
+		let seek_count = until
+			.unwrap_or_else(PduCount::max)
+			.saturating_inc(Direction::Backward);
+		self.count_to_id(room_id, seek_count, Direction::Backward)
+			.map_ok(move |current| {
+				let prefix = current.shortroomid();
+				self.room_pducount_eventid
+					.rev_raw_stream_from(&current)
+					.ready_try_take_while(move |(key, _)| Ok(key.starts_with(&prefix)))
+					.map_ok(|(_key, val)| {
+						let s = std::str::from_utf8(val).expect("invalid event id utf8");
+						let event_id = <&EventId>::try_from(s).expect("invalid event id bytes");
+						self.services
+							.short
+							.get_shorteventid_blocking(event_id)
+							.expect("missing short event id")
+					})
+			})
+			.try_flatten_stream()
+	}
+
 	#[allow(dead_code)]
 	pub(super) fn store_shortprevevents(
 		&self,

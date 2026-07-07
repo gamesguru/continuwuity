@@ -179,18 +179,12 @@ impl Service {
 	) -> Result<(bool, usize)> {
 		let state_lock = self.services.state.mutex.lock(room_id).await;
 
-		let mut stream = std::pin::pin!(self.db.room_event_ids_rev(room_id, None).chunks(1024));
+		let mut stream =
+			std::pin::pin!(self.db.room_shorteventids_rev(room_id, None).chunks(1024));
 		let mut graph_edges = Vec::new();
 
 		while let Some(chunk) = stream.next().await {
-			let eids: Vec<OwnedEventId> = chunk.into_iter().filter_map(Result::ok).collect();
-
-			// Fast path: bulk resolve OwnedEventId -> ShortEventId
-			let short_ids_stream = self
-				.services
-				.short
-				.multi_get_or_create_shorteventid(eids.iter().map(|id| &**id));
-			let short_ids: Vec<ShortEventId> = short_ids_stream.collect().await;
+			let short_ids: Vec<ShortEventId> = chunk.into_iter().filter_map(Result::ok).collect();
 
 			// Fast path: bulk resolve ShortEventId -> shortprevevents
 			let prevs_stream = self
