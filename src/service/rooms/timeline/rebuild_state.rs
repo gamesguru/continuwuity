@@ -447,7 +447,24 @@ impl super::Service {
 			events_meta_map.insert(meta.0.as_str(), meta);
 		}
 
-		while let Some((resolved_id, owned_update)) = rx.recv().await {
+		// ── Instrumentation counters ──
+		let mut n_unchanged = 0_usize;
+		let mut n_new = 0_usize;
+		let mut n_new_deduped = 0_usize;
+		let mut t_unchanged = std::time::Duration::ZERO;
+		let mut t_compress = std::time::Duration::ZERO;
+		let mut t_save = std::time::Duration::ZERO;
+		let mut t_write = std::time::Duration::ZERO;
+		let mut t_recv_wait = std::time::Duration::ZERO;
+		let mut _t_last_recv = Instant::now();
+
+		while let Some((resolved_id, owned_update)) = {
+			let t0 = Instant::now();
+			let result = rx.recv().await;
+			t_recv_wait = t_recv_wait.saturating_add(t0.elapsed());
+			_t_last_recv = Instant::now();
+			result
+		} {
 			let Some(&(eid, _, _, state_key, _)) = events_meta_map.get(resolved_id.as_str())
 			else {
 				continue;
@@ -469,17 +486,23 @@ impl super::Service {
 
 			let ssh = match owned_update {
 				| StateUpdateOwned::Unchanged { parent_event_id } => {
+					let t0 = Instant::now();
+					n_unchanged = n_unchanged.saturating_add(1);
 					groups_deduped = groups_deduped.saturating_add(1);
 					// Look up parent's SSH by string key to avoid OwnedEventId parsing
 					let parent_eid: OwnedEventId = parent_event_id
 						.as_str()
 						.try_into()
 						.expect("parent_event_id from rezzy should be a valid event ID");
-					event_ssh.get(&parent_eid).copied().unwrap_or(empty_ssh)
+					let result = event_ssh.get(&parent_eid).copied().unwrap_or(empty_ssh);
+					t_unchanged = t_unchanged.saturating_add(t0.elapsed());
+					result
 				},
 				| StateUpdateOwned::New { state } => {
+					n_new = n_new.saturating_add(1);
 					// Compress state to BTreeSet<u128> for storage but hash sequentially
 					// for time.
+					let tc0 = Instant::now();
 					let mut compressed = BTreeSet::new();
 					let mut hasher = std::collections::hash_map::DefaultHasher::new();
 					for (key, ev_id_str) in &state {
@@ -491,12 +514,15 @@ impl super::Service {
 						compressed.insert(compressed_val);
 					}
 					let content_hash = hasher.finish();
+					t_compress = t_compress.saturating_add(tc0.elapsed());
 
 					// Dedupe/compress groups and generate pdu_shortstatehash
 					if let Some(&existing_ssh) = content_to_ssh.get(&content_hash) {
 						groups_deduped = groups_deduped.saturating_add(1);
+						n_new_deduped = n_new_deduped.saturating_add(1);
 						existing_ssh
 					} else {
+						let ts0 = Instant::now();
 						let result = self
 							.services
 							.state_compressor
@@ -509,11 +535,13 @@ impl super::Service {
 						let ssh = result.shortstatehash;
 						content_to_ssh.insert(content_hash, ssh);
 						groups_compressed = groups_compressed.saturating_add(1);
+						t_save = t_save.saturating_add(ts0.elapsed());
 						ssh
 					}
 				},
 			};
 
+			let tw0 = Instant::now();
 			// Write pdu_shortstatehash for this event
 			if state_key.is_some() {
 				if let Ok((pdu, mut json)) = self.db.get_from_eventid_pdu(eid).await {
@@ -533,6 +561,7 @@ impl super::Service {
 					.state
 					.set_pdu_shortstatehash(shorteventid, ssh);
 			}
+			t_write = t_write.saturating_add(tw0.elapsed());
 
 			event_ssh.insert(eid.clone(), ssh);
 			current_shortstatehash = ssh;
@@ -553,6 +582,14 @@ impl super::Service {
 			processed,
 			groups_compressed,
 			groups_deduped,
+		);
+		eprintln!(
+			"  [PERF] consumer breakdown: unchanged={n_unchanged} new={n_new} \
+			 new_deduped={n_new_deduped}"
+		);
+		eprintln!(
+			"  [PERF]   t_recv_wait={t_recv_wait:?}  t_unchanged={t_unchanged:?}  \
+			 t_compress={t_compress:?}  t_save={t_save:?}  t_write={t_write:?}"
 		);
 
 		Ok((event_ssh, current_shortstatehash))
