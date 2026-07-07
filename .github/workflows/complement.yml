@@ -185,7 +185,6 @@ jobs:
           CONDUWUIT_SENDER_RETRY_BACKOFF_LIMIT: 5
           COMPLEMENT_SHARE_ENV_PREFIX: PASS_
           PASS_CONDUWUIT_DEFAULT_ROOM_VERSION: '"${{ matrix.room_version }}"'
-          PASS_CONDUWUIT_MSC4499_BACKOFF_SECS: 5
         run: |
           make complement/run COMPLEMENT_DIR=./complement-src
 
