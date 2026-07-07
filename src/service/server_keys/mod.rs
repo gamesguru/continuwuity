@@ -304,6 +304,28 @@ pub async fn add_signing_keys(
 	historical_keys
 		.old_verify_keys
 		.extend(filtered_old_verify_keys);
+
+	// MSC4499: "The server SHOULD cap total stored keys (active + old) at 1,000.
+	// When it hits 1,000, it evicts the oldest from old_verify_keys."
+	// Note: Keys in verify_keys MUST always be prioritized and exempt from
+	// eviction.
+	let total_keys = historical_keys.verify_keys.len() + historical_keys.old_verify_keys.len();
+	if total_keys > 1000 {
+		let to_evict = total_keys.saturating_sub(1000);
+		conduwuit::debug!(
+			"MSC4499: Evicting {to_evict} oldest keys for {origin} to respect 1,000-key quota"
+		);
+
+		// Collect keys to evict: oldest first (lowest expired_ts)
+		let mut ovks: Vec<_> = historical_keys.old_verify_keys.iter().collect();
+		ovks.sort_by_key(|(_, ok)| ok.expired_ts);
+
+		for i in 0..to_evict.min(ovks.len()) {
+			let (key_id, _) = ovks[i];
+			historical_keys.old_verify_keys.remove(key_id);
+		}
+	}
+
 	self.db
 		.server_signingkeys
 		.raw_put(&historical_key, Json(&historical_keys));
