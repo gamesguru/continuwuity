@@ -348,7 +348,7 @@ pub(super) async fn import_pdus(
 		.services
 		.rooms
 		.timeline
-		.recalculate_extremities(&room_id, 500, true)
+		.recalculate_extremities(&room_id, true)
 		.await?;
 
 	self.write_str(&format!(

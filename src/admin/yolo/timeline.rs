@@ -111,7 +111,7 @@ pub(super) async fn purge_timeline_pdu(&self, event_id: OwnedEventId) -> Result 
 				.services
 				.rooms
 				.timeline
-				.recalculate_extremities(&room_id, 100, true)
+				.recalculate_extremities(&room_id, true)
 				.await?;
 			self.write_str(&format!(
 				"Purged {event_id} from timeline and outlier tables. DAG Extremities \

@@ -140,7 +140,7 @@ pub(super) async fn recalculate_extremities(
 		.services
 		.rooms
 		.timeline
-		.recalculate_extremities(&room_id, actual_tail, true)
+		.recalculate_extremities(&room_id, true)
 		.await?;
 
 	if changed {
@@ -163,16 +163,11 @@ pub(super) async fn recalculate_extremities(
 #[admin_command]
 pub(super) async fn count_extremities(&self, room: OwnedRoomOrAliasId, tail: i64) -> Result {
 	let room_id = self.services.rooms.alias.resolve(&room).await?;
-	let actual_tail = if tail < 0 {
-		usize::MAX
-	} else {
-		usize::try_from(tail).unwrap_or(usize::MAX)
-	};
 	let (changed, num_true) = self
 		.services
 		.rooms
 		.timeline
-		.recalculate_extremities(&room_id, actual_tail, false)
+		.recalculate_extremities(&room_id, false)
 		.await?;
 	self.write_str(&format!("Found {num_true} true DAG tips. (changed={changed})"))
 		.await

@@ -179,39 +179,29 @@ impl Service {
 	) -> Result<(bool, usize)> {
 		let state_lock = self.services.state.mutex.lock(room_id).await;
 
-		let mut stream = std::pin::pin!(self.db.room_event_ids_rev(room_id, None));
-		let mut eids = Vec::new();
-		while let Some(Ok(eid)) = stream.next().await {
-			eids.push(eid);
-		}
+		let mut stream = std::pin::pin!(self.db.room_event_ids_rev(room_id, None).chunks(1024));
+		let mut graph_edges = Vec::new();
 
-		// Fast path: bulk resolve OwnedEventId -> ShortEventId
-		let short_ids_stream = self
-			.services
-			.short
-			.multi_get_or_create_shorteventid(eids.iter().map(|id| &**id));
-		let short_ids: Vec<ShortEventId> = short_ids_stream.collect().await;
+		while let Some(chunk) = stream.next().await {
+			let eids: Vec<OwnedEventId> = chunk.into_iter().filter_map(Result::ok).collect();
 
-		let mut short_to_owned = HashMap::with_capacity(eids.len());
-		let mut ts_map = HashMap::with_capacity(eids.len());
+			// Fast path: bulk resolve OwnedEventId -> ShortEventId
+			let short_ids_stream = self
+				.services
+				.short
+				.multi_get_or_create_shorteventid(eids.iter().map(|id| &**id));
+			let short_ids: Vec<ShortEventId> = short_ids_stream.collect().await;
 
-		for (short, eid) in short_ids.iter().zip(eids.iter()) {
-			short_to_owned.insert(*short, eid.clone());
-			if let Ok(ts) = self.db.get_origin_server_ts(eid).await {
-				ts_map.insert(eid.clone(), ts);
+			// Fast path: bulk resolve ShortEventId -> shortprevevents
+			let prevs_stream = self
+				.db
+				.multi_get_shortprevevents(futures::stream::iter(short_ids.clone()));
+			let all_prevs: Vec<Result<Vec<ShortEventId>>> = prevs_stream.collect().await;
+
+			for (short_id, prevs_res) in short_ids.into_iter().zip(all_prevs.into_iter()) {
+				let prevs = prevs_res.unwrap_or_default();
+				graph_edges.push((short_id, prevs));
 			}
-		}
-
-		// Fast path: bulk resolve ShortEventId -> shortprevevents
-		let prevs_stream = self
-			.db
-			.multi_get_shortprevevents(futures::stream::iter(short_ids.clone()));
-		let all_prevs: Vec<Result<Vec<ShortEventId>>> = prevs_stream.collect().await;
-
-		let mut graph_edges = Vec::with_capacity(short_ids.len());
-		for (short_id, prevs_res) in short_ids.into_iter().zip(all_prevs.into_iter()) {
-			let prevs = prevs_res.unwrap_or_default();
-			graph_edges.push((short_id, prevs));
 		}
 
 		// Lightning fast true forward extremity computation (entire room history) via
