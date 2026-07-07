@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
 
-use conduwuit::{Err, Result, debug_error, debug_warn, implement, trace};
+use conduwuit::{Err, Result, debug_error, debug_warn, err, implement, trace};
 use database::Deserialized;
 use ruma::{
 	CanonicalJsonObject, MilliSecondsSinceUnixEpoch, RoomVersionId, ServerName,
@@ -28,13 +28,18 @@ pub async fn get_event_keys(
 
 	// Extract origin_server_ts to enforce expired key rejection per MSC4499.
 	// Events signed by a key whose expired_ts <= origin_server_ts must be rejected.
-	let origin_server_ts = object.get("origin_server_ts").and_then(|v| match v {
-		| ruma::CanonicalJsonValue::Integer(ts) => {
-			let uint = ruma::UInt::new(u64::try_from(i128::from(*ts)).ok()?)?;
-			Some(MilliSecondsSinceUnixEpoch(uint))
-		},
-		| _ => None,
-	});
+	// origin_server_ts is required on all Matrix events; reject if absent/malformed
+	// to prevent bypassing the expiry check via crafted events.
+	let origin_server_ts = object
+		.get("origin_server_ts")
+		.and_then(|v| match v {
+			| ruma::CanonicalJsonValue::Integer(ts) => {
+				let uint = ruma::UInt::new(u64::try_from(i128::from(*ts)).ok()?)?;
+				Some(MilliSecondsSinceUnixEpoch(uint))
+			},
+			| _ => None,
+		})
+		.ok_or_else(|| err!(BadServerResponse("Event missing or malformed origin_server_ts")))?;
 
 	let mut keys = PubKeyMap::new();
 	for (server, key_ids) in &required {
@@ -81,8 +86,8 @@ where
 	keys
 }
 
-/// Like `get_pubkeys_for`, but filters out expired keys when an event timestamp
-/// is provided. Per MSC4499: an event signed at time T is valid iff T <
+/// Like `get_pubkeys_for`, but filters out expired keys based on the event
+/// timestamp. Per MSC4499: an event signed at time T is valid iff T <
 /// expired_ts. Keys in `old_verify_keys` whose `expired_ts` <=
 /// `origin_server_ts` are excluded.
 #[implement(super::Service)]
@@ -90,7 +95,7 @@ pub async fn get_pubkeys_for_event<'a, I>(
 	&self,
 	origin: &ServerName,
 	key_ids: I,
-	origin_server_ts: Option<MilliSecondsSinceUnixEpoch>,
+	origin_server_ts: MilliSecondsSinceUnixEpoch,
 ) -> PubKeys
 where
 	I: Iterator<Item = &'a ServerSigningKeyId> + Send,
@@ -99,19 +104,16 @@ where
 
 	for key_id in key_ids {
 		if let Ok(verify_key) = self.get_verify_key(origin, key_id).await {
-			// Check if this key is expired relative to the event's timestamp
-			if let Some(event_ts) = origin_server_ts {
-				if self
-					.is_key_expired_for_event(origin, key_id, event_ts)
-					.await
-				{
-					debug_warn!(
-						%origin, %key_id,
-						"Rejecting expired key for event verification \
-						 (key expired before event origin_server_ts)"
-					);
-					continue;
-				}
+			if self
+				.is_key_expired_for_event(origin, key_id, origin_server_ts)
+				.await
+			{
+				debug_warn!(
+					%origin, %key_id,
+					"Rejecting expired key for event verification \
+					 (key expired before event origin_server_ts)"
+				);
+				continue;
 			}
 			keys.insert(key_id.into(), verify_key.key);
 		}
