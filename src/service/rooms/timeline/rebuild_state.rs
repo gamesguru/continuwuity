@@ -288,7 +288,19 @@ impl super::Service {
 		);
 		(eid_to_idx, idx_to_eid, final_bitmaps)
 	}
+}
 
+/// Owned variant of `rezzy::StateUpdate` for sending across thread boundaries.
+enum StateUpdateOwned {
+	New {
+		state: rezzy::SharedState<String>,
+	},
+	Unchanged {
+		parent_event_id: String,
+	},
+}
+
+impl super::Service {
 	// ── Phase 3+4: Batch state computation via rezzy + inline DB writes ──
 	//
 	// Delegates the entire state walk (topological sort, fork resolution at
@@ -391,15 +403,23 @@ impl super::Service {
 		tokio::task::spawn_blocking(move || {
 			let target_refs: Vec<&String> = all_ids_owned.iter().collect();
 			let mut abort = false;
-			rezzy::compute_state_at_streaming(
+			rezzy::compute_state_at_streaming_optimized(
 				&target_refs,
 				&lean_events_moved,
 				version,
-				|id, state| {
+				|id, update| {
+					let owned_update = match update {
+						| rezzy::StateUpdate::New { state, .. } =>
+							StateUpdateOwned::New { state },
+						| rezzy::StateUpdate::Unchanged { parent_event_id, .. } =>
+							StateUpdateOwned::Unchanged {
+								parent_event_id: parent_event_id.clone(),
+							},
+					};
 					if abort {
 						return;
 					}
-					if tx.blocking_send((id, state)).is_err() {
+					if tx.blocking_send((id, owned_update)).is_err() {
 						abort = true;
 					}
 				},
@@ -427,7 +447,7 @@ impl super::Service {
 			events_meta_map.insert(meta.0.as_str(), meta);
 		}
 
-		while let Some((resolved_id, state)) = rx.recv().await {
+		while let Some((resolved_id, owned_update)) = rx.recv().await {
 			let Some(&(eid, _, _, state_key, _)) = events_meta_map.get(resolved_id.as_str())
 			else {
 				continue;
@@ -447,36 +467,51 @@ impl super::Service {
 				);
 			}
 
-			// Compress state to BTreeSet<u128> for storage but hash sequentially for time.
-			let mut compressed = BTreeSet::new();
-			let mut hasher = std::collections::hash_map::DefaultHasher::new();
-			for (key, ev_id_str) in &state {
-				let ssk = ssk_cache.get(key).copied().unwrap_or(0);
-				let sei = sei_str_cache.get(ev_id_str).copied().unwrap_or(0);
-				let compressed_val = rooms::state_compressor::compress_state_event(ssk, sei);
-				compressed_val.hash(&mut hasher);
-				compressed.insert(compressed_val);
-			}
-			let content_hash = hasher.finish();
+			let ssh = match owned_update {
+				| StateUpdateOwned::Unchanged { parent_event_id } => {
+					groups_deduped = groups_deduped.saturating_add(1);
+					// Look up parent's SSH by string key to avoid OwnedEventId parsing
+					let parent_eid: OwnedEventId = parent_event_id
+						.as_str()
+						.try_into()
+						.expect("parent_event_id from rezzy should be a valid event ID");
+					event_ssh.get(&parent_eid).copied().unwrap_or(empty_ssh)
+				},
+				| StateUpdateOwned::New { state } => {
+					// Compress state to BTreeSet<u128> for storage but hash sequentially
+					// for time.
+					let mut compressed = BTreeSet::new();
+					let mut hasher = std::collections::hash_map::DefaultHasher::new();
+					for (key, ev_id_str) in &state {
+						let ssk = ssk_cache.get(key).copied().unwrap_or(0);
+						let sei = sei_str_cache.get(ev_id_str).copied().unwrap_or(0);
+						let compressed_val =
+							rooms::state_compressor::compress_state_event(ssk, sei);
+						compressed_val.hash(&mut hasher);
+						compressed.insert(compressed_val);
+					}
+					let content_hash = hasher.finish();
 
-			// Dedupe/compress groups and generate pdu_shortstatehash
-			let ssh = if let Some(&existing_ssh) = content_to_ssh.get(&content_hash) {
-				groups_deduped = groups_deduped.saturating_add(1);
-				existing_ssh
-			} else {
-				let result = self
-					.services
-					.state_compressor
-					.save_state_with_parent(
-						room_id,
-						Some(current_shortstatehash),
-						Arc::new(compressed),
-					)
-					.await?;
-				let ssh = result.shortstatehash;
-				content_to_ssh.insert(content_hash, ssh);
-				groups_compressed = groups_compressed.saturating_add(1);
-				ssh
+					// Dedupe/compress groups and generate pdu_shortstatehash
+					if let Some(&existing_ssh) = content_to_ssh.get(&content_hash) {
+						groups_deduped = groups_deduped.saturating_add(1);
+						existing_ssh
+					} else {
+						let result = self
+							.services
+							.state_compressor
+							.save_state_with_parent(
+								room_id,
+								Some(current_shortstatehash),
+								Arc::new(compressed),
+							)
+							.await?;
+						let ssh = result.shortstatehash;
+						content_to_ssh.insert(content_hash, ssh);
+						groups_compressed = groups_compressed.saturating_add(1);
+						ssh
+					}
+				},
 			};
 
 			// Write pdu_shortstatehash for this event
