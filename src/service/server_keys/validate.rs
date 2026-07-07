@@ -21,13 +21,20 @@ pub(super) fn check_no_duplicate_json_keys(raw: &str) -> Result {
 	// Operates on bytes to avoid string-slice panics on multi-byte chars.
 	let bytes = raw.as_bytes();
 	let vk_count = check_raw_duplicates(bytes, b"verify_keys")?;
-	check_raw_duplicates(bytes, b"old_verify_keys")?;
+	let ovk_count = check_raw_duplicates(bytes, b"old_verify_keys")?;
 
 	// MSC4499: "If a single key response payload contains more than 50 keys in its
 	// verify_keys dictionary, receiving servers MUST treat the entire response
 	// payload as malformed/hostile and reject it."
 	if vk_count > 50 {
 		return Err!(BadServerResponse("Too many keys in verify_keys (limit: 50)"));
+	}
+
+	// MSC4499: "If a single key response payload contains more than 50 keys in its
+	// old_verify_keys dictionary, receiving servers MUST treat the entire response
+	// payload as malformed/hostile and reject it."
+	if ovk_count > 50 {
+		return Err!(BadServerResponse("Too many keys in old_verify_keys (limit: 50)"));
 	}
 
 	// Cross-map collision: same key ID with different body across sections

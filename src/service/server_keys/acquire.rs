@@ -149,7 +149,7 @@ where
 	I: Iterator<Item = (OwnedServerName, Vec<OwnedServerSigningKeyId>)> + Send,
 {
 	let timeout = Instant::now()
-		.checked_add(Duration::from_secs(10))
+		.checked_add(Duration::from_secs(5))
 		.expect("timeout overflows");
 
 	let mut requests: FuturesUnordered<_> = batch

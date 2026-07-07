@@ -140,13 +140,12 @@ async fn get_signing_keys_for(
 		{
 			| Ok(new_keys) => {
 				services.server_keys.clear_backoff(server_name).await;
-				if services
+				if let Ok(patched_keys) = services
 					.server_keys
-					.add_signing_keys(new_keys.clone())
+					.add_signing_keys(new_keys)
 					.await
-					.is_ok()
 				{
-					server_key = Some(new_keys);
+					server_key = Some(patched_keys);
 				}
 			},
 			| Err(_) => {
