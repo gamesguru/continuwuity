@@ -80,6 +80,10 @@ CROSS JOIN LATERAL (
     WHERE (branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream')
     OR version_string LIKE '%main%')
     AND room_version IS NOT DISTINCT FROM r.room_version
+    AND arch IS NOT DISTINCT FROM r.arch
+    AND os IS NOT DISTINCT FROM r.os
+    AND profile IS NOT DISTINCT FROM r.profile
+    AND features IS NOT DISTINCT FROM r.features
     ORDER BY run_date DESC
     LIMIT 1
 ) dbr
