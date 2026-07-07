@@ -117,10 +117,9 @@ async fn get_signing_keys_for(
 	let needs_fetch = match &server_key {
 		| Some(keys) => {
 			// Re-fetch if any requested key ID is missing from the cached payload
-			let missing_requested_key = !requested_key_ids.is_empty()
-				&& !requested_key_ids.iter().any(|kid| {
-					keys.verify_keys.contains_key(*kid) || keys.old_verify_keys.contains_key(*kid)
-				});
+			let missing_requested_key = requested_key_ids.iter().any(|kid| {
+				!keys.verify_keys.contains_key(*kid) && !keys.old_verify_keys.contains_key(*kid)
+			});
 
 			if missing_requested_key {
 				true

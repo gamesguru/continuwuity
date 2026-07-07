@@ -138,8 +138,7 @@ async fn is_key_expired_for_event(
 	}
 
 	// Check the historical key record
-	let mut historical_key = origin.as_bytes().to_vec();
-	historical_key.extend_from_slice(b"\0historical");
+	let historical_key = super::historical_db_key(origin);
 
 	if let Ok(historical_keys) =
 		self.db

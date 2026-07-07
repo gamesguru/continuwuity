@@ -9,7 +9,7 @@ use std::{collections::BTreeMap, sync::Arc, time::Duration};
 
 use conduwuit::{
 	Result, Server, debug_error, debug_warn, err, implement, trace,
-	utils::{IterStream, timepoint_from_now},
+	utils::{IterStream, MutexMap, timepoint_from_now},
 };
 use database::{Deserialized, Json, Map};
 use futures::StreamExt;
@@ -33,7 +33,9 @@ pub struct Service {
 	/// the backoff expires. Prevents hammering unreachable origins.
 	fetch_backoff: RwLock<BTreeMap<OwnedServerName, std::time::Instant>>,
 	/// Deduplicates concurrent in-flight key fetches per server name.
-	in_flight: RwLock<BTreeMap<OwnedServerName, Arc<tokio::sync::Notify>>>,
+	/// Uses MutexMap (same pattern as resolver) — concurrent calls for the
+	/// same server serialize on the mutex; the second caller re-checks cache.
+	fetching: MutexMap<OwnedServerName, ()>,
 	services: Services,
 	db: Data,
 }
@@ -67,7 +69,7 @@ impl crate::Service for Service {
 			verify_keys,
 			minimum_valid,
 			fetch_backoff: RwLock::new(BTreeMap::new()),
-			in_flight: RwLock::new(BTreeMap::new()),
+			fetching: MutexMap::new(),
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
 				sending: args.depend::<sending::Service>("sending"),
@@ -113,37 +115,28 @@ pub async fn clear_backoff(&self, server: &ServerName) {
 }
 
 /// Performs a `server_request` with fetch coalescing: concurrent calls for
-/// the same server share a single in-flight request rather than each making
-/// their own network request.
+/// the same server serialize on a per-server mutex (same pattern as the
+/// resolver). The second caller re-checks cache after the first finishes,
+/// avoiding redundant network requests.
 #[implement(Service)]
 pub async fn server_request_coalesced(&self, server: &ServerName) -> Result<ServerSigningKeys> {
-	// Check if there's already an in-flight request for this server
-	{
-		let in_flight = self.in_flight.read().await;
-		if let Some(notify) = in_flight.get(server) {
-			let notify = notify.clone();
-			drop(in_flight);
-			// Wait for the in-flight request to finish, then read from cache
-			notify.notified().await;
-			return self.signing_keys_for(server).await;
-		}
+	let _guard = self.fetching.lock(server).await;
+
+	// Re-check cache — a concurrent caller may have already fetched
+	if let Ok(cached) = self.signing_keys_for(server).await {
+		return Ok(cached);
 	}
 
-	// Register ourselves as the in-flight request
-	let notify = Arc::new(tokio::sync::Notify::new());
-	self.in_flight
-		.write()
-		.await
-		.insert(server.into(), notify.clone());
+	self.server_request(server).await
+}
 
-	// Perform the actual request
-	let result = self.server_request(server).await;
-
-	// Remove the in-flight entry and notify all waiters
-	self.in_flight.write().await.remove(server);
-	notify.notify_waiters();
-
-	result
+/// Constructs the database key for the historical/cumulative signing keys
+/// record. Centralizes the `origin\0historical` key format to avoid
+/// fragile hand-crafted key construction throughout the codebase.
+pub(super) fn historical_db_key(origin: &ServerName) -> Vec<u8> {
+	let mut key = origin.as_bytes().to_vec();
+	key.extend_from_slice(b"\0historical");
+	key
 }
 
 #[implement(Service)]
@@ -181,8 +174,7 @@ pub async fn add_signing_keys(&self, new_keys: ServerSigningKeys) -> Result<()> 
 	}
 
 	// Load the historical, cumulative keys under `origin\0historical`
-	let mut historical_key = origin.as_bytes().to_vec();
-	historical_key.extend_from_slice(b"\0historical");
+	let historical_key = historical_db_key(origin);
 
 	let historical_keys_res = self
 		.db
@@ -309,8 +301,7 @@ pub async fn required_keys_exist(
 pub async fn verify_key_exists(&self, origin: &ServerName, key_id: &ServerSigningKeyId) -> bool {
 	type KeysMap<'a> = BTreeMap<&'a ServerSigningKeyId, &'a RawJsonValue>;
 
-	let mut historical_key = origin.as_bytes().to_vec();
-	historical_key.extend_from_slice(b"\0historical");
+	let historical_key = historical_db_key(origin);
 
 	if let Ok(keys) = self
 		.db
@@ -358,8 +349,7 @@ pub async fn verify_key_exists(&self, origin: &ServerName, key_id: &ServerSignin
 
 #[implement(Service)]
 pub async fn verify_keys_for(&self, origin: &ServerName) -> VerifyKeys {
-	let mut historical_key = origin.as_bytes().to_vec();
-	historical_key.extend_from_slice(b"\0historical");
+	let historical_key = historical_db_key(origin);
 
 	let mut keys = BTreeMap::new();
 
