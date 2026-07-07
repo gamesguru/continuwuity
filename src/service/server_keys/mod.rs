@@ -393,7 +393,9 @@ pub async fn verify_keys_for(&self, origin: &ServerName) -> VerifyKeys {
 	}
 
 	if let Ok(origin_keys) = self.signing_keys_for(origin).await {
-		keys.extend(merge_old_keys(origin_keys).verify_keys);
+		for (key_id, verify_key) in merge_old_keys(origin_keys).verify_keys {
+			keys.entry(key_id).or_insert(verify_key);
+		}
 	}
 
 	if self.services.globals.server_is_ours(origin) {
