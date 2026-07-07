@@ -159,7 +159,7 @@ pub fn active_verify_key(&self) -> (&ServerSigningKeyId, &VerifyKey) {
 }
 
 #[implement(Service)]
-pub async fn add_signing_keys(&self, new_keys: ServerSigningKeys) -> Result<()> {
+pub async fn add_signing_keys(&self, mut new_keys: ServerSigningKeys) -> Result<()> {
 	let origin = &new_keys.server_name;
 
 	// Intra-payload collision verification (MSC 00FD)
@@ -201,6 +201,8 @@ pub async fn add_signing_keys(&self, new_keys: ServerSigningKeys) -> Result<()> 
 		}
 		s
 	};
+
+	let enforce_fsw = self.services.server.config.msc4499_first_seen_wins;
 
 	// Merging with Collision Detection (First Seen Wins)
 	let mut filtered_verify_keys = new_keys.verify_keys.clone();
@@ -267,7 +269,41 @@ pub async fn add_signing_keys(&self, new_keys: ServerSigningKeys) -> Result<()> 
 		.server_signingkeys
 		.raw_put(&historical_key, Json(&historical_keys));
 
-	// Store the untouched, freshly signed response under `origin`
+	// MSC4499 First-Seen-Wins enforcement on the origin record.
+	// When enabled, replace any colliding keys in new_keys with their first-seen
+	// values before storing. This ensures the notary never serves replaced keys.
+	// Collisions are always logged above regardless of this setting.
+	// Note: historical_keys now contains the complete merged state after extend().
+	if enforce_fsw {
+		for (key_id, vk) in &mut new_keys.verify_keys {
+			let first_seen = historical_keys
+				.verify_keys
+				.get(key_id)
+				.map(|k| &k.key)
+				.or_else(|| historical_keys.old_verify_keys.get(key_id).map(|k| &k.key));
+
+			if let Some(first_seen) = first_seen {
+				if vk.key != *first_seen {
+					vk.key = first_seen.clone();
+				}
+			}
+		}
+		for (key_id, ok) in &mut new_keys.old_verify_keys {
+			let first_seen = historical_keys
+				.verify_keys
+				.get(key_id)
+				.map(|k| &k.key)
+				.or_else(|| historical_keys.old_verify_keys.get(key_id).map(|k| &k.key));
+
+			if let Some(first_seen) = first_seen {
+				if ok.key != *first_seen {
+					ok.key = first_seen.clone();
+				}
+			}
+		}
+	}
+
+	// Store the (possibly FSW-patched) response under `origin`
 	self.db.server_signingkeys.raw_put(origin, Json(&new_keys));
 
 	Ok(())

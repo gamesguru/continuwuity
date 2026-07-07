@@ -906,6 +906,17 @@ pub struct Config {
 	#[serde(default)]
 	pub only_query_trusted_key_servers: bool,
 
+	/// Enforce MSC4499 First-Seen-Wins semantics for federation signing keys.
+	/// When a server re-publishes a key ID with different key material, the
+	/// first-seen key is retained and the collision is logged. This prevents
+	/// key hijacking attacks where a compromised server tries to replace an
+	/// existing key. Setting this to false still logs collisions but does not
+	/// enforce; useful for observation before enforcement.
+	///
+	/// default: true
+	#[serde(default = "true_fn")]
+	pub msc4499_first_seen_wins: bool,
+
 	/// Maximum number of keys to request in each trusted server batch query.
 	///
 	/// default: 1024
