@@ -309,7 +309,10 @@ pub async fn add_signing_keys(
 	// When it hits 1,000, it evicts the oldest from old_verify_keys."
 	// Note: Keys in verify_keys MUST always be prioritized and exempt from
 	// eviction.
-	let total_keys = historical_keys.verify_keys.len() + historical_keys.old_verify_keys.len();
+	let total_keys = historical_keys
+		.verify_keys
+		.len()
+		.saturating_add(historical_keys.old_verify_keys.len());
 	if total_keys > 1000 {
 		let to_evict = total_keys.saturating_sub(1000);
 		conduwuit::debug!(
@@ -320,9 +323,14 @@ pub async fn add_signing_keys(
 		let mut ovks: Vec<_> = historical_keys.old_verify_keys.iter().collect();
 		ovks.sort_by_key(|(_, ok)| ok.expired_ts);
 
-		for i in 0..to_evict.min(ovks.len()) {
-			let (key_id, _) = ovks[i];
-			historical_keys.old_verify_keys.remove(key_id);
+		let to_evict_ids: Vec<_> = ovks
+			.iter()
+			.take(to_evict)
+			.map(|(id, _)| (*id).to_owned())
+			.collect();
+
+		for key_id in to_evict_ids {
+			historical_keys.old_verify_keys.remove(&key_id);
 		}
 	}
 
