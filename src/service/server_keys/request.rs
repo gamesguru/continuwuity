@@ -1,6 +1,6 @@
 use std::{collections::BTreeMap, fmt::Debug};
 
-use conduwuit::{Err, Result, debug, implement};
+use conduwuit::{Err, Result, debug, debug_warn, implement};
 use ruma::{
 	OwnedServerName, OwnedServerSigningKeyId, ServerName, ServerSigningKeyId,
 	api::federation::discovery::{
@@ -8,7 +8,20 @@ use ruma::{
 		get_remote_server_keys_batch::{self, v2::QueryCriteria},
 		get_server_keys,
 	},
+	serde::Raw,
 };
+
+use super::validate::check_no_duplicate_json_keys;
+
+/// MSC4499: Validate raw JSON for duplicate keys, then deserialize.
+/// Shared by all key ingestion paths (direct fetch, notary, batch notary).
+fn deserialize_validated(raw: &Raw<ServerSigningKeys>) -> Option<ServerSigningKeys> {
+	if let Err(e) = check_no_duplicate_json_keys(raw.json().get()) {
+		debug_warn!("Rejecting key response with duplicate JSON keys: {e}");
+		return None;
+	}
+	raw.deserialize().ok()
+}
 
 #[implement(super::Service)]
 pub(super) async fn batch_notary_request<'a, S, K>(
@@ -58,15 +71,16 @@ where
 			"notary request"
 		);
 
-		let response = self
+		let batch_response = self
 			.services
 			.sending
 			.send_synapse_request(notary, request)
-			.await?
+			.await?;
+
+		let response = batch_response
 			.server_keys
-			.into_iter()
-			.map(|key| key.deserialize())
-			.filter_map(Result::ok);
+			.iter()
+			.filter_map(deserialize_validated);
 
 		results.extend(response);
 	}
@@ -87,30 +101,37 @@ pub async fn notary_request(
 		minimum_valid_until_ts: self.minimum_valid_ts(),
 	};
 
-	let response = self
+	let notary_response = self
 		.services
 		.sending
 		.send_federation_request(notary, request)
-		.await?
-		.server_keys
-		.into_iter()
-		.map(|key| key.deserialize())
-		.filter_map(Result::ok);
+		.await?;
 
-	Ok(response)
+	Ok(notary_response
+		.server_keys
+		.iter()
+		.filter_map(deserialize_validated)
+		.collect::<Vec<_>>()
+		.into_iter())
 }
 
 #[implement(super::Service)]
 pub async fn server_request(&self, target: &ServerName) -> Result<ServerSigningKeys> {
 	use get_server_keys::v2::Request;
 
-	let server_signing_key = self
+	let response = self
 		.services
 		.sending
 		.send_federation_request(target, Request::new())
-		.await
-		.map(|response| response.server_key)
-		.and_then(|key| key.deserialize().map_err(Into::into))?;
+		.await?;
+
+	// MSC4499: Check raw JSON for duplicate keys before serde_json dedup
+	check_no_duplicate_json_keys(response.server_key.json().get())?;
+
+	let server_signing_key = response
+		.server_key
+		.deserialize()
+		.map_err(|e| conduwuit::err!(BadServerResponse("{e}")))?;
 
 	if server_signing_key.server_name != target {
 		return Err!(BadServerResponse(debug_warn!(
