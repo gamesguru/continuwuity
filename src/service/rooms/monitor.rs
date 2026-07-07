@@ -116,7 +116,7 @@ impl Service {
 
 				// Step 2: Auto-heal DAG extremities (prune dead forks)
 				// Check last 50 events to find true tips, but we DO NOT modify DB.
-				match self.services.timeline.recalculate_extremities(&room_id, 50, false).await {
+				match self.services.timeline.recalculate_extremities(&room_id, false).await {
 					Ok((true, tips)) => info!(target: "forwardfill", "Auto-healed DAG extremities for room {room_id} ({tips} true tips)"),
 					Ok((false, _)) => {},
 					Err(e) => warn!(target: "forwardfill", "Error recalculating extremities for {room_id}: {e}"),

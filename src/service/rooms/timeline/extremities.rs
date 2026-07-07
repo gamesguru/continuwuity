@@ -149,7 +149,7 @@ impl Service {
 	/// recalculation. This is a convenience wrapper around
 	/// `recalculate_extremities` with standardized logging.
 	pub async fn prune_extremities(&self, room_id: &ruma::RoomId, tail: usize) {
-		match self.recalculate_extremities(room_id, tail, true).await {
+		match self.recalculate_extremities(room_id, true).await {
 			| Ok((true, tips)) => info!(
 				%room_id, tail, tips,
 				"pruned extremities via tail-based recalculation"
@@ -175,7 +175,6 @@ impl Service {
 	pub async fn recalculate_extremities(
 		&self,
 		room_id: &ruma::RoomId,
-		_tail: usize,
 		update_db: bool,
 	) -> Result<(bool, usize)> {
 		let state_lock = self.services.state.mutex.lock(room_id).await;

@@ -448,7 +448,7 @@ pub(super) async fn check_rooms(&self, problems_only: bool, fix: bool) -> Result
 		let mut timeline_breaks = 0_usize;
 		let mut timeline_segments = 1_usize;
 		let mut has_timeline_issue = false;
-		let pdus = self.services.rooms.timeline.all_pdus(room_id);
+		let pdus = self.services.rooms.timeline.all_pdus(room_id).take(1000);
 		futures::pin_mut!(pdus);
 		let mut prev_ts = None;
 		while let Some((_count, pdu)) = pdus.next().await {
