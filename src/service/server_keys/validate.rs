@@ -30,11 +30,12 @@ pub(super) fn check_no_duplicate_json_keys(raw: &str) -> Result {
 		return Err!(BadServerResponse("Too many keys in verify_keys (limit: 50)"));
 	}
 
-	// MSC4499: "If a single key response payload contains more than 50 keys in its
-	// old_verify_keys dictionary, receiving servers MUST treat the entire response
-	// payload as malformed/hostile and reject it."
-	if ovk_count > 50 {
-		return Err!(BadServerResponse("Too many keys in old_verify_keys (limit: 50)"));
+	// MSC4499: "If a single key response payload contains more than 1000 keys in
+	// its old_verify_keys dictionary, receiving servers SHOULD treat the entire
+	// response payload as malformed/hostile and reject it."
+	// Note: the ceiling for active verify_keys remains strictly 50.
+	if ovk_count > 1000 {
+		return Err!(BadServerResponse("Too many keys in old_verify_keys (limit: 1000)"));
 	}
 
 	// Cross-map collision: same key ID with different body across sections
