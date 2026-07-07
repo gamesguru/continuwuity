@@ -182,44 +182,6 @@ where
 		| _ => rezzy::StateResVersion::V2_1_1,
 	};
 
-	let (unconflicted_state, conflicted_ids) = rezzy::resolve::multi::partition_state_maps(
-		lean_state_sets.iter(),
-		lean_state_sets.len(),
-	);
-
-	let unconflicted_event_ids: Vec<OwnedEventId> = unconflicted_state
-		.values()
-		.filter_map(|s| OwnedEventId::try_from(s.as_str()).ok())
-		.collect();
-
-	let conflicted_event_ids: Vec<OwnedEventId> = conflicted_ids
-		.iter()
-		.filter_map(|s| OwnedEventId::try_from(s.as_str()).ok())
-		.collect();
-
-	let u_auth_bitmap = self
-		.services
-		.auth_chain
-		.get_auth_chain_bitmap(room_id, unconflicted_event_ids.iter().map(std::ops::Deref::deref))
-		.await?;
-
-	let c_auth_bitmap = self
-		.services
-		.auth_chain
-		.get_auth_chain_bitmap(room_id, conflicted_event_ids.iter().map(std::ops::Deref::deref))
-		.await?;
-
-	let diff_bitmap = std::ops::Sub::sub(c_auth_bitmap, u_auth_bitmap);
-	let diff_short_ids: Vec<_> = diff_bitmap.into_iter().collect();
-
-	let diff_event_ids: std::collections::HashSet<String> = self
-		.services
-		.short
-		.multi_get_eventid_from_short::<OwnedEventId, _>(futures::stream::iter(diff_short_ids))
-		.ready_filter_map(|r| r.ok().map(|eid| eid.to_string()))
-		.collect()
-		.await;
-
 	struct LocalArenaProvider<'a, F> {
 		global_cache: &'a moka::sync::Cache<OwnedEventId, Arc<rezzy::LeanEvent<String>>>,
 		arena: typed_arena::Arena<Arc<rezzy::LeanEvent<String>>>,
@@ -288,11 +250,14 @@ where
 		fetch_pdu,
 	};
 
-	// Call rezzy (sync -- no async overhead, lazy BFS loading)
+	// Let rezzy BFS-discover the auth context lazily from conflicted events.
+	// A precomputed auth diff (c_auth - u_auth) was previously used here but
+	// was incorrect for V2.1: it strips shared ancestors (create, power levels)
+	// that compute_v2_1_subgraph needs to walk through.
 	let resolved_lean = rezzy::resolve::multi::resolve_state_maps_lazy_with_diff::<
 		String,
 		serde_json::Value,
-	>(&lean_state_sets, &provider, Some(diff_event_ids), version);
+	>(&lean_state_sets, &provider, None::<Vec<String>>, version);
 
 	// Convert back to Ruma StateMap
 	let mut resolved = StateMap::new();

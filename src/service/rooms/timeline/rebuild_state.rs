@@ -112,7 +112,7 @@ impl super::Service {
 		// Phase 3+4: In-memory state walk with eviction + inline DB writes
 		eprintln!("[rebuild_state] Phase 3+4: walk and write...");
 		let (event_ssh, current_shortstatehash) =
-			self.rebuild_walk_and_write(room_id, &ctx).await?;
+			Box::pin(self.rebuild_walk_and_write(room_id, &ctx)).await?;
 		eprintln!("[rebuild_state] Phase 3+4 done: {} SSHs computed", event_ssh.len());
 
 		// Phase 5: Final multi-head extremity merge
@@ -295,7 +295,7 @@ enum StateUpdateOwned {
 		state: rezzy::SharedState<String>,
 		/// Incrementally maintained LtHash from rezzy, used as dedup key to
 		/// skip O(N) compression loop if the same state has already been seen.
-		hash: rezzy::LtHash,
+		hash: Box<rezzy::LtHash>,
 	},
 	Unchanged {
 		parent_event_id: String,
@@ -412,7 +412,7 @@ impl super::Service {
 				|id, update| {
 					let owned_update = match update {
 						| rezzy::StateUpdate::New { state, hash } =>
-							StateUpdateOwned::New { state, hash },
+							StateUpdateOwned::New { state, hash: Box::new(hash) },
 						| rezzy::StateUpdate::Unchanged { parent_event_id, .. } =>
 							StateUpdateOwned::Unchanged {
 								parent_event_id: parent_event_id.clone(),
@@ -534,7 +534,7 @@ impl super::Service {
 							)
 							.await?;
 						let ssh = result.shortstatehash;
-						lthash_to_ssh.insert(hash, ssh);
+						lthash_to_ssh.insert(*hash, ssh);
 						groups_compressed = groups_compressed.saturating_add(1);
 						t_save = t_save.saturating_add(ts0.elapsed());
 						ssh
