@@ -44,6 +44,22 @@ pub(crate) async fn get_state_accumulator_route(
 		"Serving MSC4500 state accumulator request"
 	);
 
+	// TODO: This endpoint lacks federation request signature verification
+	// and ACL checks. It should use AccessCheck like state/state_ids endpoints
+	// once we have a way to extract the federation origin from custom routes.
+
+	// Verify the event belongs to the requested room
+	let pdu = services
+		.rooms
+		.timeline
+		.get_pdu(&query.event_id)
+		.await
+		.map_err(|_| err!(Request(NotFound("Event not found."))))?;
+
+	if pdu.room_id != Some(room_id.clone()) {
+		return Err!(Request(NotFound("Event does not belong to the requested room.")));
+	}
+
 	let shortstatehash = services
 		.rooms
 		.state_accessor

@@ -1669,10 +1669,16 @@ async fn db_lt_20(services: &Services) -> Result<()> {
 	let stream = shortstatehash_statediff.raw_stream();
 	pin_mut!(stream);
 
-	while let Some(Ok((ssh_bytes, _))) = stream.next().await {
+	while let Some(result) = stream.next().await {
+		let (ssh_bytes, _) =
+			result.map_err(|e| err!(Database("v20 migration stream error: {e}")))?;
 		count = count.saturating_add(1);
 
-		if shortstatehash_lthash.get_blocking(&ssh_bytes).is_err() {
+		let needs_compute = match shortstatehash_lthash.get_blocking(&ssh_bytes) {
+			| Ok(_) => false,
+			| Err(_) => true,
+		};
+		if needs_compute {
 			let ssh = conduwuit::utils::u64_from_bytes(ssh_bytes)
 				.map_err(|e| err!(Database("bad shortstatehash: {e}")))?;
 
@@ -1733,6 +1739,6 @@ mod tests {
 		// The hash includes DATABASE_VERSION.to_be_bytes() as first input.
 		// We can't easily test mutation, but we verify the constant is
 		// included by confirming it matches the expected value.
-		assert_eq!(DATABASE_VERSION, 19);
+		assert_eq!(DATABASE_VERSION, 20);
 	}
 }

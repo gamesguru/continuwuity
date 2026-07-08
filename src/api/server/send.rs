@@ -38,7 +38,10 @@ use ruma::{
 			send_transaction_message,
 		},
 	},
-	events::receipt::{ReceiptEvent, ReceiptEventContent, ReceiptType},
+	events::{
+		StateEventType,
+		receipt::{ReceiptEvent, ReceiptEventContent, ReceiptType},
+	},
 	int,
 	serde::Raw,
 	to_device::DeviceIdOrAllDevices,
@@ -387,28 +390,66 @@ async fn inject_state_hash_mismatches(
 			continue;
 		}
 
-		let Ok(sstatehash) = services
-			.rooms
-			.state_accessor
-			.pdu_shortstatehash(&event_id)
-			.await
-		else {
-			continue;
-		};
-		let Ok(lthash) = services.rooms.state_compressor.get_lthash(sstatehash).await else {
+		let Some(after_digest) = compute_receiver_after_digest(services, &event_id).await else {
 			continue;
 		};
 
-		let digest = super::state_accumulator::serialize_lthash(&lthash).1;
-		if digest != hash_info.after {
+		if after_digest != hash_info.after {
 			pdu_res.insert(
 				"state_hash_mismatch".to_owned(),
 				serde_json::json!({
 					"algorithm": "lthash16",
-					"digest": digest
+					"digest": after_digest
 				}),
 			);
 		}
+	}
+}
+
+/// Compute the "after" digest for a received event by applying its state
+/// delta to the before-state LtHash.  `pdu_shortstatehash` returns the state
+/// snapshot *before* the event, so for state events we must remove the
+/// previous event at (type, state_key) and insert the new one.
+async fn compute_receiver_after_digest(
+	services: &crate::State,
+	event_id: &OwnedEventId,
+) -> Option<String> {
+	let sstatehash = services
+		.rooms
+		.state_accessor
+		.pdu_shortstatehash(event_id)
+		.await
+		.ok()?;
+	let lthash_before = services
+		.rooms
+		.state_compressor
+		.get_lthash(sstatehash)
+		.await
+		.ok()?;
+
+	// Check if this is a state event that modifies the hash
+	let pdu = services.rooms.timeline.get_pdu(event_id).await.ok()?;
+	if let Some(state_key) = &pdu.state_key {
+		let ev_type = StateEventType::from(pdu.kind.to_string().as_str());
+		let ev_type_str = pdu.kind.to_string();
+		let mut lthash_after = lthash_before;
+
+		// Remove old event at this (type, state_key) if one exists
+		if let Ok(old_event_id) = services
+			.rooms
+			.state_accessor
+			.state_get_id::<OwnedEventId>(sstatehash, &ev_type, state_key)
+			.await
+		{
+			lthash_after.remove(&ev_type_str, state_key, &old_event_id);
+		}
+
+		// Insert the new event
+		lthash_after.insert(&ev_type_str, state_key, event_id);
+		Some(super::state_accumulator::serialize_lthash(&lthash_after).1)
+	} else {
+		// Non-state event: after == before
+		Some(super::state_accumulator::serialize_lthash(&lthash_before).1)
 	}
 }
 

@@ -983,11 +983,11 @@ impl super::Service {
 		let merged_ssh = Box::pin(
 			self.services
 				.state_compressor
-				.save_state(room_id, Arc::new(compressed))
-				.await?
-				.shortstatehash,
-		);
+				.save_state(room_id, Arc::new(compressed)),
+		)
+		.await?
+		.shortstatehash;
 
-		Ok(*merged_ssh)
+		Ok(merged_ssh)
 	}
 }
