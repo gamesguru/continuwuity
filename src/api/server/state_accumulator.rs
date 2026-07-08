@@ -101,7 +101,7 @@ mod tests {
 
 	#[test]
 	fn test_serialize_empty_lthash() {
-		let empty_lthash = rezzy::LtHash::new();
+		let empty_lthash = rezzy::LtHash::ZERO;
 		let (lattice, digest) = serialize_lthash(&empty_lthash);
 
 		// The lattice for an empty LtHash is 2048 null bytes.
@@ -123,10 +123,12 @@ mod tests {
 
 	#[test]
 	fn test_serialize_populated_lthash() {
-		let mut lthash = rezzy::LtHash::new();
+		let mut lthash = rezzy::LtHash::ZERO;
 		// Add some dummy data to manipulate the lthash state
-		lthash.add(b"test1");
-		lthash.add(b"test2");
+		let event_id1: OwnedEventId = "$abc:example.com".try_into().unwrap();
+		let event_id2: OwnedEventId = "$def:example.com".try_into().unwrap();
+		lthash.insert("m.room.name", "", &event_id1);
+		lthash.insert("m.room.topic", "", &event_id2);
 
 		let (lattice, digest) = serialize_lthash(&lthash);
 
@@ -143,7 +145,7 @@ mod tests {
 		);
 
 		// The digest and lattice should no longer be the empty one
-		let empty_lthash = rezzy::LtHash::new();
+		let empty_lthash = rezzy::LtHash::ZERO;
 		let (empty_lattice, empty_digest) = serialize_lthash(&empty_lthash);
 		assert_ne!(lattice, empty_lattice);
 		assert_ne!(digest, empty_digest);
