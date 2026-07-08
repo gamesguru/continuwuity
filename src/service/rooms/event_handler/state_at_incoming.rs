@@ -153,8 +153,21 @@ where
 		return Ok(None);
 	};
 
-	let mut fork_compressed_states = Vec::with_capacity(extremity_sstatehashes.len());
+	let mut fork_lthashes = Vec::with_capacity(extremity_sstatehashes.len());
 	for &(sstatehash, ref prev_event) in &extremity_sstatehashes {
+		fork_lthashes.push(self.get_extremity_lthash(sstatehash, prev_event).await?);
+	}
+
+	let all_identical = fork_lthashes.windows(2).all(|w| w[0] == w[1]);
+
+	let forks_to_process = if all_identical {
+		&extremity_sstatehashes[..1]
+	} else {
+		&extremity_sstatehashes[..]
+	};
+
+	let mut fork_compressed_states = Vec::with_capacity(forks_to_process.len());
+	for &(sstatehash, ref prev_event) in forks_to_process {
 		let mut state = self
 			.services
 			.state_compressor
@@ -192,6 +205,14 @@ where
 			));
 		}
 		fork_compressed_states.push(state);
+	}
+
+	if all_identical && fork_lthashes.len() > 1 {
+		trace!(
+			"LtHash digests match across all {} forks! Bypassing state resolution.",
+			fork_lthashes.len()
+		);
+		return Ok(Some(std::sync::Arc::new(fork_compressed_states.pop().unwrap())));
 	}
 
 	fork_compressed_states.sort();
@@ -410,4 +431,41 @@ where
 	}
 
 	Ok(Some(std::sync::Arc::new(final_state)))
+}
+
+#[implement(super::Service)]
+async fn get_extremity_lthash(
+	&self,
+	sstatehash: u64,
+	prev_event: &conduwuit_core::PduEvent,
+) -> Result<rezzy::LtHash> {
+	let mut lthash = self
+		.services
+		.state_compressor
+		.get_lthash(sstatehash)
+		.await?;
+
+	if let Some(state_key) = prev_event.state_key() {
+		let event_type = prev_event.kind().to_string();
+
+		// If the previous state had a different event for this state key, remove its
+		// hash.
+		if let Ok(old_event_id) = self
+			.services
+			.state_accessor
+			.state_get_id::<ruma::OwnedEventId>(
+				sstatehash,
+				&event_type.as_str().into(),
+				state_key,
+			)
+			.await
+		{
+			lthash.remove(&event_type, state_key, &old_event_id);
+		}
+
+		// Add the hash of the new state event.
+		lthash.insert(&event_type, state_key, prev_event.event_id());
+	}
+
+	Ok(lthash)
 }
