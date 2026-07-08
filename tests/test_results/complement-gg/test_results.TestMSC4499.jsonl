@@ -13,5 +13,5 @@
 {"Action":"pass","Test":"TestMSC4499KeyNegativeCachingAndBackoff"}
 {"Action":"pass","Test":"TestMSC4499KeyProvisionalOverrideFreeze"}
 {"Action":"pass","Test":"TestMSC4499KeyRotation"}
-{"Action":"fail","Test":"TestMSC4499KeyStorageQuotaResilience"}
+{"Action":"pass","Test":"TestMSC4499KeyStorageQuotaResilience"}
 {"Action":"pass","Test":"TestMSC4499KeyVerifyKeysCeiling"}

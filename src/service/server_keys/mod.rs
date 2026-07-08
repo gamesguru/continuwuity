@@ -17,7 +17,7 @@ use futures::StreamExt;
 use ruma::{
 	CanonicalJsonObject, MilliSecondsSinceUnixEpoch, OwnedServerName, OwnedServerSigningKeyId,
 	RoomVersionId, ServerName, ServerSigningKeyId,
-	api::federation::discovery::{ServerSigningKeys, VerifyKey},
+	api::federation::discovery::{OldVerifyKey, ServerSigningKeys, VerifyKey},
 	serde::Raw,
 	signatures::{Ed25519KeyPair, PublicKeyMap, PublicKeySet},
 };
@@ -313,10 +313,10 @@ pub async fn add_signing_keys(
 		.verify_keys
 		.len()
 		.saturating_add(historical_keys.old_verify_keys.len());
-	if total_keys > 1000 {
-		let to_evict = total_keys.saturating_sub(1000);
+	if total_keys > 2000 {
+		let to_evict = total_keys.saturating_sub(2000);
 		conduwuit::debug!(
-			"MSC4499: Evicting {to_evict} oldest keys for {origin} to respect 1,000-key quota"
+			"MSC4499: Evicting {to_evict} oldest keys for {origin} to respect 2,000-key quota"
 		);
 
 		// Collect keys to evict: oldest first (lowest expired_ts)
@@ -500,15 +500,23 @@ pub async fn signing_keys_for(&self, origin: &ServerName) -> Result<ServerSignin
 		.deserialized::<ServerSigningKeys>()
 	{
 		// We use extend to add historical keys that aren't already in the latest
-		// payload. BTreeMap::extend will overwrite if the key already exists, so we
-		// do it this way to ensure latest keys take precedence.
+		// payload. We move anything from historical_keys.verify_keys into
+		// old_verify_keys if it's not in the latest verify_keys, to ensure
+		// we stay under the 50-key "hostile" limit for the active set.
 		let mut merged_ovks = historical_keys.old_verify_keys;
 		merged_ovks.extend(keys.old_verify_keys);
-		keys.old_verify_keys = merged_ovks;
 
-		let mut merged_vks = historical_keys.verify_keys;
-		merged_vks.extend(keys.verify_keys);
-		keys.verify_keys = merged_vks;
+		for (id, key) in historical_keys.verify_keys {
+			if !keys.verify_keys.contains_key(&id) {
+				merged_ovks.entry(id).or_insert_with(|| OldVerifyKey {
+					key: key.key,
+					expired_ts: keys.valid_until_ts, /* Use the current payload's start as a
+					                                  * placeholder */
+				});
+			}
+		}
+
+		keys.old_verify_keys = merged_ovks;
 	}
 
 	Ok(keys)
