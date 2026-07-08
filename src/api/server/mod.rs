@@ -23,6 +23,7 @@ pub(super) mod state_ids;
 pub(super) mod user;
 pub(super) mod version;
 pub(super) mod well_known;
+pub(super) mod state_accumulator;
 
 pub(super) use backfill::*;
 pub(super) use edutypes::*;
@@ -48,6 +49,7 @@ pub(super) use state_ids::*;
 pub(super) use user::*;
 pub(super) use version::*;
 pub(super) use well_known::*;
+pub(super) use state_accumulator::*;
 
 mod utils;
 use utils::AccessCheck;
