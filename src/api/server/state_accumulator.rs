@@ -57,19 +57,7 @@ pub(crate) async fn get_state_accumulator_route(
 		.get_lthash(shortstatehash)
 		.await?;
 
-	let mut bytes = vec![0_u8; 2048];
-	for (i, val) in lthash.0.iter().enumerate() {
-		let le = val.to_le_bytes();
-		bytes[i.saturating_mul(2)] = le[0];
-		bytes[i.saturating_mul(2).saturating_add(1)] = le[1];
-	}
-	let lattice = URL_SAFE_NO_PAD.encode(&bytes);
-
-	let mut digest = String::with_capacity(64);
-	for b in lthash.checksum() {
-		use std::fmt::Write;
-		write!(&mut digest, "{b:02x}").unwrap();
-	}
+	let (lattice, digest) = serialize_lthash(&lthash);
 
 	let n_state_events = services
 		.rooms
@@ -87,4 +75,77 @@ pub(crate) async fn get_state_accumulator_route(
 	};
 
 	Ok(axum::Json(response))
+}
+
+pub(crate) fn serialize_lthash(lthash: &rezzy::LtHash) -> (String, String) {
+	let mut bytes = vec![0_u8; 2048];
+	for (i, val) in lthash.0.iter().enumerate() {
+		let le = val.to_le_bytes();
+		bytes[i.saturating_mul(2)] = le[0];
+		bytes[i.saturating_mul(2).saturating_add(1)] = le[1];
+	}
+	let lattice = URL_SAFE_NO_PAD.encode(&bytes);
+
+	let mut digest = String::with_capacity(64);
+	for b in lthash.checksum() {
+		use std::fmt::Write;
+		write!(&mut digest, "{b:02x}").unwrap();
+	}
+
+	(lattice, digest)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn test_serialize_empty_lthash() {
+		let empty_lthash = rezzy::LtHash::new();
+		let (lattice, digest) = serialize_lthash(&empty_lthash);
+
+		// The lattice for an empty LtHash is 2048 null bytes.
+		// 2048 bytes of 0s encoded in base64url without padding:
+		let expected_lattice = "A".repeat(2730) + "AA";
+		assert_eq!(
+			lattice, expected_lattice,
+			"Lattice encoding must be deterministic URL-safe base64"
+		);
+
+		// Checksum format must be 64-character lowercase hex (32 bytes)
+		assert_eq!(digest.len(), 64);
+		assert!(
+			digest
+				.chars()
+				.all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+		);
+	}
+
+	#[test]
+	fn test_serialize_populated_lthash() {
+		let mut lthash = rezzy::LtHash::new();
+		// Add some dummy data to manipulate the lthash state
+		lthash.add(b"test1");
+		lthash.add(b"test2");
+
+		let (lattice, digest) = serialize_lthash(&lthash);
+
+		// Lattice must remain exactly 2732 base64url-encoded characters long (2048
+		// bytes without padding)
+		assert_eq!(lattice.len(), 2732);
+
+		// Ensure checksum is also stable length and lowercase hex format
+		assert_eq!(digest.len(), 64);
+		assert!(
+			digest
+				.chars()
+				.all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+		);
+
+		// The digest and lattice should no longer be the empty one
+		let empty_lthash = rezzy::LtHash::new();
+		let (empty_lattice, empty_digest) = serialize_lthash(&empty_lthash);
+		assert_ne!(lattice, empty_lattice);
+		assert_ne!(digest, empty_digest);
+	}
 }
