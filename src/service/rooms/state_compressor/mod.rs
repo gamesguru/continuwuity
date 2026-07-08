@@ -519,8 +519,12 @@ pub async fn save_state(
 		.await
 		.ok();
 
-	self.save_state_with_parent(room_id, previous_shortstatehash, new_state_ids_compressed)
-		.await
+	Box::pin(self.save_state_with_parent(
+		room_id,
+		previous_shortstatehash,
+		new_state_ids_compressed,
+	))
+	.await
 }
 
 /// Returns the new shortstatehash, and the state diff from the previous
@@ -876,12 +880,12 @@ pub fn save_lthash(&self, shortstatehash: ShortStateHash, lthash: LtHash) {
 	let mut buf = [0_u8; 2048];
 	for (i, val) in lthash.0.iter().enumerate() {
 		let bytes = val.to_le_bytes();
-		buf[i * 2] = bytes[0];
-		buf[i * 2 + 1] = bytes[1];
+		buf[i.saturating_mul(2)] = bytes[0];
+		buf[i.saturating_mul(2).saturating_add(1)] = bytes[1];
 	}
 	self.db
 		.shortstatehash_lthash
-		.insert(&shortstatehash.to_be_bytes(), &buf);
+		.insert(&shortstatehash.to_be_bytes(), buf);
 	self.lthash_cache.lock().insert(shortstatehash, lthash);
 }
 

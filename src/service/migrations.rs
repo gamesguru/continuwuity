@@ -1673,7 +1673,7 @@ async fn db_lt_20(services: &Services) -> Result<()> {
 		count = count.saturating_add(1);
 
 		if shortstatehash_lthash.get_blocking(&ssh_bytes).is_err() {
-			let ssh = conduwuit::utils::u64_from_bytes(&ssh_bytes)
+			let ssh = conduwuit::utils::u64_from_bytes(ssh_bytes)
 				.map_err(|e| err!(Database("bad shortstatehash: {e}")))?;
 
 			let diff = services.rooms.state_compressor.get_statediff(ssh).await?;

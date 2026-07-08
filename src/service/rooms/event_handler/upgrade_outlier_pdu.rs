@@ -439,14 +439,13 @@ where
 			}
 
 			// Heavy computation WITHOUT the lock
-			let delta = self
-				.calculate_state_delta(
-					&incoming_pdu,
-					state_at_incoming_event.clone(),
-					room_id,
-					&room_version_id,
-				)
-				.await?;
+			let delta = Box::pin(self.calculate_state_delta(
+				&incoming_pdu,
+				state_at_incoming_event.clone(),
+				room_id,
+				&room_version_id,
+			))
+			.await?;
 
 			// Acquire lock for the commit phase
 			trace!(room_id = %room_id, "Locking the room");
@@ -1094,11 +1093,12 @@ async fn calculate_state_delta(
 
 	// Save the resolved state delta into the database (safe to do concurrently)
 	debug!("Compressing new room state");
-	let state_delta = self
-		.services
-		.state_compressor
-		.save_state(room_id, new_room_state)
-		.await?;
+	let state_delta = Box::pin(
+		self.services
+			.state_compressor
+			.save_state(room_id, new_room_state),
+	)
+	.await?;
 
 	// If the state delta is empty (no added/removed events), we can fast-path out
 	// without taking the room state lock and churning caches, UNLESS the state hash
