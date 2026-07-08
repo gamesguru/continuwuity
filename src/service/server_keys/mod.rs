@@ -310,6 +310,24 @@ pub async fn add_signing_keys(
 		historical_keys.verify_keys.remove(key_id);
 	}
 
+	let now = MilliSecondsSinceUnixEpoch::now();
+
+	// Any key in historical_keys.verify_keys that is NOT in filtered_verify_keys
+	// has been retired. We must move it to old_verify_keys with a fixed expired_ts.
+	let mut retired_keys = Vec::new();
+	for (key_id, key) in &historical_keys.verify_keys {
+		if !filtered_verify_keys.contains_key(key_id) {
+			retired_keys.push((key_id.clone(), key.clone()));
+		}
+	}
+	for (key_id, key) in retired_keys {
+		historical_keys.verify_keys.remove(&key_id);
+		historical_keys
+			.old_verify_keys
+			.entry(key_id)
+			.or_insert_with(|| OldVerifyKey { key: key.key, expired_ts: now });
+	}
+
 	// Store the filtered/merged historical keys
 	historical_keys.verify_keys.extend(filtered_verify_keys);
 	historical_keys
@@ -518,16 +536,6 @@ pub async fn signing_keys_for(&self, origin: &ServerName) -> Result<ServerSignin
 		// we stay under the 50-key "hostile" limit for the active set.
 		let mut merged_ovks = historical_keys.old_verify_keys;
 		merged_ovks.extend(keys.old_verify_keys);
-
-		let now = MilliSecondsSinceUnixEpoch::now();
-		for (id, key) in historical_keys.verify_keys {
-			if !keys.verify_keys.contains_key(&id) {
-				merged_ovks.entry(id).or_insert_with(|| OldVerifyKey {
-					key: key.key,
-					expired_ts: now, // Use current time as the expiration for this spillover key
-				});
-			}
-		}
 
 		keys.old_verify_keys = merged_ovks;
 	}
