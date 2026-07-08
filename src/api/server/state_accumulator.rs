@@ -23,6 +23,8 @@ pub(crate) async fn get_state_accumulator_route(
 	axum::extract::Path(room_id_str): axum::extract::Path<String>,
 	axum::extract::Query(query): axum::extract::Query<StateAccumulatorQuery>,
 ) -> Result<impl axum::response::IntoResponse> {
+	use futures::StreamExt;
+
 	let room_id = OwnedRoomId::try_from(room_id_str)
 		.map_err(|_| err!(Request(InvalidParam("Invalid room ID."))))?;
 
@@ -58,18 +60,17 @@ pub(crate) async fn get_state_accumulator_route(
 	let mut bytes = vec![0_u8; 2048];
 	for (i, val) in lthash.0.iter().enumerate() {
 		let le = val.to_le_bytes();
-		bytes[i * 2] = le[0];
-		bytes[i * 2 + 1] = le[1];
+		bytes[i.saturating_mul(2)] = le[0];
+		bytes[i.saturating_mul(2).saturating_add(1)] = le[1];
 	}
 	let lattice = URL_SAFE_NO_PAD.encode(&bytes);
 
 	let mut digest = String::with_capacity(64);
 	for b in lthash.checksum() {
 		use std::fmt::Write;
-		write!(&mut digest, "{:02x}", b).unwrap();
+		write!(&mut digest, "{b:02x}").unwrap();
 	}
 
-	use futures::StreamExt;
 	let n_state_events = services
 		.rooms
 		.state_accessor

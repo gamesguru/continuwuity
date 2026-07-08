@@ -83,7 +83,7 @@ pub(crate) async fn migrations(services: &Services) -> Result<()> {
 	}
 
 	if users_count > 0 {
-		migrate(services).await
+		Box::pin(migrate(services)).await
 	} else {
 		fresh(services).await
 	}
@@ -364,7 +364,7 @@ async fn migrate(services: &Services) -> Result<()> {
 
 	// Version 20 - populate MSC4500 LtHash state accumulators
 	if services.globals.db.database_version().await < 20 {
-		db_lt_20(services)
+		Box::pin(db_lt_20(services))
 			.await
 			.map_err(|e| err!("Failed to run v20 migrations: {e}"))?;
 	}
