@@ -1,4 +1,4 @@
-use std::iter::once;
+use std::{collections::HashMap, iter::once};
 
 use conduwuit::{Err, Error, PduEvent, RoomVersion};
 use conduwuit_core::{
@@ -121,8 +121,7 @@ pub async fn backfill_if_required(
 	loop {
 		// Phase 1: Collect scanned PDUs into an event map. With `impl DagNode
 		// for Pdu`, rezzy operates directly on PduEvent — no LeanEvent conversion.
-		let mut event_map: std::collections::HashMap<OwnedEventId, PduEvent> =
-			std::collections::HashMap::new();
+		let mut event_map: HashMap<OwnedEventId, PduEvent> = HashMap::new();
 		let mut scanned = 0_usize;
 		let mut pdus = self
 			.pdus_rev(room_id, Some(from.saturating_inc(ruma::api::Direction::Forward)))
@@ -557,7 +556,7 @@ pub async fn promote_outliers_sorted(
 	}
 
 	// Build LeanEvent map from outlier PDUs for topo sort
-	let mut events_map: rezzy::HashMap<String, rezzy::LeanEvent> = rezzy::HashMap::new();
+	let mut events_map: HashMap<String, rezzy::LeanEvent> = HashMap::new();
 
 	for event_id in event_ids {
 		// Skip events already in the timeline
@@ -580,6 +579,7 @@ pub async fn promote_outliers_sorted(
 			prev_events: pdu.prev_events.iter().map(ToString::to_string).collect(),
 			power_level: 0,
 			depth: u64::from(pdu.depth),
+			..Default::default()
 		};
 		events_map.insert(event_id.to_string(), lean);
 	}
@@ -603,11 +603,13 @@ pub async fn promote_outliers_sorted(
 			| ver => return Err!(Database("Unsupported room version for topo sort: {ver}")),
 		}
 	};
+	let mut pl_cache = HashMap::new();
 	let sorted_ids = rezzy::resolve::sorting::lean_kahn_sort(
 		&events_map,
 		&events_map, // auth context is the same set
 		create_ev,
 		state_res_version,
+		&mut pl_cache,
 	);
 
 	debug!(

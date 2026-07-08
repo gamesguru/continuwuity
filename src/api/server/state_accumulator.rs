@@ -1,8 +1,12 @@
 use axum::extract::State;
+use axum_extra::{TypedHeader, headers::Authorization};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use conduwuit::{Err, Result, err, info};
-use ruma::{OwnedEventId, OwnedRoomId};
+use ruma::{OwnedEventId, OwnedRoomId, api::federation::authentication::XMatrix};
 use serde::{Deserialize, Serialize};
+use service::server_keys::{PubKeyMap, PubKeys};
+
+use super::AccessCheck;
 
 #[derive(Deserialize)]
 pub(crate) struct StateAccumulatorQuery {
@@ -20,6 +24,7 @@ pub(crate) struct StateAccumulatorResponse {
 
 pub(crate) async fn get_state_accumulator_route(
 	State(services): State<crate::State>,
+	TypedHeader(Authorization(x_matrix)): TypedHeader<Authorization<XMatrix>>,
 	axum::extract::Path(room_id_str): axum::extract::Path<String>,
 	axum::extract::Query(query): axum::extract::Query<StateAccumulatorQuery>,
 ) -> Result<impl axum::response::IntoResponse> {
@@ -28,25 +33,23 @@ pub(crate) async fn get_state_accumulator_route(
 	let room_id = OwnedRoomId::try_from(room_id_str)
 		.map_err(|_| err!(Request(InvalidParam("Invalid room ID."))))?;
 
-	// Verify we participate in this room
-	if !services
-		.rooms
-		.state_cache
-		.server_is_participant(services.globals.server_name(), &room_id)
-		.await
-	{
-		return Err!(Request(Forbidden("This server is not participating in that room.")));
+	verify_federation_request(&services, &room_id, &query, &x_matrix).await?;
+
+	AccessCheck {
+		services: &services,
+		origin: &x_matrix.origin,
+		room_id: &room_id,
+		event_id: None,
 	}
+	.check()
+	.await?;
 
 	info!(
+		origin = x_matrix.origin.as_str(),
 		room_id = %room_id,
 		event_id = %query.event_id,
 		"Serving MSC4500 state accumulator request"
 	);
-
-	// TODO: This endpoint lacks federation request signature verification
-	// and ACL checks. It should use AccessCheck like state/state_ids endpoints
-	// once we have a way to extract the federation origin from custom routes.
 
 	// Verify the event belongs to the requested room
 	let pdu = services
@@ -91,6 +94,73 @@ pub(crate) async fn get_state_accumulator_route(
 	};
 
 	Ok(axum::Json(response))
+}
+
+async fn verify_federation_request(
+	services: &crate::State,
+	room_id: &OwnedRoomId,
+	query: &StateAccumulatorQuery,
+	x_matrix: &XMatrix,
+) -> Result<()> {
+	type Member = (String, ruma::CanonicalJsonValue);
+	type Object = ruma::CanonicalJsonObject;
+	type Value = ruma::CanonicalJsonValue;
+
+	let destination = services.globals.server_name();
+	if let Some(dest) = x_matrix.destination.as_deref() {
+		if dest != destination {
+			return Err!(Request(Forbidden(warn!(
+				"Invalid destination. Expected: {}, Got: {}",
+				destination, dest
+			))));
+		}
+	}
+
+	if services
+		.moderation
+		.is_remote_server_forbidden(&x_matrix.origin)
+	{
+		return Err!(Request(Forbidden(warn!(
+			"Federation requests from {} denied.",
+			x_matrix.origin
+		))));
+	}
+
+	let signature: [Member; 1] =
+		[(x_matrix.key.as_str().into(), Value::String(x_matrix.sig.to_string()))];
+	let signatures: [Member; 1] =
+		[(x_matrix.origin.as_str().into(), Value::Object(signature.into()))];
+	let authorization: Object = [
+		("destination".into(), Value::String(destination.into())),
+		("method".into(), Value::String(http::Method::GET.as_str().into())),
+		("origin".into(), Value::String(x_matrix.origin.as_str().into())),
+		("signatures".into(), Value::Object(signatures.into())),
+		(
+			"uri".into(),
+			Value::String(format!(
+				"/_matrix/federation/unstable/tk.nutra.msc4500/state_accumulator/{}?event_id={}",
+				room_id, query.event_id
+			)),
+		),
+	]
+	.into();
+
+	let key = services
+		.server_keys
+		.get_verify_key(&x_matrix.origin, &x_matrix.key)
+		.await
+		.map_err(|e| err!(Request(Forbidden(warn!("Failed to fetch signing keys: {e}")))))?;
+
+	let keys: PubKeys = [(x_matrix.key.to_string(), key.key)].into();
+	let keys: PubKeyMap = [(x_matrix.origin.as_str().into(), keys)].into();
+	ruma::signatures::verify_json(&keys, authorization).map_err(|e| {
+		err!(Request(Forbidden(warn!(
+			"Failed to verify X-Matrix signatures from {}: {e}",
+			x_matrix.origin
+		))))
+	})?;
+
+	Ok(())
 }
 
 pub(crate) fn serialize_lthash(lthash: &rezzy::LtHash) -> (String, String) {

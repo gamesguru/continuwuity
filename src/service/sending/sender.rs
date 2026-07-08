@@ -11,11 +11,7 @@ use conduwuit_core::{
 	Error, Event, Result, debug_info, err,
 	result::LogErr,
 	trace,
-	utils::{
-		ReadyExt, calculate_hash, continue_exponential_backoff_secs,
-		future::TryExtExt,
-		stream::{BroadbandExt, IterStream, WidebandExt},
-	},
+	utils::{ReadyExt, calculate_hash, continue_exponential_backoff_secs, stream::BroadbandExt},
 	warn,
 };
 use futures::{
@@ -130,20 +126,12 @@ pub(crate) fn serialize_lthash(lthash: &rezzy::LtHash) -> (String, String) {
 
 async fn compute_outbound_state_hashes(
 	services: &super::Services,
-	pdus: &[Box<RawJsonValue>],
+	pdus: &[(OwnedEventId, CanonicalJsonObject)],
 ) -> BTreeMap<OwnedEventId, StateHashInfo> {
 	let mut state_hashes = BTreeMap::new();
-	for pdu_raw in pdus {
-		let Ok(value) = serde_json::from_str::<serde_json::Value>(pdu_raw.get()) else {
-			continue;
-		};
-		let Some(event_id_str) = value.get("event_id").and_then(|id| id.as_str()) else {
-			continue;
-		};
-		let Ok(event_id) = OwnedEventId::try_from(event_id_str) else { continue };
-
-		if let Some(hash_info) = compute_state_hash_for_pdu(services, &event_id, &value).await {
-			state_hashes.insert(event_id, hash_info);
+	for (event_id, value) in pdus {
+		if let Some(hash_info) = compute_state_hash_for_pdu(services, event_id, value).await {
+			state_hashes.insert(event_id.clone(), hash_info);
 		}
 	}
 	state_hashes
@@ -152,7 +140,7 @@ async fn compute_outbound_state_hashes(
 async fn compute_state_hash_for_pdu(
 	services: &super::Services,
 	event_id: &OwnedEventId,
-	value: &serde_json::Value,
+	value: &CanonicalJsonObject,
 ) -> Option<StateHashInfo> {
 	let sstatehash_before = services
 		.state_accessor
@@ -1231,17 +1219,32 @@ impl Service {
 		events: Vec<SendingEvent>,
 		edu_count: Option<u64>,
 	) -> SendingResult {
-		let pdus: Vec<_> = events
-			.iter()
-			.filter_map(|pdu| match pdu {
-				| SendingEvent::Pdu(pdu) => Some(pdu),
-				| _ => None,
-			})
-			.stream()
-			.wide_filter_map(|pdu_id| self.services.timeline.get_pdu_json_from_id(pdu_id).ok())
-			.wide_then(|pdu| self.convert_to_outgoing_federation_event(pdu))
-			.collect()
-			.await;
+		let mut source_pdus: Vec<(OwnedEventId, CanonicalJsonObject)> = Vec::new();
+		for event in &events {
+			let SendingEvent::Pdu(pdu_id) = event else {
+				continue;
+			};
+
+			let Ok(pdu) = self.services.timeline.get_pdu_json_from_id(pdu_id).await else {
+				continue;
+			};
+			let Some(event_id) = pdu
+				.get("event_id")
+				.and_then(|id| id.as_str())
+				.and_then(|id| OwnedEventId::try_from(id).ok())
+			else {
+				continue;
+			};
+
+			source_pdus.push((event_id, pdu));
+		}
+
+		let state_hashes = compute_outbound_state_hashes(&self.services, &source_pdus).await;
+
+		let mut outbound_pdus: Vec<Box<RawJsonValue>> = Vec::with_capacity(source_pdus.len());
+		for (_, pdu) in source_pdus {
+			outbound_pdus.push(self.convert_to_outgoing_federation_event(pdu).await);
+		}
 
 		let edus: Vec<Raw<Edu>> = events
 			.iter()
@@ -1263,7 +1266,7 @@ impl Service {
 			.filter_map(Result::ok)
 			.collect();
 
-		if pdus.is_empty() && edus.is_empty() {
+		if outbound_pdus.is_empty() && edus.is_empty() {
 			if let Some(count) = edu_count {
 				self.db.set_latest_educount(&server, count);
 			}
@@ -1302,10 +1305,10 @@ impl Service {
 		// Track federation stats
 		self.stats
 			.outgoing_pdus
-			.fetch_add(pdus.len().try_into().unwrap_or(u64::MAX), Ordering::Relaxed);
+			.fetch_add(outbound_pdus.len().try_into().unwrap_or(u64::MAX), Ordering::Relaxed);
 		self.stats.outgoing_txns.fetch_add(1, Ordering::Relaxed);
 
-		let preimage = pdus
+		let preimage = outbound_pdus
 			.iter()
 			.map(|raw| raw.get().as_bytes())
 			.chain(edus.iter().map(|raw| raw.json().get().as_bytes()));
@@ -1319,13 +1322,11 @@ impl Service {
 		let now = MilliSecondsSinceUnixEpoch::now();
 		let txn_id = format!("{}_{}", now.get(), URL_SAFE_NO_PAD.encode(txn_hash));
 
-		let state_hashes = compute_outbound_state_hashes(&self.services, &pdus).await;
-
 		let request = send_transaction_message::v1::Request {
 			transaction_id: txn_id.clone().into(),
 			origin: self.server.name.clone(),
 			origin_server_ts: now,
-			pdus,
+			pdus: outbound_pdus,
 			edus,
 		};
 

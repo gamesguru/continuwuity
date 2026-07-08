@@ -68,6 +68,7 @@ fn pdu_to_lean(pdu: &conduwuit::PduEvent) -> rezzy::LeanEvent {
 		prev_events: pdu.prev_events.iter().map(ToString::to_string).collect(),
 		auth_events: pdu.auth_events.iter().map(ToString::to_string).collect(),
 		depth: u64::from(pdu.depth),
+		..Default::default()
 	}
 }
 
@@ -529,12 +530,14 @@ impl super::Service {
 						t_compress = t_compress.saturating_add(tc0.elapsed());
 
 						let ts0 = Instant::now();
-						let result =
-							Box::pin(self.services.state_compressor.save_state_with_parent(
+						let result = self
+							.services
+							.state_compressor
+							.save_state_with_parent(
 								room_id,
 								Some(current_shortstatehash),
 								Arc::new(compressed),
-							))
+							)
 							.await?;
 						let ssh = result.shortstatehash;
 						lthash_to_ssh.insert(*hash, ssh);
@@ -797,11 +800,13 @@ impl super::Service {
 			version,
 		);
 		let rezzy_start = Instant::now();
+		let mut pl_cache = HashMap::new();
 		let resolved_lean = rezzy::resolve_iterative_sort(
 			unconflicted.into(),
 			conflicted_events,
 			&auth_context,
 			version,
+			&mut pl_cache,
 		);
 		eprintln!(
 			"[resolve_fork] rezzy::resolve_iterative_sort took {:?}",

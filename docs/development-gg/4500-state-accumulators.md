@@ -600,6 +600,9 @@ following unstable identifiers:
 - The reconciliation endpoint:
   `GET /_matrix/federation/unstable/tk.nutra.msc4500/state_accumulator/{room_id}`
 
+The response body keeps the plain `state_hash_mismatch` member name; only the
+request-side transaction key is unstable-prefixed.
+
 ## Backwards compatibility
 
 This proposal is fully backwards-compatible:

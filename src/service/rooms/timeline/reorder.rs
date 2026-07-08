@@ -195,7 +195,7 @@ impl Service {
 		if true_extremities_count > 0 {
 			if !no_compute_state {
 				info!("reorder_timeline: bulk rebuilding state using rezzy...");
-				if let Err(e) = Box::pin(self.rebuild_state(room_id)).await {
+				if let Err(e) = self.rebuild_state(room_id).await {
 					warn!("reorder_timeline: rebuild_state failed: {e:?}");
 				}
 			}

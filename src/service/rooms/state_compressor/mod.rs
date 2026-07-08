@@ -519,12 +519,8 @@ pub async fn save_state(
 		.await
 		.ok();
 
-	Box::pin(self.save_state_with_parent(
-		room_id,
-		previous_shortstatehash,
-		new_state_ids_compressed,
-	))
-	.await
+	self.save_state_with_parent(room_id, previous_shortstatehash, new_state_ids_compressed)
+		.await
 }
 
 /// Returns the new shortstatehash, and the state diff from the previous
@@ -584,6 +580,12 @@ pub async fn save_state_with_parent(
 	};
 
 	if !already_existed {
+		let parent_shortstatehash = if states_parents.is_empty() {
+			None
+		} else {
+			previous_shortstatehash
+		};
+
 		self.save_state_from_diff(
 			new_shortstatehash,
 			statediffnew.clone(),
@@ -594,7 +596,7 @@ pub async fn save_state_with_parent(
 
 		self.update_lthash(
 			new_shortstatehash,
-			previous_shortstatehash,
+			parent_shortstatehash,
 			&statediffnew,
 			&statediffremoved,
 		)
@@ -939,34 +941,51 @@ pub async fn update_lthash(
 
 	if let Some(parent) = parent_shortstatehash {
 		if let Ok(mut lthash) = self.get_lthash(parent).await {
+			let mut complete = true;
+
 			for compressed_event in removed {
 				let (ssk, sei) = parse_compressed_state_event(*compressed_event);
-				if let Ok((ty, sk)) = self.services.short.get_statekey_from_short(ssk).await {
-					if let Ok(event_id) = self
+				let Ok((ty, sk)) = self.services.short.get_statekey_from_short(ssk).await else {
+					complete = false;
+					break;
+				};
+				let Ok(event_id) = self
+					.services
+					.short
+					.get_eventid_from_short::<OwnedEventId>(sei)
+					.await
+				else {
+					complete = false;
+					break;
+				};
+				lthash.remove(&ty.to_string(), &sk, &event_id);
+			}
+
+			if complete {
+				for compressed_event in added {
+					let (ssk, sei) = parse_compressed_state_event(*compressed_event);
+					let Ok((ty, sk)) = self.services.short.get_statekey_from_short(ssk).await
+					else {
+						complete = false;
+						break;
+					};
+					let Ok(event_id) = self
 						.services
 						.short
 						.get_eventid_from_short::<OwnedEventId>(sei)
 						.await
-					{
-						lthash.remove(&ty.to_string(), &sk, &event_id);
-					}
+					else {
+						complete = false;
+						break;
+					};
+					lthash.insert(&ty.to_string(), &sk, &event_id);
 				}
 			}
-			for compressed_event in added {
-				let (ssk, sei) = parse_compressed_state_event(*compressed_event);
-				if let Ok((ty, sk)) = self.services.short.get_statekey_from_short(ssk).await {
-					if let Ok(event_id) = self
-						.services
-						.short
-						.get_eventid_from_short::<OwnedEventId>(sei)
-						.await
-					{
-						lthash.insert(&ty.to_string(), &sk, &event_id);
-					}
-				}
+
+			if complete {
+				self.save_lthash(shortstatehash, lthash);
+				return Ok(());
 			}
-			self.save_lthash(shortstatehash, lthash);
-			return Ok(());
 		}
 	}
 

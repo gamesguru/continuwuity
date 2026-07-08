@@ -1676,7 +1676,9 @@ async fn db_lt_20(services: &Services) -> Result<()> {
 
 		let needs_compute = match shortstatehash_lthash.get_blocking(&ssh_bytes) {
 			| Ok(_) => false,
-			| Err(_) => true,
+			| Err(e) if e.is_not_found() => true,
+			| Err(e) =>
+				return Err!(Database("v20 migration failed reading shortstatehash_lthash: {e}")),
 		};
 		if needs_compute {
 			let ssh = conduwuit::utils::u64_from_bytes(ssh_bytes)

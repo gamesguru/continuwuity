@@ -588,6 +588,7 @@ fn resolve_via_rezzy(
 			prev_events: pdu.prev_events.iter().map(ToString::to_string).collect(),
 			auth_events: pdu.auth_events.iter().map(ToString::to_string).collect(),
 			depth: u64::from(pdu.depth),
+			..Default::default()
 		}
 	};
 
@@ -627,8 +628,14 @@ fn resolve_via_rezzy(
 		auth_context.len()
 	);
 
-	let resolved_lean =
-		rezzy::resolve_iterative_sort(unconflicted, conflicted_events, &auth_context, version);
+	let mut pl_cache = HashMap::new();
+	let resolved_lean = rezzy::resolve_iterative_sort(
+		unconflicted,
+		conflicted_events,
+		&auth_context,
+		version,
+		&mut pl_cache,
+	);
 
 	// Convert back to StateMap
 	let mut resolved = HashMap::new();
