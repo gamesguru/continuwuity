@@ -24,7 +24,10 @@ pub async fn server_can_see_event(
 			 found",
 			event_id, room_id, origin
 		);
-		return false;
+		// If we don't have the state hash yet, fail open and let the normal
+		// room/ACL checks decide. This avoids dropping federated backfill and
+		// pagination events during state catch-up.
+		return true;
 	};
 
 	let history_visibility = self
