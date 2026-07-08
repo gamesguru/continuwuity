@@ -153,21 +153,16 @@ where
 		return Ok(None);
 	};
 
-	let mut fork_lthashes = Vec::with_capacity(extremity_sstatehashes.len());
+	let mut unique_forks = Vec::new();
 	for &(sstatehash, ref prev_event) in &extremity_sstatehashes {
-		fork_lthashes.push(self.get_extremity_lthash(sstatehash, prev_event).await?);
+		let lthash = self.get_extremity_lthash(sstatehash, prev_event).await?;
+		if !unique_forks.iter().any(|(hash, _)| *hash == lthash) {
+			unique_forks.push((lthash, (sstatehash, prev_event)));
+		}
 	}
 
-	let all_identical = fork_lthashes.windows(2).all(|w| w[0] == w[1]);
-
-	let forks_to_process = if all_identical {
-		&extremity_sstatehashes[..1]
-	} else {
-		&extremity_sstatehashes[..]
-	};
-
-	let mut fork_compressed_states = Vec::with_capacity(forks_to_process.len());
-	for &(sstatehash, ref prev_event) in forks_to_process {
+	let mut fork_compressed_states = Vec::with_capacity(unique_forks.len());
+	for &(_, (sstatehash, ref prev_event)) in &unique_forks {
 		let mut state = self
 			.services
 			.state_compressor
@@ -207,10 +202,10 @@ where
 		fork_compressed_states.push(state);
 	}
 
-	if all_identical && fork_lthashes.len() > 1 {
+	if unique_forks.len() == 1 && extremity_sstatehashes.len() > 1 {
 		trace!(
 			"LtHash digests match across all {} forks! Bypassing state resolution.",
-			fork_lthashes.len()
+			extremity_sstatehashes.len()
 		);
 		return Ok(Some(std::sync::Arc::new(fork_compressed_states.pop().unwrap())));
 	}
