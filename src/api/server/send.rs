@@ -401,7 +401,13 @@ async fn inject_state_hash_mismatches(
 
 		let digest = super::state_accumulator::serialize_lthash(&lthash).1;
 		if digest != hash_info.after {
-			pdu_res.insert("state_hash_mismatch".to_owned(), serde_json::Value::String(digest));
+			pdu_res.insert(
+				"state_hash_mismatch".to_owned(),
+				serde_json::json!({
+					"algorithm": "lthash16",
+					"digest": digest
+				}),
+			);
 		}
 	}
 }

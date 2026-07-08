@@ -142,45 +142,54 @@ async fn compute_outbound_state_hashes(
 		};
 		let Ok(event_id) = OwnedEventId::try_from(event_id_str) else { continue };
 
-		let Ok(sstatehash_before) = services.state_accessor.pdu_shortstatehash(&event_id).await
-		else {
-			continue;
-		};
-		let Ok(lthash_before) = services
-			.state_compressor
-			.get_lthash(sstatehash_before)
-			.await
-		else {
-			continue;
-		};
-		let before_digest = serialize_lthash(&lthash_before).1;
-
-		let mut after_digest = before_digest.clone();
-
-		if let Some(state_key) = value.get("state_key").and_then(|k| k.as_str()) {
-			if let Some(ev_type_str) = value.get("type").and_then(|t| t.as_str()) {
-				let ev_type = StateEventType::from(ev_type_str);
-				let mut lthash_after = lthash_before;
-
-				if let Ok(old_event_id) = services
-					.state_accessor
-					.state_get_id::<OwnedEventId>(sstatehash_before, &ev_type, state_key)
-					.await
-				{
-					lthash_after.remove(ev_type_str, state_key, &old_event_id);
-				}
-
-				lthash_after.insert(ev_type_str, state_key, &event_id);
-				after_digest = serialize_lthash(&lthash_after).1;
-			}
+		if let Some(hash_info) = compute_state_hash_for_pdu(services, &event_id, &value).await {
+			state_hashes.insert(event_id, hash_info);
 		}
-
-		state_hashes.insert(event_id, StateHashInfo {
-			before: before_digest,
-			after: after_digest,
-		});
 	}
 	state_hashes
+}
+
+async fn compute_state_hash_for_pdu(
+	services: &super::Services,
+	event_id: &OwnedEventId,
+	value: &serde_json::Value,
+) -> Option<StateHashInfo> {
+	let sstatehash_before = services
+		.state_accessor
+		.pdu_shortstatehash(event_id)
+		.await
+		.ok()?;
+	let lthash_before = services
+		.state_compressor
+		.get_lthash(sstatehash_before)
+		.await
+		.ok()?;
+	let before_digest = serialize_lthash(&lthash_before).1;
+
+	let mut after_digest = before_digest.clone();
+
+	if let Some(state_key) = value.get("state_key").and_then(|k| k.as_str()) {
+		if let Some(ev_type_str) = value.get("type").and_then(|t| t.as_str()) {
+			let ev_type = StateEventType::from(ev_type_str);
+			let mut lthash_after = lthash_before;
+
+			if let Ok(old_event_id) = services
+				.state_accessor
+				.state_get_id::<OwnedEventId>(sstatehash_before, &ev_type, state_key)
+				.await
+			{
+				lthash_after.remove(ev_type_str, state_key, &old_event_id);
+			}
+
+			lthash_after.insert(ev_type_str, state_key, event_id);
+			after_digest = serialize_lthash(&lthash_after).1;
+		}
+	}
+
+	Some(StateHashInfo {
+		before: before_digest,
+		after: after_digest,
+	})
 }
 
 type SendingError = Box<(Destination, Error)>;
