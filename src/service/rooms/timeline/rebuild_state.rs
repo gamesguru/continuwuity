@@ -988,6 +988,6 @@ impl super::Service {
 				.shortstatehash,
 		);
 
-		Ok(merged_ssh)
+		Ok(*merged_ssh)
 	}
 }
