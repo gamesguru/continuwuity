@@ -9,7 +9,7 @@ use std::str::FromStr;
 use axum::{
 	Router,
 	response::{IntoResponse, Redirect},
-	routing::{any, get, post},
+	routing::{any, get, post, put},
 };
 use conduwuit::{Server, err};
 pub(super) use conduwuit_service::state::State;
@@ -229,7 +229,10 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 			)
 			.ruma_route(&server::get_public_rooms_route)
 			.ruma_route(&server::get_public_rooms_filtered_route)
-			.ruma_route(&server::send_transaction_message_route)
+			.route(
+				"/_matrix/federation/v1/send/{txnId}",
+				put(server::send_transaction_message_route),
+			)
 			.ruma_route(&server::get_event_route)
 			.ruma_route(&server::get_backfill_route)
 			.ruma_route(&server::get_missing_events_route)
