@@ -259,7 +259,7 @@ pub async fn heal_room(
 
 		// Compute state incrementally if enabled
 		if let Some(mut ssh) = current_shortstatehash {
-			self.compute_state_for_event(pdu, event_id, &mut json, &mut ssh, &pdu_id)
+			Box::pin(self.compute_state_for_event(pdu, event_id, &mut json, &mut ssh, &pdu_id))
 				.await;
 			current_shortstatehash = Some(ssh);
 		}
@@ -411,13 +411,13 @@ pub(super) async fn compute_state_for_event(
 		.get_or_create_shortstatekey(&pdu.kind.to_string().into(), state_key)
 		.await;
 
-	let new_ssh = self
-		.services
-		.state_compressor
-		.append_state_pdu(*ssh, shortstatekey, &pdu.event_id, || {
-			self.services.globals.next_count()
-		})
-		.await;
+	let new_ssh = Box::pin(self.services.state_compressor.append_state_pdu(
+		*ssh,
+		shortstatekey,
+		&pdu.event_id,
+		|| self.services.globals.next_count(),
+	))
+	.await;
 
 	if let Ok(Some(new_ssh)) = new_ssh {
 		*ssh = new_ssh;

@@ -117,9 +117,13 @@ impl super::Service {
 
 		// Phase 5: Final multi-head extremity merge
 		eprintln!("[rebuild_state] Phase 5: merge extremities...");
-		let current_shortstatehash = self
-			.rebuild_merge_extremities(room_id, &ctx, &event_ssh, current_shortstatehash)
-			.await?;
+		let current_shortstatehash = Box::pin(self.rebuild_merge_extremities(
+			room_id,
+			&ctx,
+			&event_ssh,
+			current_shortstatehash,
+		))
+		.await?;
 		eprintln!("[rebuild_state] Phase 5 done");
 
 		// Phase 6: Apply final state
@@ -430,12 +434,13 @@ impl super::Service {
 
 		// ── Consume stream and write SSH for each event ──
 		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
-		let empty_ssh = self
-			.services
-			.state_compressor
-			.save_state(room_id, Arc::new(BTreeSet::new()))
-			.await?
-			.shortstatehash;
+		let empty_ssh = Box::pin(
+			self.services
+				.state_compressor
+				.save_state(room_id, Arc::new(BTreeSet::new())),
+		)
+		.await?
+		.shortstatehash;
 
 		let mut event_ssh: HashMap<OwnedEventId, u64> = HashMap::new();
 		let mut lthash_to_ssh: HashMap<rezzy::LtHash, u64> = HashMap::new();
@@ -524,14 +529,12 @@ impl super::Service {
 						t_compress = t_compress.saturating_add(tc0.elapsed());
 
 						let ts0 = Instant::now();
-						let result = self
-							.services
-							.state_compressor
-							.save_state_with_parent(
+						let result =
+							Box::pin(self.services.state_compressor.save_state_with_parent(
 								room_id,
 								Some(current_shortstatehash),
 								Arc::new(compressed),
-							)
+							))
 							.await?;
 						let ssh = result.shortstatehash;
 						lthash_to_ssh.insert(*hash, ssh);
@@ -553,8 +556,14 @@ impl super::Service {
 						}
 						.into();
 					let mut ssh_mut = ssh;
-					self.compute_state_for_event(&pdu, eid, &mut json, &mut ssh_mut, &pdu_id)
-						.await;
+					Box::pin(self.compute_state_for_event(
+						&pdu,
+						eid,
+						&mut json,
+						&mut ssh_mut,
+						&pdu_id,
+					))
+					.await;
 				}
 			} else {
 				let shorteventid = sei_cache.get(eid).copied().unwrap_or(0);
@@ -971,12 +980,13 @@ impl super::Service {
 		}
 
 		debug!("rebuild_state: merged state has {} entries", compressed.len());
-		let merged_ssh = self
-			.services
-			.state_compressor
-			.save_state(room_id, Arc::new(compressed))
-			.await?
-			.shortstatehash;
+		let merged_ssh = Box::pin(
+			self.services
+				.state_compressor
+				.save_state(room_id, Arc::new(compressed)),
+		)
+		.await?
+		.shortstatehash;
 
 		Ok(merged_ssh)
 	}

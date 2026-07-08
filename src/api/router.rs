@@ -9,7 +9,7 @@ use std::str::FromStr;
 use axum::{
 	Router,
 	response::{IntoResponse, Redirect},
-	routing::{any, get, post},
+	routing::{any, get, post, put},
 };
 use conduwuit::{Server, err};
 pub(super) use conduwuit_service::state::State;
@@ -229,7 +229,10 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 			)
 			.ruma_route(&server::get_public_rooms_route)
 			.ruma_route(&server::get_public_rooms_filtered_route)
-			.ruma_route(&server::send_transaction_message_route)
+			.route(
+				"/_matrix/federation/v1/send/{txnId}",
+				put(server::send_transaction_message_route),
+			)
 			.ruma_route(&server::get_event_route)
 			.ruma_route(&server::get_backfill_route)
 			.ruma_route(&server::get_missing_events_route)
@@ -256,6 +259,11 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 			.ruma_route(&server::get_content_route)
 			.ruma_route(&server::get_content_thumbnail_route)
 			.ruma_route(&server::get_edutypes_route)
+			// MSC4500: State Accumulators
+			.route(
+				"/_matrix/federation/unstable/tk.nutra.msc4500/state_accumulator/{room_id}",
+				get(server::get_state_accumulator_route),
+			)
 			// MSC0F01: Gossip-Based Federation Room Reconciliation
 			.route(
 				"/_matrix/federation/unstable/org.matrix.msc0f01/room_digest/{room_id}",

@@ -529,15 +529,13 @@ impl Service {
 			 may have finished successfully, but we could not return the output."
 		));
 
-		self.services
-			.timeline
-			.build_and_append_pdu(
-				PduBuilder::timeline(&content),
-				user_id,
-				Some(room_id),
-				state_lock,
-			)
-			.await?;
+		Box::pin(self.services.timeline.build_and_append_pdu(
+			PduBuilder::timeline(&content),
+			user_id,
+			Some(room_id),
+			state_lock,
+		))
+		.await?;
 
 		Ok(())
 	}

@@ -463,16 +463,13 @@ impl Service {
 					.get_or_create_shortstatekey(&new_pdu.kind.to_string().into(), state_key)
 					.await;
 
-				let new_ssh = self
-					.services
-					.state_compressor
-					.append_state_pdu(
-						previous_shortstatehash.as_ref().copied().unwrap_or(0),
-						shortstatekey,
-						&new_pdu.event_id,
-						|| self.services.globals.next_count(),
-					)
-					.await?;
+				let new_ssh = Box::pin(self.services.state_compressor.append_state_pdu(
+					previous_shortstatehash.as_ref().copied().unwrap_or(0),
+					shortstatekey,
+					&new_pdu.event_id,
+					|| self.services.globals.next_count(),
+				))
+				.await?;
 
 				Ok(new_ssh.unwrap_or_else(|| previous_shortstatehash.expect("must exist")))
 			},
