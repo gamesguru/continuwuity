@@ -106,7 +106,7 @@ mod tests {
 
 		// The lattice for an empty LtHash is 2048 null bytes.
 		// 2048 bytes of 0s encoded in base64url without padding:
-		let expected_lattice = "A".repeat(2730) + "AA";
+		let expected_lattice = "A".repeat(2731);
 		assert_eq!(
 			lattice, expected_lattice,
 			"Lattice encoding must be deterministic URL-safe base64"
@@ -132,9 +132,9 @@ mod tests {
 
 		let (lattice, digest) = serialize_lthash(&lthash);
 
-		// Lattice must remain exactly 2732 base64url-encoded characters long (2048
+		// Lattice must remain exactly 2731 base64url-encoded characters long (2048
 		// bytes without padding)
-		assert_eq!(lattice.len(), 2732);
+		assert_eq!(lattice.len(), 2731);
 
 		// Ensure checksum is also stable length and lowercase hex format
 		assert_eq!(digest.len(), 64);
