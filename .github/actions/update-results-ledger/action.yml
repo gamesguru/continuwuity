@@ -2,8 +2,11 @@
 name: "Update Results Ledger"
 description: "Appends test results to runs.jsonl and updates badge-main.json on the orphan results branch"
 inputs:
+  target_repo:
+    description: "GitHub repository to store results on (owner/name). Defaults to the current repository."
+    default: ""
   target_branch:
-    description: "Orphan branch to store results on"
+    description: "Branch to store results on"
     default: "_metadata/badges"
   github_token:
     description: "Token for authenticated push (GITHUB_TOKEN or equivalent)"
@@ -106,25 +109,36 @@ runs:
 
         echo "upstream_commit=$UPSTREAM_COMMIT" >> "$GITHUB_OUTPUT"
 
-        # --- Work on the orphan branch via worktree ---
+        # --- Work on the target branch via worktree ---
         LEDGER_DIR="/tmp/ledger-$$"
+        RESULTS_REMOTE="origin"
 
-        git config --global user.name "CI Runner"
-        git config --global user.email "runner@ci.local"
+        git config --global user.name "nutra-bot"
+        git config --global user.email "services@nutra.tk"
 
-        # Configure token-based auth for push
-        REPO_URL=$(git remote get-url origin)
-        if [[ "$REPO_URL" == https://* ]]; then
-          # Insert token into HTTPS URL for authenticated push
-          AUTHED_URL=$(echo "$REPO_URL" | sed "s|https://|https://token:${{ inputs.github_token }}@|")
-          git remote set-url origin "$AUTHED_URL"
+        TARGET_REPO="${{ inputs.target_repo }}"
+        if [ -n "$TARGET_REPO" ]; then
+          RESULTS_REMOTE="results"
+          RESULTS_URL="https://x-access-token:${{ inputs.github_token }}@github.com/${TARGET_REPO}.git"
+          if git remote get-url "$RESULTS_REMOTE" >/dev/null 2>&1; then
+            git remote set-url "$RESULTS_REMOTE" "$RESULTS_URL"
+          else
+            git remote add "$RESULTS_REMOTE" "$RESULTS_URL"
+          fi
+        elif git remote get-url origin >/dev/null 2>&1; then
+          REPO_URL=$(git remote get-url origin)
+          if [[ "$REPO_URL" == https://* ]]; then
+            # Insert token into HTTPS URL for authenticated push
+            AUTHED_URL=$(echo "$REPO_URL" | sed "s|https://|https://token:${{ inputs.github_token }}@|")
+            git remote set-url origin "$AUTHED_URL"
+          fi
         fi
 
         TARGET_BRANCH="${{ inputs.target_branch }}"
 
         # Fetch the orphan branch using the full refspec
-        if git fetch origin "refs/heads/${TARGET_BRANCH}:refs/remotes/origin/${TARGET_BRANCH}" 2>/dev/null; then
-          git worktree add "$LEDGER_DIR" "origin/${TARGET_BRANCH}"
+        if git fetch "$RESULTS_REMOTE" "refs/heads/${TARGET_BRANCH}:refs/remotes/${RESULTS_REMOTE}/${TARGET_BRANCH}" 2>/dev/null; then
+          git worktree add "$LEDGER_DIR" "${RESULTS_REMOTE}/${TARGET_BRANCH}"
         else
           # Branch doesn't exist yet — create it as a new orphan
           git worktree add --detach "$LEDGER_DIR"
@@ -225,7 +239,7 @@ runs:
         if git -c commit.gpgsign=false commit -m "Results for ${COMMIT_HASH} (${PROVIDER}) [skip ci]"; then
           MAX_RETRIES=5
           RETRY_COUNT=0
-          until git push origin "HEAD:refs/heads/${TARGET_BRANCH}"; do
+          until git push "$RESULTS_REMOTE" "HEAD:refs/heads/${TARGET_BRANCH}"; do
             RETRY_COUNT=$((RETRY_COUNT + 1))
             if [ "$RETRY_COUNT" -ge "$MAX_RETRIES" ]; then
               echo "Failed to push after $MAX_RETRIES attempts."
@@ -233,7 +247,7 @@ runs:
             fi
             echo "Push failed, retrying ($RETRY_COUNT/$MAX_RETRIES)..."
             sleep $(( (RANDOM % 5) + 1 ))
-            git pull --rebase origin "refs/heads/${TARGET_BRANCH}"
+            git pull --rebase "$RESULTS_REMOTE" "refs/heads/${TARGET_BRANCH}"
           done
         fi
 
