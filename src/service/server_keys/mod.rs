@@ -299,6 +299,17 @@ pub async fn add_signing_keys(
 		}
 	}
 
+	// Merge and clean up: if a key exists in both, the new verify_keys takes
+	// precedence and we remove it from historical_keys.old_verify_keys.
+	// Conversely, if a key is in old_verify_keys, we ensure it's not in
+	// verify_keys.
+	for key_id in filtered_verify_keys.keys() {
+		historical_keys.old_verify_keys.remove(key_id);
+	}
+	for key_id in filtered_old_verify_keys.keys() {
+		historical_keys.verify_keys.remove(key_id);
+	}
+
 	// Store the filtered/merged historical keys
 	historical_keys.verify_keys.extend(filtered_verify_keys);
 	historical_keys
@@ -313,10 +324,10 @@ pub async fn add_signing_keys(
 		.verify_keys
 		.len()
 		.saturating_add(historical_keys.old_verify_keys.len());
-	if total_keys > 2000 {
-		let to_evict = total_keys.saturating_sub(2000);
+	if total_keys > 3000 {
+		let to_evict = total_keys.saturating_sub(3000);
 		conduwuit::debug!(
-			"MSC4499: Evicting {to_evict} oldest keys for {origin} to respect 2,000-key quota"
+			"MSC4499: Evicting {to_evict} oldest keys for {origin} to respect 3,000-key quota"
 		);
 
 		// Collect keys to evict: oldest first (lowest expired_ts)
@@ -500,18 +511,18 @@ pub async fn signing_keys_for(&self, origin: &ServerName) -> Result<ServerSignin
 		.deserialized::<ServerSigningKeys>()
 	{
 		// We use extend to add historical keys that aren't already in the latest
-		// payload. We move anything from historical_keys.verify_keys into
+		// payload.		// We move anything from historical_keys.verify_keys into
 		// old_verify_keys if it's not in the latest verify_keys, to ensure
 		// we stay under the 50-key "hostile" limit for the active set.
 		let mut merged_ovks = historical_keys.old_verify_keys;
 		merged_ovks.extend(keys.old_verify_keys);
 
+		let now = MilliSecondsSinceUnixEpoch::now();
 		for (id, key) in historical_keys.verify_keys {
 			if !keys.verify_keys.contains_key(&id) {
 				merged_ovks.entry(id).or_insert_with(|| OldVerifyKey {
 					key: key.key,
-					expired_ts: keys.valid_until_ts, /* Use the current payload's start as a
-					                                  * placeholder */
+					expired_ts: now, // Use current time as the expiration for this spillover key
 				});
 			}
 		}
