@@ -34,9 +34,9 @@ pub(super) fn check_no_duplicate_json_keys(raw: &str) -> Result {
 	// its old_verify_keys dictionary, receiving servers SHOULD treat the entire
 	// response payload as malformed/hostile and reject it."
 	// Note: We updated our quota to 3,000 keys total to accommodate the "hostile"
-	// active-key spillover behavior.
-	if vk_count.saturating_add(ovk_count) > 3000 {
-		return Err!(BadServerResponse("Too many total keys (limit: 3000)"));
+	// active-key spillover behavior, so the old_verify_keys ceiling is also 3,000.
+	if ovk_count > 3000 {
+		return Err!(BadServerResponse("Too many keys in old_verify_keys (limit: 3000)"));
 	}
 
 	// Cross-map collision: same key ID with different body across sections

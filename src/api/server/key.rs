@@ -140,11 +140,14 @@ async fn get_signing_keys_for(
 		{
 			| Ok(new_keys) => {
 				services.server_keys.clear_backoff(server_name).await;
-				if let Ok(patched_keys) = services.server_keys.add_signing_keys(new_keys).await {
-					server_key = Some(patched_keys);
+				match services.server_keys.add_signing_keys(new_keys).await {
+					| Ok(patched_keys) => server_key = Some(patched_keys),
+					| Err(e) =>
+						conduwuit::warn!("add_signing_keys failed for {server_name}: {e}"),
 				}
 			},
-			| Err(_) => {
+			| Err(e) => {
+				conduwuit::warn!("server_request_coalesced failed for {server_name}: {e}");
 				services.server_keys.record_backoff(server_name).await;
 			},
 		}
