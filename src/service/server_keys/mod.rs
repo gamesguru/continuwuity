@@ -483,7 +483,35 @@ pub async fn verify_keys_for(&self, origin: &ServerName) -> VerifyKeys {
 
 #[implement(Service)]
 pub async fn signing_keys_for(&self, origin: &ServerName) -> Result<ServerSigningKeys> {
-	self.db.server_signingkeys.get(origin).await.deserialized()
+	let mut keys: ServerSigningKeys = self
+		.db
+		.server_signingkeys
+		.get(origin)
+		.await
+		.deserialized()?;
+
+	// Augment with historical keys if they exist. We prioritize the latest keys.
+	let historical_key = historical_db_key(origin);
+	if let Ok(historical_keys) = self
+		.db
+		.server_signingkeys
+		.get(&historical_key)
+		.await
+		.deserialized::<ServerSigningKeys>()
+	{
+		// We use extend to add historical keys that aren't already in the latest
+		// payload. BTreeMap::extend will overwrite if the key already exists, so we
+		// do it this way to ensure latest keys take precedence.
+		let mut merged_ovks = historical_keys.old_verify_keys;
+		merged_ovks.extend(keys.old_verify_keys);
+		keys.old_verify_keys = merged_ovks;
+
+		let mut merged_vks = historical_keys.verify_keys;
+		merged_vks.extend(keys.verify_keys);
+		keys.verify_keys = merged_vks;
+	}
+
+	Ok(keys)
 }
 
 #[implement(Service)]
