@@ -201,7 +201,7 @@ pub async fn add_signing_keys(
 		true
 	});
 
-	// Intra-payload collision verification (MSC 00FD)
+	// Intra-payload collision verification (MSC 4499)
 	for (key_id, verify_key) in &new_keys.verify_keys {
 		if let Some(old_verify_key) = new_keys.old_verify_keys.get(key_id) {
 			if verify_key.key != old_verify_key.key {

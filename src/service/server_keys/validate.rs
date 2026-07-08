@@ -132,12 +132,21 @@ fn scan_object_for_duplicate_keys(obj_bytes: &[u8], section_name: &[u8]) -> Resu
 				while j < len && obj_bytes[j].is_ascii_whitespace() {
 					j = j.saturating_add(1);
 				}
-				if j < len && obj_bytes[j] == b':' && !seen_keys.insert(key.to_vec()) {
-					let section = std::str::from_utf8(section_name).unwrap_or("<invalid>");
-					let key_str = std::str::from_utf8(key).unwrap_or("<invalid utf-8>");
-					return Err!(BadServerResponse(
-						"Duplicate JSON key '{key_str}' in {section}"
-					));
+				if j < len && obj_bytes[j] == b':' {
+					if contains_escapes(key) {
+						let section = std::str::from_utf8(section_name).unwrap_or("<invalid>");
+						let key_str = std::str::from_utf8(key).unwrap_or("<invalid utf-8>");
+						return Err!(BadServerResponse(
+							"JSON key '{key_str}' in {section} contains illegal escape sequences"
+						));
+					}
+					if !seen_keys.insert(key.to_vec()) {
+						let section = std::str::from_utf8(section_name).unwrap_or("<invalid>");
+						let key_str = std::str::from_utf8(key).unwrap_or("<invalid utf-8>");
+						return Err!(BadServerResponse(
+							"Duplicate JSON key '{key_str}' in {section}"
+						));
+					}
 				}
 			},
 			| _ => {
@@ -160,6 +169,11 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 fn find_byte(haystack: &[u8], needle: u8) -> Option<usize> {
 	haystack.iter().position(|&b| b == needle)
 }
+
+/// Check if a key contains any backslashes (JSON escapes).
+/// Matrix key IDs should never contain escapes, and allowing them
+/// makes duplicate detection vulnerable to semantic bypasses.
+fn contains_escapes(bytes: &[u8]) -> bool { bytes.contains(&b'\\') }
 
 #[cfg(test)]
 mod tests {
@@ -195,5 +209,11 @@ mod tests {
 	fn cross_map_same_body_is_legal() {
 		let json = r#"{"verify_keys": {"ed25519:a": {"key": "AAA"}}, "old_verify_keys": {"ed25519:a": {"key": "AAA", "expired_ts": 1}}}"#;
 		assert!(check_no_duplicate_json_keys(json).is_ok());
+	}
+
+	#[test]
+	fn rejects_escaped_key() {
+		let json = r#"{"verify_keys": {"ed25519:\u0061": {"key": "BBB"}}}"#;
+		assert!(check_no_duplicate_json_keys(json).is_err());
 	}
 }
