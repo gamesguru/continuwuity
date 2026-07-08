@@ -115,4 +115,8 @@ doc_build/
 *.swp
 test_logs.jsonl
 test_results.jsonl
+
+# submodules and unwanted tracks and such
 matrix-spec-txt/
+ruma-upstream/
+ruwuma/
