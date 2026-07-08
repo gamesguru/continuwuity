@@ -340,8 +340,10 @@ pub async fn add_signing_keys(
 			.map(|(id, _)| (*id).to_owned())
 			.collect();
 
-		for key_id in to_evict_ids {
-			historical_keys.old_verify_keys.remove(&key_id);
+		for id in to_evict_ids {
+			conduwuit::warn!("MSC4499: EVICTED KEY {id}");
+			historical_keys.old_verify_keys.remove(&id);
+			new_keys.old_verify_keys.remove(&id);
 		}
 	}
 
