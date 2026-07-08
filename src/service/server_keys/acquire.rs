@@ -13,7 +13,6 @@ use ruma::{
 	ServerSigningKeyId, api::federation::discovery::ServerSigningKeys, serde::Raw,
 };
 use serde_json::value::RawValue as RawJsonValue;
-use tokio::time::{Instant, timeout_at};
 
 use super::key_exists;
 
@@ -148,12 +147,8 @@ async fn acquire_origins<I>(&self, batch: I) -> Batch
 where
 	I: Iterator<Item = (OwnedServerName, Vec<OwnedServerSigningKeyId>)> + Send,
 {
-	let timeout = Instant::now()
-		.checked_add(Duration::from_secs(5))
-		.expect("timeout overflows");
-
 	let mut requests: FuturesUnordered<_> = batch
-		.map(|(origin, key_ids)| self.acquire_origin(origin, key_ids, timeout))
+		.map(|(origin, key_ids)| self.acquire_origin(origin, key_ids))
 		.collect();
 
 	let mut missing = Batch::new();
@@ -171,9 +166,10 @@ async fn acquire_origin(
 	&self,
 	origin: OwnedServerName,
 	mut key_ids: Vec<OwnedServerSigningKeyId>,
-	timeout: Instant,
 ) -> (OwnedServerName, Vec<OwnedServerSigningKeyId>) {
-	match timeout_at(timeout, self.server_request(&origin)).await {
+	let timeout = Duration::from_secs(self.services.server.config.server_key_fetch_timeout);
+
+	match tokio::time::timeout(timeout, self.server_request(&origin)).await {
 		| Err(e) => debug_warn!(%origin, "timed out: {e}"),
 		| Ok(Err(e)) => debug_error!(%origin, "{e}"),
 		| Ok(Ok(server_keys)) => {

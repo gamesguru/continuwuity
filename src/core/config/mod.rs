@@ -485,6 +485,15 @@ pub struct Config {
 	#[serde(default = "default_federation_timeout")]
 	pub federation_timeout: u64,
 
+	/// Timeout for fetching server signing keys from other homeservers
+	/// (seconds). You may want to lower this in test environments, but in
+	/// production, giving slower federation origins some time to respond is
+	/// beneficial.
+	///
+	/// default: 45
+	#[serde(default = "default_server_key_fetch_timeout")]
+	pub server_key_fetch_timeout: u64,
+
 	/// MSC4284 Policy server request timeout (seconds). Generally policy
 	/// servers should respond near instantly, however may slow down under
 	/// load. If a policy server doesn't respond in a short amount of time, the
@@ -2795,6 +2804,8 @@ fn default_federation_idle_per_host() -> u16 { 1 }
 fn default_sender_timeout() -> u64 { 180 }
 
 fn default_sender_idle_timeout() -> u64 { 180 }
+
+fn default_server_key_fetch_timeout() -> u64 { 45 }
 
 fn default_sender_retry_backoff_limit() -> u64 { 86400 }
 

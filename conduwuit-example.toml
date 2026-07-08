@@ -382,6 +382,13 @@
 #
 #federation_timeout = 60
 
+# Timeout for fetching server signing keys from other homeservers
+# (seconds). You may want to lower this in test environments, but in
+# production, giving slower federation origins some time to respond is
+# beneficial.
+#
+#server_key_fetch_timeout = 45
+
 # MSC4284 Policy server request timeout (seconds). Generally policy
 # servers should respond near instantly, however may slow down under
 # load. If a policy server doesn't respond in a short amount of time, the
