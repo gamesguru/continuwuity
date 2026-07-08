@@ -10,18 +10,19 @@ use conduwuit::{Err, Result};
 /// a payload with `{"verify_keys": {"ed25519:foo": ..., "ed25519:foo": ...}}`
 /// would be silently accepted with the second value winning.
 pub(super) fn check_no_duplicate_json_keys(raw: &str) -> Result {
+	// Scan the raw bytes for duplicate keys and count limits FIRST, before
+	// full deserialization. This prevents memory exhaustionif a rogue server
+	// sends 100,000 keys, since we reject it before allocating a JSON tree.
+	let bytes = raw.as_bytes();
+	let vk_count = check_raw_duplicates(bytes, b"verify_keys")?;
+	let ovk_count = check_raw_duplicates(bytes, b"old_verify_keys")?;
+
 	let value: serde_json::Value =
 		serde_json::from_str(raw).map_err(|e| conduwuit::err!(BadServerResponse("{e}")))?;
 
 	let Some(obj) = value.as_object() else {
 		return Ok(());
 	};
-
-	// Scan the raw bytes for duplicate keys within each section.
-	// Operates on bytes to avoid string-slice panics on multi-byte chars.
-	let bytes = raw.as_bytes();
-	let vk_count = check_raw_duplicates(bytes, b"verify_keys")?;
-	let ovk_count = check_raw_duplicates(bytes, b"old_verify_keys")?;
 
 	// MSC4499: "If a single key response payload contains more than 50 keys in its
 	// verify_keys dictionary, receiving servers MUST treat the entire response
