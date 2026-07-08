@@ -19,11 +19,11 @@ pub(super) mod send_join;
 pub(super) mod send_knock;
 pub(super) mod send_leave;
 pub(super) mod state;
+pub(super) mod state_accumulator;
 pub(super) mod state_ids;
 pub(super) mod user;
 pub(super) mod version;
 pub(super) mod well_known;
-pub(super) mod state_accumulator;
 
 pub(super) use backfill::*;
 pub(super) use edutypes::*;
@@ -45,11 +45,11 @@ pub(super) use send_join::*;
 pub(super) use send_knock::*;
 pub(super) use send_leave::*;
 pub(super) use state::*;
+pub(super) use state_accumulator::*;
 pub(super) use state_ids::*;
 pub(super) use user::*;
 pub(super) use version::*;
 pub(super) use well_known::*;
-pub(super) use state_accumulator::*;
 
 mod utils;
 use utils::AccessCheck;

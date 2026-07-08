@@ -1,7 +1,7 @@
 use axum::extract::State;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use conduwuit::{err, info, Err, Result};
-use ruma::{api::ruma_api, OwnedEventId, OwnedRoomId};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use conduwuit::{Err, Result, err, info};
+use ruma::{OwnedEventId, OwnedRoomId, api::ruma_api};
 
 use super::AccessCheck;
 
