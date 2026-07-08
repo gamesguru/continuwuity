@@ -1,4 +1,16 @@
-# MSC4500: State Accumulator Endpoint Optimizations
+# MSC4500: State Accumulator Optimizations
+
+## Internal optimizations
+
+Mostly internal state tracking and storage!
+
+For example, when appending a new state event in `append_state_pdu`, the homeserver creates a new `ShortStateHash`. If multiple forks independently converge to the exact same state, they might currently generate _different_ `ShortStateHash` identifiers because checking if that massive `BTreeSet` state already exists in the DB is computationally expensive.
+
+If we index `ShortStateHash` by their `LtHash` digest, we can instantly `O(1)` deduplicate state groups across the entire server. When a new state is computed, we calculate its `LtHash`. If that digest already exists in the database, we completely skip writing a new state-diff chain and simply reuse the existing `ShortStateHash`! That would drastically reduce database size and State Group fragmentation.
+
+---
+
+## Endpoint optimizations
 
 There are massive opportunities to leverage `LtHash` beyond just short-circuiting local state resolution:
 
