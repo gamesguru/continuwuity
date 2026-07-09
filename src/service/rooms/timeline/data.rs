@@ -1429,7 +1429,8 @@ impl Data {
 						Direction::Backward,
 					)
 					.await?;
-				Self::topo_pducount_key(&current, until.depth)
+				let seek_depth = self.pdu_id_to_depth(&current).await.unwrap_or(until.depth);
+				Self::topo_pducount_key(&current, seek_depth)
 			};
 
 			// Stream count ceiling: for legacy tokens with u64::MAX seek depth,
@@ -1495,7 +1496,8 @@ impl Data {
 						Direction::Forward,
 					)
 					.await?;
-				Self::topo_pducount_key(&current, from.depth)
+				let seek_depth = self.pdu_id_to_depth(&current).await.unwrap_or(from.depth);
+				Self::topo_pducount_key(&current, seek_depth)
 			};
 
 			let raw_stream = self
