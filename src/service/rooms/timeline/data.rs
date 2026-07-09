@@ -402,6 +402,45 @@ impl Data {
 		topo_key
 	}
 
+	pub(super) async fn clear_room_topo_index(&self, room_id: &RoomId) -> Result<usize> {
+		let shortroomid = self.services.short.get_shortroomid(room_id).await?;
+		let prefix = shortroomid.to_be_bytes();
+		let keys = self
+			.roomid_topologicalorder_pducount
+			.raw_stream_prefix(&prefix)
+			.map_ok(|(key, _)| key.to_vec())
+			.try_collect::<Vec<_>>()
+			.await?;
+
+		if keys.is_empty() {
+			return Ok(0);
+		}
+
+		let mut batch = database::rocksdb::WriteBatch::default();
+		for key in &keys {
+			self.roomid_topologicalorder_pducount
+				.remove_from_batch(&mut batch, key);
+		}
+		self.roomid_topologicalorder_pducount.apply_batch(&batch);
+
+		Ok(keys.len())
+	}
+
+	pub(super) fn insert_topo_pducount_into_batch(
+		&self,
+		batch: &mut database::rocksdb::WriteBatch,
+		pdu_id: &RawPduId,
+		event_id: &EventId,
+		depth: u64,
+	) {
+		let topo_key = Self::topo_pducount_key(pdu_id, depth);
+		self.roomid_topologicalorder_pducount.insert_into_batch(
+			batch,
+			&topo_key,
+			event_id.as_bytes(),
+		);
+	}
+
 	pub(super) fn topo_key_to_pdu_id(topo_key: &[u8]) -> RawPduId {
 		let mut pdu_id_bytes = [0_u8; 16];
 		pdu_id_bytes[0..8].copy_from_slice(&topo_key[0..8]);

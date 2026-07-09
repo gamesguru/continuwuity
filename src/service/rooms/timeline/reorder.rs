@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use conduwuit_core::{
-	Result, debug, info,
+	Err, Result, debug, info,
 	matrix::pdu::{PduCount, PduId, RawPduId},
 	warn,
 };
@@ -36,7 +36,6 @@ impl Service {
 		} else {
 			None
 		};
-		let state_lock = self.services.state.mutex.lock(room_id).await;
 
 		// Lightweight collection: reads only metadata + shortprevevents,
 		// avoids full PDU JSON deserialization.
@@ -71,16 +70,18 @@ impl Service {
 		);
 
 		if sorted.len() != entries.len() {
-			warn!(
+			return Err!(Database(
 				"reorder_timeline: topo sort dropped {} events (cycles or disconnected)",
 				entries.len().saturating_sub(sorted.len())
-			);
+			));
 		}
 
 		// Rebuild topological index
 		let count = sorted.len();
 		let reindex_start = std::time::Instant::now();
 		debug!("reorder_timeline: rebuilding topological index for {count} events...");
+		let cleared_topo = self.db.clear_room_topo_index(room_id).await?;
+		debug!("reorder_timeline: cleared {cleared_topo} existing topo index rows");
 
 		let mut available_counts: Vec<PduCount> = Vec::new();
 		if force_reindex {
@@ -220,6 +221,7 @@ impl Service {
 					.pdu_shortstatehash(latest_eid)
 					.await
 				{
+					let state_lock = self.services.state.mutex.lock(room_id).await;
 					self.services
 						.state
 						.set_room_state(room_id, ssh, &state_lock);
@@ -235,8 +237,6 @@ impl Service {
 			.state_cache
 			.reconcile_membership(room_id)
 			.await;
-
-		drop(state_lock);
 
 		debug!("reorder_timeline: complete, {count} events reordered (topo index/state)");
 

@@ -63,11 +63,11 @@ impl Service {
 	/// Sweep all events in a room and repopulate any missing derived data
 	/// from the `eventid_pdu` source of truth.
 	///
-	/// This is safe to run at any time — it only writes missing entries and
-	/// never overwrites existing data.
+	/// This is safe to run at any time. It preserves canonical stream order and
+	/// existing local topo depths, while rebuilding the room topo index from
+	/// the stream source of truth.
 	pub async fn reindex_short(&self, room_id: &RoomId) -> Result<ReindexStats> {
 		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
-		let state_lock = self.services.state.mutex.lock(room_id).await;
 		let room_version = self.services.state.get_room_version(room_id).await?;
 		let mut stats = ReindexStats::default();
 
@@ -100,6 +100,10 @@ impl Service {
 
 		// Phase 2: For each event, read PDU JSON and repair derived data
 		let cork = self.db.db.cork();
+		let cleared_topo = self.db.clear_room_topo_index(room_id).await?;
+		let mut topo_batch = self.db.db_batch();
+		let mut topo_batch_len = 0_usize;
+		info!("reindex_short: cleared {cleared_topo} topo index rows for {room_id}");
 
 		// Auth chain cache for incremental computation (roaring bitmaps)
 		let mut auth_chain_cache: HashMap<ShortEventId, Arc<RoaringTreemap>> = HashMap::new();
@@ -165,18 +169,44 @@ impl Service {
 			let pdu_id: RawPduId = PduId { shortroomid, shorteventid: *count }.into();
 
 			// --- eventid_metadata ---
-			if self.db.get_event_metadata(event_id).await.is_err() {
-				let meta = EventMetadata {
-					short_room_id: shortroomid,
-					origin_server_ts: pdu.origin_server_ts().0,
-					depth: pdu.depth(),
-					pdu_count: Some(count.into_unsigned()),
-					..Default::default()
-				};
-				if let Ok(bytes) = bincode::serialize(&meta) {
-					self.db.store_eventid_metadata(event_id.as_bytes(), bytes);
-					stats.repaired_metadata = stats.repaired_metadata.saturating_add(1);
-				}
+			let metadata = match self.db.get_event_metadata(event_id).await {
+				| Ok(meta) => meta,
+				| Err(_) => {
+					let meta = EventMetadata {
+						short_room_id: shortroomid,
+						is_outlier: false,
+						origin_server_ts: pdu.origin_server_ts().0,
+						depth: pdu.depth(),
+						soft_failed: false,
+						rejected: pdu.rejected(),
+						redacted_by: pdu.redacts().map(ToOwned::to_owned),
+						short_state_hash: None,
+						deprecated_local_topo_depth: pdu.depth().into(),
+						pdu_count: Some(count.into_unsigned()),
+						soft_fail_reason: String::new(),
+						rejection_reason: String::new(),
+					};
+					if let Ok(bytes) = bincode::serialize(&meta) {
+						self.db.store_eventid_metadata(event_id.as_bytes(), bytes);
+						stats.repaired_metadata = stats.repaired_metadata.saturating_add(1);
+					}
+					meta
+				},
+			};
+
+			// --- roomid_topologicalorder_pducount ---
+			self.db.insert_topo_pducount_into_batch(
+				&mut topo_batch,
+				&pdu_id,
+				event_id,
+				metadata.deprecated_local_topo_depth,
+			);
+			stats.repaired_topo_index = stats.repaired_topo_index.saturating_add(1);
+			topo_batch_len = topo_batch_len.saturating_add(1);
+			if topo_batch_len >= 1000 {
+				self.db.db_apply_batch(&topo_batch);
+				topo_batch = self.db.db_batch();
+				topo_batch_len = 0;
 			}
 
 			// --- shorteventid_shortprevevents ---
@@ -289,6 +319,10 @@ impl Service {
 			stats.repaired_search_index = stats.repaired_search_index.saturating_add(1);
 		}
 
+		if topo_batch_len > 0 {
+			self.db.db_apply_batch(&topo_batch);
+		}
+
 		// --- Forward extremities (roomid_pduleaves) ---
 		let (extremities_updated, extremities_count) =
 			self.recalculate_extremities(room_id, true).await?;
@@ -296,7 +330,6 @@ impl Service {
 		stats.extremities_updated = extremities_updated;
 
 		drop(cork);
-		drop(state_lock);
 
 		info!("reindex_short: completed for {room_id}: {stats}");
 		Ok(stats)

@@ -802,6 +802,343 @@ async fn test_yolo_reorder_timeline() {
 }
 
 #[tokio::test]
+async fn test_yolo_dedup_room_removes_duplicate_topo_entry() {
+	use conduwuit::{
+		PduCount,
+		matrix::pdu::{Id as PduId, RawId as RawPduId},
+		pdu::PduBuilder,
+	};
+	use futures::StreamExt;
+	use ruma::{
+		RoomId, RoomVersionId,
+		events::room::{
+			create::RoomCreateEventContent,
+			member::{MembershipState, RoomMemberEventContent},
+			message::RoomMessageEventContent,
+		},
+	};
+
+	fn topo_pducount_key(pdu_id: &RawPduId, depth: u64) -> Vec<u8> {
+		let mut topo_key = Vec::with_capacity(24);
+		topo_key.extend_from_slice(&pdu_id.shortroomid());
+		topo_key.extend_from_slice(&depth.to_be_bytes());
+		topo_key.extend_from_slice(&pdu_id.shorteventid());
+		topo_key
+	}
+
+	let (services, _guard) = setup_test_services("dedup").await;
+
+	let room_id = RoomId::new(services.globals.server_name());
+	let shortroomid = services
+		.rooms
+		.short
+		.get_or_create_shortroomid(&room_id)
+		.await;
+
+	let state_lock = services.rooms.state.mutex.lock(&room_id).await;
+	let server_user = services.globals.server_user.as_ref();
+	services
+		.users
+		.create(server_user, None, None)
+		.await
+		.unwrap();
+
+	services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(String::new(), &RoomCreateEventContent {
+				federate: true,
+				predecessor: None,
+				room_version: RoomVersionId::V11,
+				..RoomCreateEventContent::new_v11()
+			}),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+
+	services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(
+				String::from(server_user),
+				&RoomMemberEventContent::new(MembershipState::Join),
+			),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+
+	let duplicated_event = services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::timeline(&RoomMessageEventContent::text_plain("duplicate me")),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+	drop(state_lock);
+
+	let duplicate_count = PduCount::Normal(services.globals.next_count().unwrap());
+	let duplicate_pdu_id: RawPduId = PduId {
+		shortroomid,
+		shorteventid: duplicate_count,
+	}
+	.into();
+	let metadata = services
+		.rooms
+		.timeline
+		.get_event_metadata(&duplicated_event)
+		.await
+		.unwrap();
+	let duplicate_topo_key = topo_pducount_key(&duplicate_pdu_id, metadata.depth.into());
+
+	// Seed the exact corruption that dedup-room repairs: a second timeline
+	// index entry for the same event ID, without changing the canonical
+	// eventid_pduid mapping.
+	services.db["room_pducount_eventid"].insert(&duplicate_pdu_id, duplicated_event.as_bytes());
+	services.db["roomid_topologicalorder_pducount"]
+		.insert(&duplicate_topo_key, duplicated_event.as_bytes());
+
+	let mut stream_duplicates = 0_usize;
+	let mut stream = Box::pin(services.rooms.timeline.all_pdus(&room_id));
+	while let Some((_, pdu)) = stream.next().await {
+		if pdu.event_id == duplicated_event {
+			stream_duplicates = stream_duplicates.saturating_add(1);
+		}
+	}
+	assert_eq!(stream_duplicates, 2, "test setup should create a duplicate stream entry");
+
+	let mut topo_duplicates = 0_usize;
+	let mut topo_stream = Box::pin(services.rooms.timeline.topo_pdus(&room_id, None));
+	while let Some(item) = topo_stream.next().await {
+		let (_, pdu) = item.unwrap();
+		if pdu.event_id == duplicated_event {
+			topo_duplicates = topo_duplicates.saturating_add(1);
+		}
+	}
+	assert_eq!(topo_duplicates, 2, "test setup should create a duplicate topo entry");
+
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo dedup-room {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "dedup-room failed: {res:?}");
+
+	let mut stream_duplicates = 0_usize;
+	let mut stream = Box::pin(services.rooms.timeline.all_pdus(&room_id));
+	while let Some((_, pdu)) = stream.next().await {
+		if pdu.event_id == duplicated_event {
+			stream_duplicates = stream_duplicates.saturating_add(1);
+		}
+	}
+	assert_eq!(stream_duplicates, 1, "dedup-room should remove duplicate stream entry");
+
+	let mut topo_duplicates = 0_usize;
+	let mut topo_stream = Box::pin(services.rooms.timeline.topo_pdus(&room_id, None));
+	while let Some(item) = topo_stream.next().await {
+		let (_, pdu) = item.unwrap();
+		if pdu.event_id == duplicated_event {
+			topo_duplicates = topo_duplicates.saturating_add(1);
+		}
+	}
+	assert_eq!(topo_duplicates, 1, "dedup-room should remove duplicate topo entry");
+}
+
+async fn create_test_room_with_message(
+	services: &std::sync::Arc<service::Services>,
+	body: &str,
+) -> (ruma::OwnedRoomId, ruma::OwnedEventId) {
+	use conduwuit::pdu::PduBuilder;
+	use ruma::{
+		RoomId, RoomVersionId,
+		events::room::{
+			create::RoomCreateEventContent,
+			member::{MembershipState, RoomMemberEventContent},
+			message::RoomMessageEventContent,
+		},
+	};
+
+	let room_id = RoomId::new(services.globals.server_name());
+	services
+		.rooms
+		.short
+		.get_or_create_shortroomid(&room_id)
+		.await;
+
+	let state_lock = services.rooms.state.mutex.lock(&room_id).await;
+	let server_user = services.globals.server_user.as_ref();
+	services
+		.users
+		.create(server_user, None, None)
+		.await
+		.unwrap();
+
+	services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(String::new(), &RoomCreateEventContent {
+				federate: true,
+				predecessor: None,
+				room_version: RoomVersionId::V11,
+				..RoomCreateEventContent::new_v11()
+			}),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+
+	services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::state(
+				String::from(server_user),
+				&RoomMemberEventContent::new(MembershipState::Join),
+			),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+
+	let event_id = services
+		.rooms
+		.timeline
+		.build_and_append_pdu(
+			PduBuilder::timeline(&RoomMessageEventContent::text_plain(body)),
+			server_user,
+			Some(&room_id),
+			&state_lock,
+		)
+		.await
+		.unwrap();
+	drop(state_lock);
+
+	(room_id, event_id)
+}
+
+fn topo_pducount_key_for_test(pdu_id: &conduwuit::matrix::pdu::RawId, depth: u64) -> Vec<u8> {
+	let mut topo_key = Vec::with_capacity(24);
+	topo_key.extend_from_slice(&pdu_id.shortroomid());
+	topo_key.extend_from_slice(&depth.to_be_bytes());
+	topo_key.extend_from_slice(&pdu_id.shorteventid());
+	topo_key
+}
+
+async fn seed_stale_topo_entry_for_test(
+	services: &std::sync::Arc<service::Services>,
+	event_id: &ruma::EventId,
+) {
+	let pdu_id = services.rooms.timeline.get_pdu_id(event_id).await.unwrap();
+	let metadata = services
+		.rooms
+		.timeline
+		.get_event_metadata(event_id)
+		.await
+		.unwrap();
+	let stale_topo_key = topo_pducount_key_for_test(
+		&pdu_id,
+		metadata.deprecated_local_topo_depth.saturating_add(10_000),
+	);
+	services.db["roomid_topologicalorder_pducount"].insert(&stale_topo_key, event_id.as_bytes());
+}
+
+async fn count_topo_occurrences_for_test(
+	services: &std::sync::Arc<service::Services>,
+	room_id: &ruma::RoomId,
+	event_id: &ruma::EventId,
+) -> usize {
+	use futures::StreamExt;
+
+	let mut count = 0_usize;
+	let mut stream = Box::pin(services.rooms.timeline.topo_pdus(room_id, None));
+	while let Some(item) = stream.next().await {
+		let (_, pdu) = item.unwrap();
+		if pdu.event_id == event_id {
+			count = count.saturating_add(1);
+		}
+	}
+	count
+}
+
+#[tokio::test]
+async fn test_yolo_reindex_short_removes_stale_topo_entries() {
+	let (services, _guard) = setup_test_services("reindex_short_topo").await;
+	let (room_id, event_id) = create_test_room_with_message(&services, "stale topo").await;
+
+	assert_eq!(count_topo_occurrences_for_test(&services, &room_id, &event_id).await, 1);
+	seed_stale_topo_entry_for_test(&services, &event_id).await;
+	assert_eq!(
+		count_topo_occurrences_for_test(&services, &room_id, &event_id).await,
+		2,
+		"test setup should create a stale duplicate topo entry",
+	);
+
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo reindex-short {room_id}"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "reindex-short failed: {res:?}");
+
+	assert_eq!(
+		count_topo_occurrences_for_test(&services, &room_id, &event_id).await,
+		1,
+		"reindex-short should rebuild topo index without stale duplicates",
+	);
+}
+
+#[tokio::test]
+async fn test_yolo_reorder_timeline_removes_stale_topo_entries() {
+	let (services, _guard) = setup_test_services("reorder_topo").await;
+	let (room_id, event_id) = create_test_room_with_message(&services, "stale topo").await;
+
+	seed_stale_topo_entry_for_test(&services, &event_id).await;
+	assert_eq!(
+		count_topo_occurrences_for_test(&services, &room_id, &event_id).await,
+		2,
+		"test setup should create a stale duplicate topo entry",
+	);
+
+	let res = services
+		.admin
+		.command_in_place(
+			format!("yolo reorder-timeline {room_id} --no-compute-state"),
+			None,
+			service::admin::InvocationSource::Console,
+		)
+		.await;
+	assert!(res.is_ok(), "reorder-timeline failed: {res:?}");
+
+	assert_eq!(
+		count_topo_occurrences_for_test(&services, &room_id, &event_id).await,
+		1,
+		"reorder-timeline should rebuild topo index without stale duplicates",
+	);
+}
+
+#[tokio::test]
 async fn test_busted_dag_resolution() {
 	use std::path::Path;
 
