@@ -19,6 +19,10 @@
 {"Action":"pass","Test":"TestMessagesPaginationStressNoDuplicates/Clean_messages_only/limit=50"}
 {"Action":"pass","Test":"TestMessagesPaginationStressNoDuplicates/Clean_messages_only/limit=7"}
 {"Action":"fail","Test":"TestMessagesPaginationStressNoDuplicates/Messy_room_activity"}
+{"Action":"fail","Test":"TestMessagesPaginationStressNoDuplicates/Messy_room_activity/limit=1"}
+{"Action":"pass","Test":"TestMessagesPaginationStressNoDuplicates/Messy_room_activity/limit=3"}
+{"Action":"pass","Test":"TestMessagesPaginationStressNoDuplicates/Messy_room_activity/limit=50"}
+{"Action":"pass","Test":"TestMessagesPaginationStressNoDuplicates/Messy_room_activity/limit=7"}
 {"Action":"fail","Test":"TestMessagesPaginationStressNoDuplicates/Re-join_with_activity_during_absence"}
 {"Action":"fail","Test":"TestMessagesPaginationStressNoDuplicates/Re-join_with_activity_during_absence/limit=1"}
 {"Action":"fail","Test":"TestMessagesPaginationStressNoDuplicates/Re-join_with_activity_during_absence/limit=3"}
@@ -26,7 +30,7 @@
 {"Action":"fail","Test":"TestMessagesPaginationStressNoDuplicates/Re-join_with_activity_during_absence/limit=7"}
 {"Action":"fail","Test":"TestMessagesPaginationStressStaleTokenResume"}
 {"Action":"fail","Test":"TestMessagesPaginationStressStaleTokenResume/limit=3"}
-{"Action":"pass","Test":"TestMessagesPaginationStressStaleTokenResume/limit=7"}
+{"Action":"fail","Test":"TestMessagesPaginationStressStaleTokenResume/limit=7"}
 {"Action":"pass","Test":"TestMessagesPaginationStressTokenStability"}
 {"Action":"pass","Test":"TestMessagesPaginationStressTokenStability/limit=1"}
 {"Action":"pass","Test":"TestMessagesPaginationStressTokenStability/limit=10"}
