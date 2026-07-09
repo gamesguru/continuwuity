@@ -225,22 +225,18 @@ impl Service {
 			let prev_event_ids: Vec<OwnedEventId> =
 				pdu.prev_events().map(ToOwned::to_owned).collect();
 
-			if self
-				.db
-				.get_shortprevevents(short_eid)
-				.await
-				.map_or(true, |v| v.is_empty())
-				&& !prev_event_ids.is_empty()
-			{
-				let mut prev_shorts = Vec::with_capacity(prev_event_ids.len());
-				for prev_id in &prev_event_ids {
-					prev_shorts.push(
-						self.services
-							.short
-							.get_or_create_shorteventid(prev_id)
-							.await,
-					);
-				}
+			let mut prev_shorts = Vec::with_capacity(prev_event_ids.len());
+			for prev_id in &prev_event_ids {
+				prev_shorts.push(
+					self.services
+						.short
+						.get_or_create_shorteventid(prev_id)
+						.await,
+				);
+			}
+
+			let stored_prev_shorts = self.db.get_shortprevevents(short_eid).await.ok();
+			if stored_prev_shorts.as_ref() != Some(&prev_shorts) {
 				self.db.store_shortprevevents(short_eid, &prev_shorts);
 				stats.repaired_prev_events = stats.repaired_prev_events.saturating_add(1);
 			}
@@ -262,13 +258,8 @@ impl Service {
 				shorts
 			};
 
-			if self
-				.db
-				.get_shortauthevents(short_eid)
-				.await
-				.map_or(true, |v| v.is_empty())
-				&& !auth_shorts.is_empty()
-			{
+			let stored_auth_shorts = self.db.get_shortauthevents(short_eid).await.ok();
+			if stored_auth_shorts.as_ref() != Some(&auth_shorts) {
 				self.db.store_shortauthevents(short_eid, &auth_shorts);
 				stats.repaired_auth_events = stats.repaired_auth_events.saturating_add(1);
 			}
