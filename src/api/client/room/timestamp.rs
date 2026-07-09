@@ -77,6 +77,19 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 	// the correct event (e.g. the m.room.create event for "go to beginning").
 	// We pick whichever result is closer to the requested timestamp.
 	if services.server.config.allow_federation {
+		if let Some(local) = &local_result {
+			if local.origin_server_ts == ts {
+				info!(
+					target: "timeline_debug",
+					%room_id,
+					?ts,
+					?dir,
+					"Using exact local timestamp result without federation"
+				);
+				return Ok(local.clone());
+			}
+		}
+
 		let mut origin = room_id.server_name().map(ToOwned::to_owned);
 		if origin.is_none() {
 			if let Ok(create_event) = services
@@ -91,46 +104,60 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 
 		if let Some(ref origin_server) = origin {
 			if origin_server != services.globals.server_name() {
-				let mut fed_result =
+				let fed_result =
 					federation_query(&services, origin_server, room_id, ts, dir).await;
 
 				// Fetch the federation result locally before checking visibility.
 				// `user_can_see_event` is permissive when local event state is missing.
-				if let Some(fed) = fed_result.take() {
-					fed_result = match services
-						.rooms
-						.timeline
-						.get_remote_pdu(room_id, &fed.event_id)
-						.await
-					{
-						| Ok(pdu) => {
-							if services
-								.rooms
-								.state_accessor
-								.user_can_see_event(body.sender_user(), room_id, &pdu.event_id)
-								.await
-							{
-								Some(get_event_by_timestamp::v1::Response::new(
-									pdu.event_id.clone(),
-									MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
-								))
-							} else {
-								debug!(
-									event_id = %pdu.event_id,
-									"Federation timestamp result is not visible to requester"
+				let fed_result = if let Some(fed) = fed_result {
+					if !federation_can_win(ts, dir, local_result.as_ref(), &fed) {
+						debug!(
+							event_id = %fed.event_id,
+							"Skipping federation timestamp result because local result is closer"
+						);
+						None
+					} else {
+						match services
+							.rooms
+							.timeline
+							.get_remote_pdu(room_id, &fed.event_id)
+							.await
+						{
+							| Ok(pdu) => {
+								if services
+									.rooms
+									.state_accessor
+									.user_can_see_event(
+										body.sender_user(),
+										room_id,
+										&pdu.event_id,
+									)
+									.await
+								{
+									Some(get_event_by_timestamp::v1::Response::new(
+										pdu.event_id.clone(),
+										MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
+									))
+								} else {
+									debug!(
+										event_id = %pdu.event_id,
+										"Federation timestamp result is not visible to requester"
+									);
+									None
+								}
+							},
+							| Err(e) => {
+								warn!(
+									event_id = %fed.event_id,
+									"Failed to fetch federation timestamp result locally: {e}"
 								);
 								None
-							}
-						},
-						| Err(e) => {
-							warn!(
-								event_id = %fed.event_id,
-								"Failed to fetch federation timestamp result locally: {e}"
-							);
-							None
-						},
-					};
-				}
+							},
+						}
+					}
+				} else {
+					None
+				};
 
 				return pick_closer(ts, dir, local_result, fed_result);
 			}
@@ -205,6 +232,30 @@ fn pick_closer(
 			"No visible event found near the given timestamp"
 		)))),
 	}
+}
+
+fn federation_can_win(
+	target: MilliSecondsSinceUnixEpoch,
+	dir: Direction,
+	local: Option<&get_event_by_timestamp::v1::Response>,
+	federation: &get_event_by_timestamp::v1::Response,
+) -> bool {
+	let Some(local) = local else {
+		return true;
+	};
+
+	let target_u64 = u64::from(target.0);
+	let local_ts = u64::from(local.origin_server_ts.0);
+	let fed_ts = u64::from(federation.origin_server_ts.0);
+	let local_dist = local_ts.abs_diff(target_u64);
+	let fed_dist = fed_ts.abs_diff(target_u64);
+
+	fed_dist < local_dist
+		|| fed_dist == local_dist
+			&& match dir {
+				| Direction::Forward => fed_ts <= local_ts,
+				| Direction::Backward => fed_ts >= local_ts,
+			}
 }
 
 /// Ask a remote server for the event closest to `ts` via the federation
