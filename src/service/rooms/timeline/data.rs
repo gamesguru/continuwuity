@@ -460,6 +460,23 @@ impl Data {
 		self.remove_topo_pducount_at_depth(pdu_id, old_depth);
 	}
 
+	fn remove_stream_and_topo_pducount_from_batch(
+		&self,
+		batch: &mut database::rocksdb::WriteBatch,
+		pdu_id: &RawPduId,
+		event_id_bytes: &[u8],
+		depth: Option<u64>,
+	) {
+		self.room_pducount_eventid
+			.remove_from_batch(batch, pdu_id.as_bytes());
+		self.eventid_pduid.remove_from_batch(batch, event_id_bytes);
+
+		if let Some(depth) = depth {
+			self.roomid_topologicalorder_pducount
+				.remove_from_batch(batch, &Self::topo_pducount_key(pdu_id, depth));
+		}
+	}
+
 	pub(super) fn replace_stream_and_topo_pducount(
 		&self,
 		pdu_id: &RawPduId,
@@ -1033,6 +1050,30 @@ impl Data {
 		debug_assert!(matches!(count, PduCount::Normal(_)), "PduCount not Normal");
 
 		let event_id_bytes = pdu.event_id.as_bytes();
+		let existing_metadata = if let Ok(bytes) = self.eventid_metadata.get(event_id_bytes).await
+		{
+			rooms::timeline::EventMetadata::from_bincode(&bytes).ok()
+		} else {
+			None
+		};
+
+		if let Ok(existing_pdu_id) = self
+			.eventid_pduid
+			.get(event_id_bytes)
+			.await
+			.map(|handle| RawPduId::from(&*handle))
+		{
+			if existing_pdu_id != *pdu_id {
+				self.remove_stream_and_topo_pducount_from_batch(
+					batch,
+					&existing_pdu_id,
+					event_id_bytes,
+					existing_metadata
+						.as_ref()
+						.map(|meta| meta.deprecated_local_topo_depth),
+				);
+			}
+		}
 
 		// Map event_id -> pdu_id
 		self.eventid_pduid
@@ -1043,13 +1084,6 @@ impl Data {
 
 		self.room_pducount_eventid
 			.insert_into_batch(batch, pdu_id, event_id_bytes);
-
-		let existing_metadata = if let Ok(bytes) = self.eventid_metadata.get(event_id_bytes).await
-		{
-			rooms::timeline::EventMetadata::from_bincode(&bytes).ok()
-		} else {
-			None
-		};
 
 		let topo_key = Self::topo_pducount_key(pdu_id, pdu.depth().into());
 		self.roomid_topologicalorder_pducount
@@ -1120,6 +1154,31 @@ impl Data {
 		pdu: &PduEvent,
 	) {
 		let event_id_bytes = event_id.as_bytes();
+		let existing_metadata = if let Ok(bytes) = self.eventid_metadata.get(event_id_bytes).await
+		{
+			rooms::timeline::EventMetadata::from_bincode(&bytes).ok()
+		} else {
+			None
+		};
+
+		if let Ok(existing_pdu_id) = self
+			.eventid_pduid
+			.get(event_id_bytes)
+			.await
+			.map(|handle| RawPduId::from(&*handle))
+		{
+			if existing_pdu_id != *pdu_id {
+				self.remove_stream_and_topo_pducount_from_batch(
+					batch,
+					&existing_pdu_id,
+					event_id_bytes,
+					existing_metadata
+						.as_ref()
+						.map(|meta| meta.deprecated_local_topo_depth),
+				);
+			}
+		}
+
 		self.eventid_pduid
 			.insert_into_batch(batch, &event_id_bytes, pdu_id);
 
@@ -1127,12 +1186,6 @@ impl Data {
 			.raw_put_into_batch(batch, event_id_bytes, Json(json));
 		self.room_pducount_eventid
 			.insert_into_batch(batch, pdu_id, event_id_bytes);
-		let existing_metadata = if let Ok(bytes) = self.eventid_metadata.get(event_id_bytes).await
-		{
-			rooms::timeline::EventMetadata::from_bincode(&bytes).ok()
-		} else {
-			None
-		};
 
 		let topo_key = Self::topo_pducount_key(pdu_id, pdu.depth().into());
 		self.roomid_topologicalorder_pducount
