@@ -373,9 +373,47 @@ jobs:
           PROFILE="${{ matrix.profile }}"
           ROOM_VERSION="${{ matrix.room_version }}"
 
-          # Fetch the newly failing and passing tests for this specific run
-          NEW_FAILURES=$(./bin/db-shell -A -t -c "SELECT new_failures_list FROM v_run_regressions WHERE commit_hash LIKE '${SHA}%' AND arch = '${ARCH}' AND os = '${OS}' AND profile = '${PROFILE}' AND room_version IS NOT DISTINCT FROM '${ROOM_VERSION}' LIMIT 1;" | sed 's/\\n/\n/g')
-          NEW_PASSES=$(./bin/db-shell -A -t -c "SELECT new_passes_list FROM v_run_regressions WHERE commit_hash LIKE '${SHA}%' AND arch = '${ARCH}' AND os = '${OS}' AND profile = '${PROFILE}' AND room_version IS NOT DISTINCT FROM '${ROOM_VERSION}' LIMIT 1;" | sed 's/\\n/\n/g')
+          COMMON_CTES="
+            WITH current_run AS (
+              SELECT id, arch, os, profile, room_version
+              FROM runs
+              WHERE commit_hash LIKE '${SHA}%'
+                AND arch IS NOT DISTINCT FROM '${ARCH}'
+                AND os IS NOT DISTINCT FROM '${OS}'
+                AND profile IS NOT DISTINCT FROM '${PROFILE}'
+                AND room_version IS NOT DISTINCT FROM '${ROOM_VERSION}'
+              ORDER BY run_date DESC, id DESC
+              LIMIT 1
+            ),
+            baseline_run AS (
+              SELECT b.id
+              FROM runs b
+              CROSS JOIN current_run r
+              WHERE b.branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream')
+                AND b.arch IS NOT DISTINCT FROM r.arch
+                AND b.os IS NOT DISTINCT FROM r.os
+                AND b.profile IS NOT DISTINCT FROM r.profile
+                AND COALESCE(b.room_version, '11') IS NOT DISTINCT FROM COALESCE(r.room_version, '11')
+                AND EXISTS (SELECT 1 FROM run_details bd WHERE bd.run_id = b.id)
+              ORDER BY b.run_date DESC, b.id DESC
+              LIMIT 1
+            )"
+
+          # Fetch tests whose status changed relative to the latest matching main baseline.
+          NEW_FAILURES=$(./bin/db-shell -A -t -c "${COMMON_CTES}
+            SELECT COALESCE(STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name), '')
+            FROM current_run r
+            JOIN run_details rd ON rd.run_id = r.id
+            JOIN baseline_run br ON TRUE
+            LEFT JOIN run_details mb ON mb.test_name = rd.test_name AND mb.run_id = br.id
+            WHERE rd.status = 'fail' AND (mb.status IS NULL OR mb.status != 'fail');" | sed 's/\\n/\n/g')
+          NEW_PASSES=$(./bin/db-shell -A -t -c "${COMMON_CTES}
+            SELECT COALESCE(STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name), '')
+            FROM current_run r
+            JOIN run_details rd ON rd.run_id = r.id
+            JOIN baseline_run br ON TRUE
+            LEFT JOIN run_details mb ON mb.test_name = rd.test_name AND mb.run_id = br.id
+            WHERE rd.status = 'pass' AND (mb.status IS NULL OR mb.status != 'pass');" | sed 's/\\n/\n/g')
 
           echo "new_failures<<EOF" | tee -a "$GITHUB_OUTPUT"
           echo "$NEW_FAILURES" | tee -a "$GITHUB_OUTPUT"
