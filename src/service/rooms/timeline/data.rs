@@ -647,10 +647,10 @@ impl Data {
 
 	/// Drop a duplicate PDU by ID without removing the event mapping
 	pub(super) fn drop_duplicate_pdu(&self, pdu_id: &RawPduId) {
-		self.room_pducount_eventid.remove(pdu_id);
 		if let Ok(event_id_bytes) = self.room_pducount_eventid.get_blocking(pdu_id) {
 			self.remove_topo_pducount(pdu_id, &event_id_bytes);
 		}
+		self.room_pducount_eventid.remove(pdu_id);
 	}
 
 	/// Returns the pdu's id. Tries metadata `pdu_count` first (fast path),
