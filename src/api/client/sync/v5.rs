@@ -62,6 +62,7 @@ struct RoomExtra {
 	lists: BTreeSet<String>,
 	membership: Option<MembershipState>,
 	expanded_timeline: bool,
+	force_update: bool,
 }
 
 /// `POST /_matrix/client/unstable/org.matrix.simplified_msc3575/sync`
@@ -486,6 +487,24 @@ where
 				);
 			}
 		}
+
+		if let Some(previous_rooms) = known_rooms.get(list_id.as_str()) {
+			for (room_id, roomsince) in previous_rooms {
+				if *roomsince == 0 || new_known_rooms.contains(room_id) {
+					continue;
+				}
+
+				room_extras.entry(room_id.clone()).or_default().force_update = true;
+
+				let todo_room = todo_rooms.entry(room_id.clone()).or_insert((
+					BTreeSet::new(),
+					0_usize,
+					u64::MAX,
+				));
+				todo_room.2 = todo_room.2.min(*roomsince);
+			}
+		}
+
 		response
 			.lists
 			.insert(list_id.clone(), sync_events::v5::response::List {
@@ -634,6 +653,9 @@ where
 				.is_none_or(Vec::is_empty)
 			&& last_notification_read <= *roomsince
 			&& required_state_request.is_empty()
+			&& !room_extras
+				.get(room_id)
+				.is_some_and(|extra| extra.force_update)
 		{
 			continue;
 		}
