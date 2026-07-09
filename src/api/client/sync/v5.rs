@@ -544,8 +544,8 @@ where
 	for (room_id, (required_state_request, timeline_limit, roomsince)) in todo_rooms {
 		let roomsincecount = PduCount::Normal(*roomsince);
 
-		let old_limit = timeline_limits.get(room_id).copied();
-		let is_expanded_timeline = old_limit.is_some_and(|old| *timeline_limit > old);
+		let is_expanded_timeline =
+			is_expanded_timeline(timeline_limits.get(room_id).copied(), *timeline_limit);
 
 		let mut timestamp: Option<_> = None;
 		let mut invite_state = None;
@@ -859,6 +859,10 @@ where
 		});
 	}
 	Ok(rooms)
+}
+
+fn is_expanded_timeline(old_limit: Option<usize>, timeline_limit: usize) -> bool {
+	old_limit.is_some_and(|old| timeline_limit > old)
 }
 
 fn sync_events_v5_json_response(
@@ -1397,4 +1401,26 @@ where
 
 		include.then_some(room_id)
 	})
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn expanded_timeline_requires_a_previous_limit() {
+		assert!(!is_expanded_timeline(None, 10));
+	}
+
+	#[test]
+	fn expanded_timeline_counts_zero_as_previous_limit() {
+		assert!(is_expanded_timeline(Some(0), 10));
+	}
+
+	#[test]
+	fn expanded_timeline_requires_a_larger_limit() {
+		assert!(!is_expanded_timeline(Some(10), 10));
+		assert!(!is_expanded_timeline(Some(10), 5));
+		assert!(is_expanded_timeline(Some(10), 11));
+	}
 }
