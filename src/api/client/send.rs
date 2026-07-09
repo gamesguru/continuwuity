@@ -110,10 +110,13 @@ pub(crate) async fn send_message_event_route(
 			return cached_send_txn_response(&response, true);
 		}
 
-		let state_lock = services.rooms.state.mutex.lock(&body.room_id).await;
+		let txn_lock = services
+			.transactions
+			.lock_client_txn(sender_user, sender_device, &body.txn_id)
+			.await;
 
-		// Re-check after acquiring the room lock in case a concurrent request with the
-		// same txn id populated the cache while this request was waiting.
+		// Re-check after acquiring the transaction lock in case a concurrent request
+		// with the same txn id populated the cache while this request was waiting.
 		if let Ok(response) = services
 			.transactions
 			.get_client_txn(sender_user, sender_device, &body.txn_id)
@@ -149,12 +152,35 @@ pub(crate) async fn send_message_event_route(
 			&encode_cached_send_txn_response(SEND_TXN_DELAY_ID_PREFIX, delay_id.as_bytes()),
 		);
 
-		drop(state_lock);
+		drop(txn_lock);
 
 		return Ok(delay_id_response(&delay_id));
 	}
 
 	// Check if this is a new transaction id
+	if let Ok(response) = services
+		.transactions
+		.get_client_txn(sender_user, sender_device, &body.txn_id)
+		.await
+	{
+		// The client might have sent a txnid of the /sendToDevice endpoint
+		// This txnid has no response associated with it
+		if response.is_empty() {
+			return Err!(Request(InvalidParam(
+				"Tried to use txn id already used for an incompatible endpoint."
+			)));
+		}
+
+		return cached_send_txn_response(&response, false);
+	}
+
+	let txn_lock = services
+		.transactions
+		.lock_client_txn(sender_user, sender_device, &body.txn_id)
+		.await;
+
+	// Re-check after acquiring the transaction lock in case a concurrent request
+	// with the same txn id populated the cache while this request was waiting.
 	if let Ok(response) = services
 		.transactions
 		.get_client_txn(sender_user, sender_device, &body.txn_id)
@@ -215,6 +241,7 @@ pub(crate) async fn send_message_event_route(
 	);
 
 	drop(state_lock);
+	drop(txn_lock);
 
 	Ok(RumaResponse(send_message_event::v3::Response { event_id }).into_response())
 }
