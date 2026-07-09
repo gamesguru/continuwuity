@@ -58,11 +58,15 @@ fn cached_send_txn_response(
 	match parse_cached_send_txn_response(data, legacy_is_delay_id)? {
 		| CachedSendTxnResponse::EventId(event_id) =>
 			Ok(RumaResponse(send_message_event::v3::Response { event_id }).into_response()),
-		| CachedSendTxnResponse::DelayId(delay_id) => Ok(axum::Json(serde_json::json!({
-			"delay_id": delay_id,
-		}))
-		.into_response()),
+		| CachedSendTxnResponse::DelayId(delay_id) => Ok(delay_id_response(&delay_id)),
 	}
+}
+
+fn delay_id_response(delay_id: &str) -> axum::response::Response {
+	axum::Json(serde_json::json!({
+		"delay_id": delay_id,
+	}))
+	.into_response()
 }
 
 /// # `PUT /_matrix/client/v3/rooms/{roomId}/send/{eventType}/{txnId}`
@@ -106,6 +110,23 @@ pub(crate) async fn send_message_event_route(
 			return cached_send_txn_response(&response, true);
 		}
 
+		let state_lock = services.rooms.state.mutex.lock(&body.room_id).await;
+
+		// Re-check after acquiring the room lock in case a concurrent request with the
+		// same txn id populated the cache while this request was waiting.
+		if let Ok(response) = services
+			.transactions
+			.get_client_txn(sender_user, sender_device, &body.txn_id)
+			.await
+		{
+			if response.is_empty() {
+				return Err!(Request(InvalidParam(
+					"Tried to use txn id already used for an incompatible endpoint."
+				)));
+			}
+			return cached_send_txn_response(&response, true);
+		}
+
 		let event = service::rooms::delayed_events::ScheduledDelayedEvent {
 			event_type: body.event_type.clone().into(),
 			state_key: None,
@@ -128,10 +149,9 @@ pub(crate) async fn send_message_event_route(
 			&encode_cached_send_txn_response(SEND_TXN_DELAY_ID_PREFIX, delay_id.as_bytes()),
 		);
 
-		return Ok(axum::Json(serde_json::json!({
-			"delay_id": delay_id,
-		}))
-		.into_response());
+		drop(state_lock);
+
+		return Ok(delay_id_response(&delay_id));
 	}
 
 	// Check if this is a new transaction id
