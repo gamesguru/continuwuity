@@ -77,19 +77,6 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 	// the correct event (e.g. the m.room.create event for "go to beginning").
 	// We pick whichever result is closer to the requested timestamp.
 	if services.server.config.allow_federation {
-		if let Some(local) = &local_result {
-			if local.origin_server_ts == ts {
-				info!(
-					target: "timeline_debug",
-					%room_id,
-					?ts,
-					?dir,
-					"Using exact local timestamp result without federation"
-				);
-				return Ok(local.clone());
-			}
-		}
-
 		let mut origin = room_id.server_name().map(ToOwned::to_owned);
 		if origin.is_none() {
 			if let Ok(create_event) = services
