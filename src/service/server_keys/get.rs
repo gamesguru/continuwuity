@@ -1,7 +1,6 @@
 use std::borrow::Borrow;
 
 use conduwuit::{Err, Result, debug_error, debug_warn, err, implement, trace};
-use database::Deserialized;
 use ruma::{
 	CanonicalJsonObject, MilliSecondsSinceUnixEpoch, RoomVersionId, ServerName,
 	ServerSigningKeyId, api::federation::discovery::VerifyKey,

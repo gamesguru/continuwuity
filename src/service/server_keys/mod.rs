@@ -246,6 +246,11 @@ pub async fn add_signing_keys(
 	// Merging with Collision Detection (First Seen Wins)
 	let mut filtered_verify_keys = new_keys.verify_keys.clone();
 	let mut filtered_old_verify_keys = new_keys.old_verify_keys.clone();
+	let collision_action = if enforce_fsw {
+		"Retaining cached key."
+	} else {
+		"Not enforcing because msc4499_first_seen_wins is disabled."
+	};
 
 	for (key_id, new_key) in &new_keys.verify_keys {
 		if let Some(existing_key) = historical_keys.verify_keys.get(key_id) {
@@ -255,9 +260,11 @@ pub async fn add_signing_keys(
 				conduwuit::warn!(
 					"Key ID collision detected for server {origin} on active key {key_id}! \
 					 Cached fingerprint: {existing_fp}, conflicting fingerprint: {new_fp}. \
-					 Retaining cached key."
+					 {collision_action}"
 				);
-				filtered_verify_keys.remove(key_id);
+				if enforce_fsw {
+					filtered_verify_keys.remove(key_id);
+				}
 			}
 		} else if let Some(existing_old_key) = historical_keys.old_verify_keys.get(key_id) {
 			if existing_old_key.key != new_key.key {
@@ -266,9 +273,11 @@ pub async fn add_signing_keys(
 				conduwuit::warn!(
 					"Key ID collision detected for server {origin} on active/old key {key_id}! \
 					 Cached fingerprint: {existing_fp}, conflicting fingerprint: {new_fp}. \
-					 Retaining cached key."
+					 {collision_action}"
 				);
-				filtered_verify_keys.remove(key_id);
+				if enforce_fsw {
+					filtered_verify_keys.remove(key_id);
+				}
 			}
 		}
 	}
@@ -281,9 +290,11 @@ pub async fn add_signing_keys(
 				conduwuit::warn!(
 					"Key ID collision detected for server {origin} on old/active key {key_id}! \
 					 Cached fingerprint: {existing_fp}, conflicting fingerprint: {new_fp}. \
-					 Retaining cached key."
+					 {collision_action}"
 				);
-				filtered_old_verify_keys.remove(key_id);
+				if enforce_fsw {
+					filtered_old_verify_keys.remove(key_id);
+				}
 			}
 		} else if let Some(existing_old_key) = historical_keys.old_verify_keys.get(key_id) {
 			if existing_old_key.key != new_old_key.key {
@@ -291,10 +302,12 @@ pub async fn add_signing_keys(
 				let new_fp = get_fingerprint(&new_old_key.key);
 				conduwuit::warn!(
 					"Key ID collision detected for server {origin} on old key {key_id}! Cached \
-					 fingerprint: {existing_fp}, conflicting fingerprint: {new_fp}. Retaining \
-					 cached key."
+					 fingerprint: {existing_fp}, conflicting fingerprint: {new_fp}. \
+					 {collision_action}"
 				);
-				filtered_old_verify_keys.remove(key_id);
+				if enforce_fsw {
+					filtered_old_verify_keys.remove(key_id);
+				}
 			}
 		}
 	}

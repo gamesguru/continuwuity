@@ -7,10 +7,7 @@ use std::{
 use conduwuit::{
 	debug, debug_error, debug_warn, error, implement, info, result::FlatOk, trace, warn,
 };
-use futures::{
-	StreamExt,
-	stream::{FuturesOrdered, FuturesUnordered},
-};
+use futures::{StreamExt, stream::FuturesUnordered};
 use ruma::{
 	CanonicalJsonObject, OwnedServerName, OwnedServerSigningKeyId, ServerName,
 	ServerSigningKeyId, api::federation::discovery::ServerSigningKeys, serde::Raw,
@@ -208,14 +205,14 @@ where
 		return missing;
 	}
 
-	let mut requests = FuturesOrdered::new();
+	let mut requests = FuturesUnordered::new();
 	for notary in trusted_servers {
 		let batch: Vec<_> = missing
 			.iter()
 			.map(|(s, k)| (s.clone(), k.clone()))
 			.collect();
 
-		requests.push_back(async move {
+		requests.push(async move {
 			let req_batch = batch
 				.iter()
 				.map(|(server, keys)| (server.borrow(), keys.iter().map(Borrow::borrow)));
