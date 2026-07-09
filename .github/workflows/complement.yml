@@ -149,8 +149,6 @@ jobs:
         if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         run: gpg --batch --yes --detach-sign --armor target/latest/conduwuit
 
-
-
       - name: Build Complement Docker image
         run: make complement/docker PROFILE=${{ matrix.profile }}
 
@@ -375,11 +373,16 @@ jobs:
           PROFILE="${{ matrix.profile }}"
           ROOM_VERSION="${{ matrix.room_version }}"
 
-          # Fetch the newly failing tests for this specific run
+          # Fetch the newly failing and passing tests for this specific run
           NEW_FAILURES=$(./bin/db-shell -A -t -c "SELECT new_failures_list FROM v_run_regressions WHERE commit_hash LIKE '${SHA}%' AND arch = '${ARCH}' AND os = '${OS}' AND profile = '${PROFILE}' AND room_version IS NOT DISTINCT FROM '${ROOM_VERSION}' LIMIT 1;" | sed 's/\\n/\n/g')
+          NEW_PASSES=$(./bin/db-shell -A -t -c "SELECT new_passes_list FROM v_run_regressions WHERE commit_hash LIKE '${SHA}%' AND arch = '${ARCH}' AND os = '${OS}' AND profile = '${PROFILE}' AND room_version IS NOT DISTINCT FROM '${ROOM_VERSION}' LIMIT 1;" | sed 's/\\n/\n/g')
 
           echo "new_failures<<EOF" | tee -a "$GITHUB_OUTPUT"
           echo "$NEW_FAILURES" | tee -a "$GITHUB_OUTPUT"
+          echo "EOF" | tee -a "$GITHUB_OUTPUT"
+
+          echo "new_passes<<EOF" | tee -a "$GITHUB_OUTPUT"
+          echo "$NEW_PASSES" | tee -a "$GITHUB_OUTPUT"
           echo "EOF" | tee -a "$GITHUB_OUTPUT"
 
           # Count non-empty lines of new failures
@@ -394,11 +397,24 @@ jobs:
             echo "</details>" | tee -a "$GITHUB_STEP_SUMMARY"
           fi
 
+          # Count non-empty lines of new passes
+          NEW_PASSES_COUNT=$(echo "$NEW_PASSES" | grep -c '[^[:space:]]' || true)
+          if [ "$NEW_PASSES_COUNT" -gt 0 ]; then
+            echo "" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "<details><summary>Newly Passed Tests ($NEW_PASSES_COUNT)</summary>" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "$NEW_PASSES" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo '```' | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "</details>" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+
       - name: Post Complement results to PR
         if: always() && github.event_name == 'pull_request'
         uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7
         env:
           FAILED_TESTS: ${{ steps.new_failures.outputs.new_failures }}
+          PASSED_TESTS: ${{ steps.new_failures.outputs.new_passes }}
         with:
           script: |
             const pass = ${{ steps.results.outputs.pass || 0 }};
@@ -408,6 +424,7 @@ jobs:
             const arch = '${{ matrix.arch }}';
             const os = '${{ matrix.os }}';
             const failedTestsRaw = process.env.FAILED_TESTS || '';
+            const passedTestsRaw = process.env.PASSED_TESTS || '';
 
             const lines = failedTestsRaw.trim().split('\n').filter(l => l.length > 0);
             let failedContent = 'No newly failing tests recorded.';
@@ -416,7 +433,9 @@ jobs:
               failedContent = '```\n' + list + '\n```';
             }
 
-            let currentRun = [
+            const passedLines = passedTestsRaw.trim().split('\n').filter(l => l.length > 0);
+
+            const currentRunLines = [
               `## Complement Test Results (${arch} ${os})`,
               `**Commit:** \`${context.payload.pull_request.head.ref}\` (\`${context.payload.pull_request.head.sha.substring(0, 7)}\`)`,
               `**Logs:** [View / Download Logs](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
@@ -433,7 +452,21 @@ jobs:
               failedContent,
               '',
               '</details>',
-            ].join('\n');
+            ];
+
+            if (passedLines.length > 0) {
+              const passedContent = '```\n' + passedLines.join('\n') + '\n```';
+              currentRunLines.push(
+                '',
+                `<details><summary>Newly Passed Tests (${passedLines.length})</summary>`,
+                '',
+                passedContent,
+                '',
+                '</details>'
+              );
+            }
+
+            let currentRun = currentRunLines.join('\n');
 
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
