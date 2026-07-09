@@ -89,7 +89,7 @@ LEFT JOIN LATERAL (
         FROM run_details rd_base
         WHERE rd_base.run_id = runs.id
     )
-    ORDER BY run_date DESC
+    ORDER BY run_date DESC, id DESC
     LIMIT 1
 ) dbr ON TRUE
 LEFT JOIN LATERAL (

@@ -410,7 +410,7 @@ jobs:
             JOIN run_details rd ON rd.run_id = r.id
             LEFT JOIN baseline_run br ON TRUE
             LEFT JOIN run_details mb ON mb.test_name = rd.test_name AND mb.run_id = br.id
-            WHERE rd.status = 'fail' AND mb.status IS NOT NULL AND mb.status != 'fail';" | sed 's/\\n/\n/g')
+            WHERE rd.status = 'fail' AND (mb.status IS NULL OR mb.status != 'fail');" | sed 's/\\n/\n/g')
           NEW_PASSES=$(./bin/db-shell -A -t -c "${COMMON_CTES}
             SELECT COALESCE(STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name), '')
             FROM current_run r
@@ -521,12 +521,25 @@ jobs:
               c.body && c.body.includes(marker)
             );
 
-            const heading = `## Complement Test Results (${arch} ${os})`;
+            const heading = `## Complement Test Results (${arch} ${os} v${roomVersion})`;
             const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const previousRunsSummary = '<details><summary>Previous Runs</summary>';
             const extractRuns = (body) => {
-              return body
-                .replace(marker, '')
+              const withoutMarker = body.replace(marker, '').trim();
+              const previousIndex = withoutMarker.indexOf(previousRunsSummary);
+              const currentSection = previousIndex === -1
+                ? withoutMarker
+                : withoutMarker.slice(0, previousIndex).trim();
+              const previousBlock = previousIndex === -1
+                ? ''
+                : withoutMarker
+                    .slice(previousIndex + previousRunsSummary.length)
+                    .replace(/\s*<\/details>\s*$/, '')
+                    .trim();
+
+              return [currentSection, ...previousBlock
                 .split(new RegExp(`(?=^${escapeRegExp(heading)}$)`, 'm'))
+              ]
                 .map(section => section.trim())
                 .filter(section => section.startsWith(heading));
             };

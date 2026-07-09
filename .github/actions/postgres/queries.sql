@@ -43,7 +43,7 @@ run_regs AS (
           AND regexp_replace(btrim(b.features, ' ,'), '[,\s]+', ' ', 'g') IS NOT DISTINCT FROM regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g')
           AND COALESCE(b.room_version, '11') IS NOT DISTINCT FROM COALESCE(r.room_version, '11')
           AND EXISTS (SELECT 1 FROM run_details rd_base WHERE rd_base.run_id = b.id)
-        ORDER BY b.run_date DESC
+        ORDER BY b.run_date DESC, b.id DESC
         LIMIT 1
     ) mb_run_id ON TRUE
     LEFT JOIN LATERAL (
