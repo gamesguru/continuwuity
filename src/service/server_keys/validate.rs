@@ -11,7 +11,7 @@ use conduwuit::{Err, Result};
 /// would be silently accepted with the second value winning.
 pub(super) fn check_no_duplicate_json_keys(raw: &str) -> Result {
 	// Scan the raw bytes for duplicate keys and count limits FIRST, before
-	// full deserialization. This prevents memory exhaustionif a rogue server
+	// full deserialization. This prevents memory exhaustion if a rogue server
 	// sends 100,000 keys, since we reject it before allocating a JSON tree.
 	let bytes = raw.as_bytes();
 	let vk_count = check_raw_duplicates(bytes, b"verify_keys")?;

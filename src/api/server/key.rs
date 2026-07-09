@@ -108,12 +108,11 @@ async fn get_signing_keys_for(
 		return Ok(get_our_signing_keys(services).await);
 	}
 
-	let mut server_key = services
-		.server_keys
-		.signing_keys_for(server_name)
-		.await
-		.ok();
-
+	let mut server_key = match services.server_keys.signing_keys_for(server_name).await {
+		| Ok(keys) => Some(keys),
+		| Err(ref e) if e.is_not_found() => None,
+		| Err(e) => return Err(e),
+	};
 	let needs_fetch = match &server_key {
 		| Some(keys) => {
 			// Re-fetch if any requested key ID is missing from the cached payload

@@ -530,10 +530,9 @@ pub async fn signing_keys_for(&self, origin: &ServerName) -> Result<ServerSignin
 		.await
 		.deserialized::<ServerSigningKeys>()
 	{
-		// We use extend to add historical keys that aren't already in the latest
-		// payload.		// We move anything from historical_keys.verify_keys into
-		// old_verify_keys if it's not in the latest verify_keys, to ensure
-		// we stay under the 50-key "hostile" limit for the active set.
+		// Augment with historical keys if they exist. We prioritize the latest keys.
+		// We merge historical old_verify_keys into the latest payload so historical
+		// key material remains available for verification and notary responses.
 		let mut merged_ovks = historical_keys.old_verify_keys;
 		merged_ovks.extend(keys.old_verify_keys);
 

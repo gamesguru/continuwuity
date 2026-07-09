@@ -132,24 +132,9 @@ async fn is_key_expired_for_event(
 	key_id: &ServerSigningKeyId,
 	event_ts: MilliSecondsSinceUnixEpoch,
 ) -> bool {
-	// Check the origin key record
+	// Check the origin key record (includes merged historical old_verify_keys)
 	if let Ok(server_keys) = self.signing_keys_for(origin).await {
 		if let Some(old_key) = server_keys.old_verify_keys.get(key_id) {
-			return old_key.expired_ts <= event_ts;
-		}
-	}
-
-	// Check the historical key record
-	let historical_key = super::historical_db_key(origin);
-
-	if let Ok(historical_keys) =
-		self.db
-			.server_signingkeys
-			.get(&historical_key)
-			.await
-			.deserialized::<ruma::api::federation::discovery::ServerSigningKeys>()
-	{
-		if let Some(old_key) = historical_keys.old_verify_keys.get(key_id) {
 			return old_key.expired_ts <= event_ts;
 		}
 	}
