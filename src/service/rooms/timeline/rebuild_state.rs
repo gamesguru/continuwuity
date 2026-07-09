@@ -395,18 +395,24 @@ impl super::Service {
 
 		// ── Compute state at all events via rezzy streaming ──
 		let batch_start = Instant::now();
-		let all_ids_owned: Vec<String> = ctx
+		let target_ids_owned: Vec<String> = ctx
 			.events_meta
 			.iter()
+			.filter(|(_, prev, _, state_key, _)| state_key.is_some() || prev.len() != 1)
 			.map(|(eid, ..)| eid.to_string())
 			.collect();
+		debug!(
+			"rebuild_state: targeting {} / {} events for rezzy state computation",
+			target_ids_owned.len(),
+			ctx.events_meta.len(),
+		);
 
 		let (tx, mut rx) = tokio::sync::mpsc::channel(100);
 
 		// Spawn synchronous rezzy pipeline on a blocking thread
 		let lean_events_moved = lean_events;
 		tokio::task::spawn_blocking(move || {
-			let target_refs: Vec<&String> = all_ids_owned.iter().collect();
+			let target_refs: Vec<&String> = target_ids_owned.iter().collect();
 			let mut abort = false;
 			rezzy::compute_state_at_streaming_optimized(
 				&target_refs,
@@ -446,15 +452,13 @@ impl super::Service {
 		let mut groups_deduped = 0_usize;
 		let mut processed = 0_usize;
 		let total_events = ctx.events_meta.len();
-		let mut events_meta_map = HashMap::with_capacity(ctx.events_meta.len());
-		for meta in &ctx.events_meta {
-			events_meta_map.insert(meta.0.as_str(), meta);
-		}
+		let mut pending_updates: HashMap<String, StateUpdateOwned> = HashMap::new();
 
 		// ── Instrumentation counters ──
 		let mut n_unchanged = 0_usize;
 		let mut n_new = 0_usize;
 		let mut n_new_deduped = 0_usize;
+		let mut n_inherited = 0_usize;
 		let mut t_unchanged = std::time::Duration::ZERO;
 		let mut t_compress = std::time::Duration::ZERO;
 		let mut t_save = std::time::Duration::ZERO;
@@ -463,18 +467,7 @@ impl super::Service {
 		let mut _t_last_recv = Instant::now();
 		let mut pdu_ssh_batch: Vec<(u64, u64)> = Vec::with_capacity(4096);
 
-		while let Some((resolved_id, owned_update)) = {
-			let t0 = Instant::now();
-			let result = rx.recv().await;
-			t_recv_wait = t_recv_wait.saturating_add(t0.elapsed());
-			_t_last_recv = Instant::now();
-			result
-		} {
-			let Some(&(eid, _, _, _state_key, _)) = events_meta_map.get(resolved_id.as_str())
-			else {
-				continue;
-			};
-
+		for (eid, prev, _, state_key, _) in &ctx.events_meta {
 			processed = processed.saturating_add(1);
 
 			if processed.is_multiple_of(1000) {
@@ -489,60 +482,92 @@ impl super::Service {
 				);
 			}
 
-			let ssh = match owned_update {
-				| StateUpdateOwned::Unchanged { parent_event_id } => {
-					let t0 = Instant::now();
-					n_unchanged = n_unchanged.saturating_add(1);
-					groups_deduped = groups_deduped.saturating_add(1);
-					// Look up parent's SSH by string key to avoid OwnedEventId parsing
-					let parent_eid: OwnedEventId = parent_event_id
-						.as_str()
-						.try_into()
-						.expect("parent_event_id from rezzy should be a valid event ID");
-					let result = event_ssh.get(&parent_eid).copied().unwrap_or(empty_ssh);
-					t_unchanged = t_unchanged.saturating_add(t0.elapsed());
-					result
-				},
-				| StateUpdateOwned::New { state, hash } => {
-					n_new = n_new.saturating_add(1);
+			let is_rezzy_target = state_key.is_some() || prev.len() != 1;
+			let ssh = if is_rezzy_target {
+				let owned_update = if let Some(update) = pending_updates.remove(eid.as_str()) {
+					update
+				} else {
+					loop {
+						let t0 = Instant::now();
+						let Some((resolved_id, update)) = rx.recv().await else {
+							break StateUpdateOwned::Unchanged {
+								parent_event_id: prev
+									.first()
+									.map(ToString::to_string)
+									.unwrap_or_default(),
+							};
+						};
+						t_recv_wait = t_recv_wait.saturating_add(t0.elapsed());
+						_t_last_recv = Instant::now();
 
-					// LtHash pre-check: skip the entire O(N) compression loop if
-					// we've already seen this exact state. LtHash is 128 bytes
-					// (cryptographic lattice hash) — collision is a non-issue.
-					if let Some(&existing_ssh) = lthash_to_ssh.get(&hash) {
-						groups_deduped = groups_deduped.saturating_add(1);
-						n_new_deduped = n_new_deduped.saturating_add(1);
-						existing_ssh
-					} else {
-						// Compress state to BTreeSet<u128> for storage.
-						let tc0 = Instant::now();
-						let mut compressed = BTreeSet::new();
-						for (key, ev_id_str) in &state {
-							let ssk = ssk_cache.get(key).copied().unwrap_or(0);
-							let sei = sei_str_cache.get(ev_id_str).copied().unwrap_or(0);
-							let compressed_val =
-								rooms::state_compressor::compress_state_event(ssk, sei);
-							compressed.insert(compressed_val);
+						if resolved_id == *eid {
+							break update;
 						}
-						t_compress = t_compress.saturating_add(tc0.elapsed());
-
-						let ts0 = Instant::now();
-						let result = self
-							.services
-							.state_compressor
-							.save_state_with_parent(
-								room_id,
-								Some(current_shortstatehash),
-								Arc::new(compressed),
-							)
-							.await?;
-						let ssh = result.shortstatehash;
-						lthash_to_ssh.insert(*hash, ssh);
-						groups_compressed = groups_compressed.saturating_add(1);
-						t_save = t_save.saturating_add(ts0.elapsed());
-						ssh
+						pending_updates.insert(resolved_id, update);
 					}
-				},
+				};
+
+				match owned_update {
+					| StateUpdateOwned::Unchanged { parent_event_id } => {
+						let t0 = Instant::now();
+						n_unchanged = n_unchanged.saturating_add(1);
+						groups_deduped = groups_deduped.saturating_add(1);
+						// Look up parent's SSH by string key to avoid OwnedEventId parsing
+						let parent_eid: OwnedEventId = parent_event_id
+							.as_str()
+							.try_into()
+							.expect("parent_event_id from rezzy should be a valid event ID");
+						let result = event_ssh.get(&parent_eid).copied().unwrap_or(empty_ssh);
+						t_unchanged = t_unchanged.saturating_add(t0.elapsed());
+						result
+					},
+					| StateUpdateOwned::New { state, hash } => {
+						n_new = n_new.saturating_add(1);
+
+						// LtHash pre-check: skip the entire O(N) compression loop if
+						// we've already seen this exact state. LtHash is 128 bytes
+						// (cryptographic lattice hash) — collision is a non-issue.
+						if let Some(&existing_ssh) = lthash_to_ssh.get(&hash) {
+							groups_deduped = groups_deduped.saturating_add(1);
+							n_new_deduped = n_new_deduped.saturating_add(1);
+							existing_ssh
+						} else {
+							// Compress state to BTreeSet<u128> for storage.
+							let tc0 = Instant::now();
+							let mut compressed = BTreeSet::new();
+							for (key, ev_id_str) in &state {
+								let ssk = ssk_cache.get(key).copied().unwrap_or(0);
+								let sei = sei_str_cache.get(ev_id_str).copied().unwrap_or(0);
+								let compressed_val =
+									rooms::state_compressor::compress_state_event(ssk, sei);
+								compressed.insert(compressed_val);
+							}
+							t_compress = t_compress.saturating_add(tc0.elapsed());
+
+							let ts0 = Instant::now();
+							let result = self
+								.services
+								.state_compressor
+								.save_state_with_parent(
+									room_id,
+									Some(current_shortstatehash),
+									Arc::new(compressed),
+								)
+								.await?;
+							let ssh = result.shortstatehash;
+							lthash_to_ssh.insert(*hash, ssh);
+							groups_compressed = groups_compressed.saturating_add(1);
+							t_save = t_save.saturating_add(ts0.elapsed());
+							ssh
+						}
+					},
+				}
+			} else {
+				n_inherited = n_inherited.saturating_add(1);
+				event_ssh
+					.get(&prev[0])
+					.copied()
+					.unwrap_or(current_shortstatehash)
 			};
 
 			let tw0 = Instant::now();
@@ -586,8 +611,8 @@ impl super::Service {
 			groups_deduped,
 		);
 		eprintln!(
-			"  [PERF] consumer breakdown: unchanged={n_unchanged} new={n_new} \
-			 new_deduped={n_new_deduped}"
+			"  [PERF] consumer breakdown: inherited={n_inherited} unchanged={n_unchanged} \
+			 new={n_new} new_deduped={n_new_deduped}"
 		);
 		eprintln!(
 			"  [PERF]   t_recv_wait={t_recv_wait:?}  t_unchanged={t_unchanged:?}  \
