@@ -11,9 +11,10 @@ WITH baseline_commit AS (
     ORDER BY b.run_date DESC LIMIT 1
 ),
 baseline_runs AS (
-    SELECT b2.id, b2.os, b2.arch, b2.profile, COALESCE(b2.room_version, '11') AS room_version
+    SELECT b2.id, b2.os, b2.arch, b2.profile, b2.features, COALESCE(b2.room_version, '11') AS room_version
     FROM runs b2
     WHERE b2.commit_hash = (SELECT commit_hash FROM baseline_commit)
+      AND EXISTS (SELECT 1 FROM run_details rd_base WHERE rd_base.run_id = b2.id)
 ),
 recent_runs AS (
     SELECT r.*
@@ -50,17 +51,18 @@ run_regs AS (
         WHERE b2.os IS NOT DISTINCT FROM r.os
           AND b2.arch IS NOT DISTINCT FROM r.arch
           AND b2.profile IS NOT DISTINCT FROM r.profile
+          AND b2.features IS NOT DISTINCT FROM r.features
           AND b2.room_version IS NOT DISTINCT FROM COALESCE(r.room_version, '11')
         LIMIT 1
     ) mb_run_id ON TRUE
     LEFT JOIN LATERAL (
         SELECT
             COUNT(*) as run_total,
-            COUNT(*) FILTER (WHERE rd.status = 'pass' AND (mb_run_id.baseline_run_id IS NOT NULL AND (mb.status IS NULL OR mb.status != 'pass'))) as new_pass,
-            COUNT(*) FILTER (WHERE rd.status = 'fail' AND (mb_run_id.baseline_run_id IS NOT NULL AND (mb.status IS NULL OR mb.status != 'fail'))) as new_fail,
-            COUNT(*) FILTER (WHERE rd.status = 'skip' AND (mb_run_id.baseline_run_id IS NOT NULL AND (mb.status IS NULL OR mb.status != 'skip'))) as new_skip,
-            STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'fail' AND (mb_run_id.baseline_run_id IS NOT NULL AND (mb.status IS NULL OR mb.status != 'fail'))) as new_failures_list,
-            STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'pass' AND (mb_run_id.baseline_run_id IS NOT NULL AND (mb.status IS NULL OR mb.status != 'pass'))) as new_passes_list
+            COUNT(*) FILTER (WHERE rd.status = 'pass' AND mb.status IS NOT NULL AND mb.status != 'pass') as new_pass,
+            COUNT(*) FILTER (WHERE rd.status = 'fail' AND mb.status IS NOT NULL AND mb.status != 'fail') as new_fail,
+            COUNT(*) FILTER (WHERE rd.status = 'skip' AND mb.status IS NOT NULL AND mb.status != 'skip') as new_skip,
+            STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'fail' AND mb.status IS NOT NULL AND mb.status != 'fail') as new_failures_list,
+            STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'pass' AND mb.status IS NOT NULL AND mb.status != 'pass') as new_passes_list
         FROM run_details rd
         LEFT JOIN run_details mb ON mb.test_name = rd.test_name AND mb.run_id = mb_run_id.baseline_run_id
         WHERE rd.run_id = r.id
