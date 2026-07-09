@@ -153,6 +153,24 @@ pub(crate) async fn send_message_event_route(
 
 	let state_lock = services.rooms.state.mutex.lock(&body.room_id).await;
 
+	// Re-check after acquiring the room lock in case a concurrent request with the
+	// same txn id populated the cache while this request was waiting.
+	if let Ok(response) = services
+		.transactions
+		.get_client_txn(sender_user, sender_device, &body.txn_id)
+		.await
+	{
+		// The client might have sent a txnid of the /sendToDevice endpoint
+		// This txnid has no response associated with it
+		if response.is_empty() {
+			return Err!(Request(InvalidParam(
+				"Tried to use txn id already used for an incompatible endpoint."
+			)));
+		}
+
+		return cached_send_txn_response(&response, false);
+	}
+
 	let event_id = Box::pin(services.rooms.timeline.send_message_event_helper(
 		sender_user,
 		&body.room_id,

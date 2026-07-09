@@ -456,13 +456,17 @@ impl Service {
 
 		self.scheduled_events.lock().await.insert(delay_id.clone());
 
-		self.submission_queue_sender
+		if let Err(_err) = self
+			.submission_queue_sender
 			.send((submission_time, delay_id.clone()))
-			.map_err(|_err| {
-				err!(Request(Unknown(debug_error!(
-					"Server was unable to process delayed event request (queue full)."
-				))))
-			})?;
+		{
+			self.db.delayid_scheduleddelayedevent.remove(&delay_id);
+			self.db.userroomdelayid.del(&relation);
+			self.scheduled_events.lock().await.remove(delay_id.as_str());
+			return Err!(Request(Unknown(debug_error!(
+				"Server was unable to process delayed event request (worker not running)."
+			))));
+		}
 
 		Ok(delay_id)
 	}
