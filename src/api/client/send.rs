@@ -1,9 +1,64 @@
 use axum::{extract::State, response::IntoResponse};
 use axum_client_ip::ClientIp;
 use conduwuit::{Err, Result, err, utils};
-use ruma::api::client::message::send_message_event;
+use ruma::{OwnedEventId, api::client::message::send_message_event};
 
 use crate::{Ruma, RumaResponse};
+
+const SEND_TXN_EVENT_ID_PREFIX: &[u8] = b"\xFFevent_id:";
+const SEND_TXN_DELAY_ID_PREFIX: &[u8] = b"\xFFdelay_id:";
+
+enum CachedSendTxnResponse {
+	EventId(OwnedEventId),
+	DelayId(String),
+}
+
+fn encode_cached_send_txn_response(prefix: &[u8], value: &[u8]) -> Vec<u8> {
+	let mut response = Vec::with_capacity(prefix.len().saturating_add(value.len()));
+	response.extend_from_slice(prefix);
+	response.extend_from_slice(value);
+	response
+}
+
+fn parse_cached_send_event_id(data: &[u8]) -> Result<OwnedEventId> {
+	utils::string_from_bytes(data)
+		.map(TryInto::try_into)
+		.map_err(|e| err!(Database("Invalid event_id in txnid data: {e:?}")))?
+		.map_err(|e| err!(Database("Invalid event_id in txnid data: {e:?}")))
+}
+
+fn parse_cached_send_txn_response(
+	data: &[u8],
+	legacy_is_delay_id: bool,
+) -> Result<CachedSendTxnResponse> {
+	if let Some(event_id) = data.strip_prefix(SEND_TXN_EVENT_ID_PREFIX) {
+		return parse_cached_send_event_id(event_id).map(CachedSendTxnResponse::EventId);
+	}
+
+	if let Some(delay_id) = data.strip_prefix(SEND_TXN_DELAY_ID_PREFIX) {
+		return utils::string_from_bytes(delay_id).map(CachedSendTxnResponse::DelayId);
+	}
+
+	if legacy_is_delay_id {
+		utils::string_from_bytes(data).map(CachedSendTxnResponse::DelayId)
+	} else {
+		parse_cached_send_event_id(data).map(CachedSendTxnResponse::EventId)
+	}
+}
+
+fn cached_send_txn_response(
+	data: &[u8],
+	legacy_is_delay_id: bool,
+) -> Result<axum::response::Response> {
+	match parse_cached_send_txn_response(data, legacy_is_delay_id)? {
+		| CachedSendTxnResponse::EventId(event_id) =>
+			Ok(RumaResponse(send_message_event::v3::Response { event_id }).into_response()),
+		| CachedSendTxnResponse::DelayId(delay_id) => Ok(axum::Json(serde_json::json!({
+			"delay_id": delay_id,
+		}))
+		.into_response()),
+	}
+}
 
 /// # `PUT /_matrix/client/v3/rooms/{roomId}/send/{eventType}/{txnId}`
 ///
@@ -45,10 +100,7 @@ pub(crate) async fn send_message_event_route(
 					"Tried to use txn id already used for an incompatible endpoint."
 				)));
 			}
-			return Ok(axum::Json(serde_json::json!({
-				"delay_id": utils::string_from_bytes(&response)?,
-			}))
-			.into_response());
+			return cached_send_txn_response(&response, true);
 		}
 
 		let event = service::rooms::delayed_events::ScheduledDelayedEvent {
@@ -70,7 +122,7 @@ pub(crate) async fn send_message_event_route(
 			sender_user,
 			sender_device,
 			&body.txn_id,
-			delay_id.as_bytes(),
+			&encode_cached_send_txn_response(SEND_TXN_DELAY_ID_PREFIX, delay_id.as_bytes()),
 		);
 
 		return Ok(axum::Json(serde_json::json!({
@@ -93,12 +145,7 @@ pub(crate) async fn send_message_event_route(
 			)));
 		}
 
-		return Ok(RumaResponse(send_message_event::v3::Response {
-			event_id: utils::string_from_bytes(&response)
-				.map(TryInto::try_into)
-				.map_err(|e| err!(Database("Invalid event_id in txnid data: {e:?}")))??,
-		})
-		.into_response());
+		return cached_send_txn_response(&response, false);
 	}
 
 	let event_id = Box::pin(services.rooms.timeline.send_message_event_helper(
@@ -121,10 +168,59 @@ pub(crate) async fn send_message_event_route(
 		sender_user,
 		sender_device,
 		&body.txn_id,
-		event_id.as_bytes(),
+		&encode_cached_send_txn_response(SEND_TXN_EVENT_ID_PREFIX, event_id.as_bytes()),
 	);
 
 	drop(state_lock);
 
 	Ok(RumaResponse(send_message_event::v3::Response { event_id }).into_response())
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn cached_send_txn_response_decodes_typed_event_id_in_delay_branch() -> Result<()> {
+		let event_id = b"$event:example.com";
+		let cached = encode_cached_send_txn_response(SEND_TXN_EVENT_ID_PREFIX, event_id);
+
+		match parse_cached_send_txn_response(&cached, true)? {
+			| CachedSendTxnResponse::EventId(parsed) => {
+				assert_eq!(parsed.as_str(), "$event:example.com")
+			},
+			| CachedSendTxnResponse::DelayId(_) => panic!("expected event id"),
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn cached_send_txn_response_decodes_typed_delay_id_in_event_branch() -> Result<()> {
+		let cached = encode_cached_send_txn_response(SEND_TXN_DELAY_ID_PREFIX, b"delay-id");
+
+		match parse_cached_send_txn_response(&cached, false)? {
+			| CachedSendTxnResponse::DelayId(parsed) => assert_eq!(parsed, "delay-id"),
+			| CachedSendTxnResponse::EventId(_) => panic!("expected delay id"),
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn cached_send_txn_response_keeps_legacy_branch_specific_decoding() -> Result<()> {
+		match parse_cached_send_txn_response(b"legacy-delay-id", true)? {
+			| CachedSendTxnResponse::DelayId(parsed) => assert_eq!(parsed, "legacy-delay-id"),
+			| CachedSendTxnResponse::EventId(_) => panic!("expected delay id"),
+		}
+
+		match parse_cached_send_txn_response(b"$legacy:example.com", false)? {
+			| CachedSendTxnResponse::EventId(parsed) => {
+				assert_eq!(parsed.as_str(), "$legacy:example.com")
+			},
+			| CachedSendTxnResponse::DelayId(_) => panic!("expected event id"),
+		}
+
+		Ok(())
+	}
 }
