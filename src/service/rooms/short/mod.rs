@@ -191,26 +191,10 @@ where
 			}
 
 			if !misses.is_empty() {
-				const BUFSIZE: usize = size_of::<ShortEventId>();
 				let db_results: Vec<Result<database::Handle<'_>>> = stream::iter(misses.clone())
 					.get(&self.db.eventid_shorteventid)
 					.collect()
 					.await;
-
-				let missing_count =
-					u64::try_from(db_results.iter().filter(|res| res.is_err()).count())
-						.unwrap_or(0);
-
-				let mut next_id = if missing_count > 0 {
-					self.services
-						.globals
-						.next_count_batch(missing_count)
-						.unwrap()
-				} else {
-					0
-				};
-
-				let mut new_allocations = std::collections::HashMap::new();
 
 				for (idx, (result, event_id)) in miss_indices
 					.into_iter()
@@ -225,27 +209,7 @@ where
 								.insert(short, event_id.to_owned());
 							short
 						},
-						| Err(_) =>
-							if let Some(&short) = new_allocations.get(event_id) {
-								short
-							} else {
-								let short = next_id.saturating_add(1);
-								next_id = short;
-
-								self.db
-									.eventid_shorteventid
-									.raw_aput::<BUFSIZE, _, _>(event_id, short);
-								self.db
-									.shorteventid_eventid
-									.aput_raw::<BUFSIZE, _, _>(short, event_id);
-
-								new_allocations.insert(event_id, short);
-								self.eventid_shorteventid_cache
-									.insert(event_id.to_owned(), short);
-								self.shorteventid_eventid_cache
-									.insert(short, event_id.to_owned());
-								short
-							},
+						| Err(_) => self.create_shorteventid(event_id),
 					};
 					results[idx] = Some(short);
 				}

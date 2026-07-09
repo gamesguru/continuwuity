@@ -273,6 +273,7 @@ async fn update_private_read_receipt(
 		.unwrap_or(0);
 
 	if new_count > old_count {
+		let is_unthreaded = thread == ReceiptThread::Unthreaded;
 		let receipt_content = BTreeMap::from_iter([(
 			event_id.to_owned(),
 			BTreeMap::from_iter([(
@@ -296,10 +297,12 @@ async fn update_private_read_receipt(
 			&receipt_event,
 		)?;
 
-		services
-			.rooms
-			.user
-			.reset_notification_counts(sender_user, room_id);
+		if is_unthreaded {
+			services
+				.rooms
+				.user
+				.reset_notification_counts(sender_user, room_id);
+		}
 
 		conduwuit::debug!("Accepted private read receipt for {} from {}", event_id, sender_user);
 	} else {

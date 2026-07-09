@@ -1,7 +1,7 @@
 use std::{collections::BTreeMap, sync::Arc};
 
 use conduwuit::{
-	Result,
+	Err, Result, SyncMutex,
 	matrix::pdu::{PduCount, PduId, RawPduId},
 	utils::{ReadyExt, stream::TryIgnore},
 };
@@ -26,6 +26,7 @@ pub(super) struct Data {
 	roomuserid_readreceipt: Arc<Map>,
 	services: Services,
 	readreceiptid_readreceipt: Arc<Map>,
+	private_read_mutex: SyncMutex<()>,
 }
 
 struct Services {
@@ -47,6 +48,7 @@ impl Data {
 			roomuserid_privatereadreceipt: db["roomuserid_privatereadreceipt"].clone(),
 			roomuserid_readreceipt: db["roomuserid_readreceipt"].clone(),
 			readreceiptid_readreceipt: db["readreceiptid_readreceipt"].clone(),
+			private_read_mutex: SyncMutex::new(()),
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
 				timeline: args.depend::<crate::rooms::timeline::Service>("rooms::timeline"),
@@ -382,6 +384,7 @@ impl Data {
 		let key = roomuserid_key(room_id, user_id);
 		let next_count = self.services.globals.next_count()?;
 		let thread_key = private_read_thread_key(receipt, user_id);
+		let _guard = self.private_read_mutex.lock();
 		let mut receipts =
 			if let Ok(value) = self.roomuserid_privatereadreceipt.get_blocking(&key) {
 				serde_json::from_slice::<PrivateReadReceipts>(&value).unwrap_or_else(|_| {
@@ -424,9 +427,17 @@ impl Data {
 				}
 			}
 
-			if let Ok((count, ..)) = serde_json::from_slice::<(u64, ReceiptEvent, u64)>(&value) {
-				return Ok(count);
+			if let Ok((count, event, _)) =
+				serde_json::from_slice::<(u64, ReceiptEvent, u64)>(&value)
+			{
+				if private_read_thread_key(&event, user_id) == thread_key(thread) {
+					return Ok(count);
+				}
 			}
+		}
+
+		if !thread_key(thread).is_empty() {
+			return Err!(Database("No private read receipt was set for thread."));
 		}
 
 		let mut legacy_key = room_id.as_bytes().to_vec();

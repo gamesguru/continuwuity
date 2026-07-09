@@ -694,7 +694,13 @@ where
 		)
 		.await;
 
+		let room_name_requested = required_state_request
+			.iter()
+			.any(|(event_type, state_key)| {
+				*event_type == StateEventType::RoomName && matches!(state_key.as_str(), "" | "*")
+			});
 		let include_stable_room_fields = body.pos.is_none()
+			|| room_name_requested
 			|| timeline_pdus
 				.iter()
 				.any(|(_, pdu)| pdu.event_type().to_string() == "m.room.name");
