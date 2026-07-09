@@ -125,7 +125,9 @@ async fn load_timeline(
 		},
 	};
 
-	let fetch_limit = limit.saturating_add(50);
+	// Fetch one extra PDU to determine whether the timeline is limited without
+	// changing the returned chronological window.
+	let fetch_limit = limit.saturating_add(1);
 
 	// Return at most `fetch_limit` PDUs from the stream
 	let mut pdus = pdu_stream

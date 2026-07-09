@@ -1,4 +1,7 @@
-use std::sync::Arc;
+use std::{
+	hash::{DefaultHasher, Hash, Hasher},
+	sync::{Arc, LazyLock},
+};
 
 use conduwuit::{
 	Err, Event, PduCount, PduEvent, Result, at, err,
@@ -408,10 +411,11 @@ impl Data {
 						let pdu_id = PduId { shortroomid: short, shorteventid: count };
 						match self.get_pdu_from_id_in_room(None, &pdu_id.into()).await {
 							Ok(pdu) => Some(Ok(pdu)),
-							Err(e) if e.is_not_found() => {
-								tracing::info!("Skipping missing PDU in timestamp index scan: {e}");
-								None
-							}
+							Err(e) if e.is_not_found() => Some(Err(err!(
+								Database(
+									"Timestamp index points to missing PDU {pdu_id:?}: {e}"
+								)
+							))),
 							Err(e) => Some(Err(e)),
 						}
 					})
@@ -602,10 +606,23 @@ fn pack_timestamp_key(shortroomid: [u8; 8], ts: u64, count: PduCount) -> [u8; 25
 	key
 }
 
-static INCREMENT_LOCK: conduwuit::SyncMutex<()> = conduwuit::SyncMutex::new(());
+const INCREMENT_LOCK_SHARDS: usize = 256;
+
+static INCREMENT_LOCKS: LazyLock<[conduwuit::SyncMutex<()>; INCREMENT_LOCK_SHARDS]> =
+	LazyLock::new(|| std::array::from_fn(|_| conduwuit::SyncMutex::new(())));
 
 fn increment(db: &Arc<Map>, key: &[u8]) {
-	let _lock = INCREMENT_LOCK.lock();
+	let mut hasher = DefaultHasher::new();
+	key.hash(&mut hasher);
+	let shard_count = u64::try_from(INCREMENT_LOCK_SHARDS).expect("lock shard count fits in u64");
+	let lock_index = usize::try_from(
+		hasher
+			.finish()
+			.checked_rem(shard_count)
+			.expect("lock shard count is non-zero"),
+	)
+	.expect("hash remainder fits in usize");
+	let _lock = INCREMENT_LOCKS[lock_index].lock();
 	let old = db.get_blocking(key);
 	let new = utils::increment(old.ok().as_deref());
 	db.insert(key, new);

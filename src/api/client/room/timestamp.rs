@@ -1,5 +1,5 @@
 use axum::extract::State;
-use conduwuit::{Err, Result, debug, info, warn};
+use conduwuit::{Err, Error, Result, debug, info, warn};
 use futures::{StreamExt, pin_mut};
 use ruma::{
 	MilliSecondsSinceUnixEpoch, ServerName,
@@ -18,10 +18,6 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 	State(services): State<crate::State>,
 	body: Ruma<get_event_by_timestamp::v1::Request>,
 ) -> Result<get_event_by_timestamp::v1::Response> {
-	// Maximum events to scan in the timestamp index before giving up.
-	// Bounds worst-case work at O(MAX_SCAN) visibility checks.
-	const MAX_SCAN: usize = 256;
-
 	let room_id = &body.room_id;
 	let ts = body.ts;
 	let dir = body.dir;
@@ -46,14 +42,21 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 	pin_mut!(stream);
 
 	let mut local_result = None;
-	let mut scanned = 0_usize;
+	let mut local_error = None::<Error>;
 	while let Some(item) = stream.next().await {
-		let pdu = item?;
-
-		scanned = scanned.saturating_add(1);
-		if scanned > MAX_SCAN {
-			break;
-		}
+		let pdu = match item {
+			| Ok(pdu) => pdu,
+			| Err(e) => {
+				warn!(
+					%room_id,
+					?ts,
+					?dir,
+					"Local timestamp index lookup failed; trying federation fallback"
+				);
+				local_error = Some(e);
+				break;
+			},
+		};
 
 		if services
 			.rooms
@@ -91,16 +94,42 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 				let mut fed_result =
 					federation_query(&services, origin_server, room_id, ts, dir).await;
 
-				// Verify that the user has permission to see the returned federation event
-				if let Some(ref fed) = fed_result {
-					if !services
+				// Fetch the federation result locally before checking visibility.
+				// `user_can_see_event` is permissive when local event state is missing.
+				if let Some(fed) = fed_result.take() {
+					fed_result = match services
 						.rooms
-						.state_accessor
-						.user_can_see_event(body.sender_user(), room_id, &fed.event_id)
+						.timeline
+						.get_remote_pdu(room_id, &fed.event_id)
 						.await
 					{
-						fed_result = None;
-					}
+						| Ok(pdu) => {
+							if services
+								.rooms
+								.state_accessor
+								.user_can_see_event(body.sender_user(), room_id, &pdu.event_id)
+								.await
+							{
+								Some(get_event_by_timestamp::v1::Response::new(
+									pdu.event_id.clone(),
+									MilliSecondsSinceUnixEpoch(pdu.origin_server_ts),
+								))
+							} else {
+								debug!(
+									event_id = %pdu.event_id,
+									"Federation timestamp result is not visible to requester"
+								);
+								None
+							}
+						},
+						| Err(e) => {
+							warn!(
+								event_id = %fed.event_id,
+								"Failed to fetch federation timestamp result locally: {e}"
+							);
+							None
+						},
+					};
 				}
 
 				return pick_closer(ts, dir, local_result, fed_result);
@@ -108,9 +137,16 @@ pub(crate) async fn get_room_event_by_timestamp_route(
 		}
 	}
 
-	local_result.ok_or_else(|| {
-		conduwuit::err!(Request(NotFound("No visible event found near the given timestamp")))
-	})
+	local_result.map_or_else(
+		|| {
+			Err(local_error.unwrap_or_else(|| {
+				conduwuit::err!(Request(NotFound(
+					"No visible event found near the given timestamp"
+				)))
+			}))
+		},
+		Ok,
+	)
 }
 
 /// Pick whichever result is closer to the target timestamp. In case of a tie,
