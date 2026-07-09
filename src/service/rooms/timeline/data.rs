@@ -1432,24 +1432,21 @@ impl Data {
 				Self::topo_pducount_key(&current, until.depth)
 			};
 
-			// Stream count ceiling: for legacy tokens with u64::MAX seek depth,
-			// events at high depths but with pdu_count > token_count arrived
-			// AFTER the sync position and must be excluded from backward
-			// pagination. This mirrors Synapse's SQL:
-			//   WHERE (topo, stream) <= (from_topo, from_stream)
-			let count_ceiling = until.pdu_count;
+			// Legacy tokens are stream positions, not concrete topo cursors. When
+			// seeking them from u64::MAX depth, exclude events which arrived after the
+			// sync position. Concrete t<depth>_<count> tokens already encode the topo
+			// boundary and must not be stream-count capped, or valid older topo events
+			// with later stream positions can be skipped.
+			let count_ceiling = until.is_legacy().then_some(until.pdu_count);
 
 			let raw_stream = self
 				.roomid_topologicalorder_pducount
 				.rev_raw_stream_from(&topo_key);
 			Ok(self
 				.parse_topo_stream(raw_stream, prefix)
-				.ready_try_filter_map(move |item| {
-					if item.0.pdu_count <= count_ceiling {
-						Ok(Some(item))
-					} else {
-						Ok(None)
-					}
+				.ready_try_filter_map(move |item| match count_ceiling {
+					| Some(ceiling) if item.0.pdu_count > ceiling => Ok(None),
+					| _ => Ok(Some(item)),
 				}))
 		};
 		stream.try_flatten_stream()
