@@ -1178,7 +1178,7 @@ async fn test_busted_dag_resolution() {
 	let res = services
 		.admin
 		.command_in_place(
-			format!("yolo reindex-short {room_id}"),
+			format!("yolo reindex-short {room_id} --skip-topo"),
 			None,
 			service::admin::InvocationSource::Console,
 		)
@@ -1329,7 +1329,7 @@ async fn test_unredacted_room_dag_resolution() {
 	let res = services
 		.admin
 		.command_in_place(
-			format!("yolo reindex-short {room_id}"),
+			format!("yolo reindex-short {room_id} --skip-topo"),
 			None,
 			service::admin::InvocationSource::Console,
 		)
@@ -1473,7 +1473,7 @@ async fn test_unredacted_lounge_dag_resolution() {
 	let res = services
 		.admin
 		.command_in_place(
-			format!("yolo reindex-short {room_id}"),
+			format!("yolo reindex-short {room_id} --skip-topo"),
 			None,
 			service::admin::InvocationSource::Console,
 		)
@@ -1682,7 +1682,7 @@ async fn test_nheko_dag_resolution() {
 	let res = services
 		.admin
 		.command_in_place(
-			format!("yolo reindex-short {room_id}"),
+			format!("yolo reindex-short {room_id} --skip-topo"),
 			None,
 			service::admin::InvocationSource::Console,
 		)
@@ -1980,7 +1980,7 @@ async fn test_knocking_dag_resolution() {
 	let res = services
 		.admin
 		.command_in_place(
-			format!("yolo reindex-short {room_id}"),
+			format!("yolo reindex-short {room_id} --skip-topo"),
 			None,
 			service::admin::InvocationSource::Console,
 		)

@@ -66,7 +66,11 @@ impl Service {
 	/// This is safe to run at any time. It preserves canonical stream order and
 	/// existing local topo depths, while rebuilding the room topo index from
 	/// the stream source of truth.
-	pub async fn reindex_short(&self, room_id: &RoomId) -> Result<ReindexStats> {
+	pub async fn reindex_short(
+		&self,
+		room_id: &RoomId,
+		rebuild_topo: bool,
+	) -> Result<ReindexStats> {
 		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
 		let room_version = self.services.state.get_room_version(room_id).await?;
 		let mut stats = ReindexStats::default();
@@ -100,10 +104,16 @@ impl Service {
 
 		// Phase 2: For each event, read PDU JSON and repair derived data
 		let cork = self.db.db.cork();
-		let cleared_topo = self.db.clear_room_topo_index(room_id).await?;
+		let cleared_topo = if rebuild_topo {
+			self.db.clear_room_topo_index(room_id).await?
+		} else {
+			0
+		};
 		let mut topo_batch = self.db.db_batch();
 		let mut topo_batch_len = 0_usize;
-		info!("reindex_short: cleared {cleared_topo} topo index rows for {room_id}");
+		if rebuild_topo {
+			info!("reindex_short: cleared {cleared_topo} topo index rows for {room_id}");
+		}
 
 		// Auth chain cache for incremental computation (roaring bitmaps)
 		let mut auth_chain_cache: HashMap<ShortEventId, Arc<RoaringTreemap>> = HashMap::new();
@@ -194,19 +204,21 @@ impl Service {
 				},
 			};
 
-			// --- roomid_topologicalorder_pducount ---
-			self.db.insert_topo_pducount_into_batch(
-				&mut topo_batch,
-				&pdu_id,
-				event_id,
-				metadata.deprecated_local_topo_depth,
-			);
-			stats.repaired_topo_index = stats.repaired_topo_index.saturating_add(1);
-			topo_batch_len = topo_batch_len.saturating_add(1);
-			if topo_batch_len >= 1000 {
-				self.db.db_apply_batch(&topo_batch);
-				topo_batch = self.db.db_batch();
-				topo_batch_len = 0;
+			if rebuild_topo {
+				// --- roomid_topologicalorder_pducount ---
+				self.db.insert_topo_pducount_into_batch(
+					&mut topo_batch,
+					&pdu_id,
+					event_id,
+					metadata.deprecated_local_topo_depth,
+				);
+				stats.repaired_topo_index = stats.repaired_topo_index.saturating_add(1);
+				topo_batch_len = topo_batch_len.saturating_add(1);
+				if topo_batch_len >= 1000 {
+					self.db.db_apply_batch(&topo_batch);
+					topo_batch = self.db.db_batch();
+					topo_batch_len = 0;
+				}
 			}
 
 			// --- shorteventid_shortprevevents ---
@@ -319,7 +331,7 @@ impl Service {
 			stats.repaired_search_index = stats.repaired_search_index.saturating_add(1);
 		}
 
-		if topo_batch_len > 0 {
+		if rebuild_topo && topo_batch_len > 0 {
 			self.db.db_apply_batch(&topo_batch);
 		}
 

@@ -633,8 +633,14 @@ pub(super) async fn heal_receipts(&self) -> Result {
 }
 
 #[admin_command]
-pub(super) async fn reindex_short(&self, room_id: Option<OwnedRoomId>, all: bool) -> Result {
+pub(super) async fn reindex_short(
+	&self,
+	room_id: Option<OwnedRoomId>,
+	all: bool,
+	skip_topo: bool,
+) -> Result {
 	self.bail_restricted()?;
+	let rebuild_topo = !skip_topo;
 
 	if all {
 		let rooms: Vec<OwnedRoomId> = self
@@ -652,7 +658,13 @@ pub(super) async fn reindex_short(&self, room_id: Option<OwnedRoomId>, all: bool
 		let mut total_stats =
 			conduwuit_service::rooms::timeline::reindex::ReindexStats::default();
 		for (i, rid) in rooms.iter().enumerate() {
-			match self.services.rooms.timeline.reindex_short(rid).await {
+			match self
+				.services
+				.rooms
+				.timeline
+				.reindex_short(rid, rebuild_topo)
+				.await
+			{
 				| Ok(stats) => {
 					if stats.repaired_prev_events > 0
 						|| stats.repaired_metadata > 0
@@ -716,7 +728,12 @@ pub(super) async fn reindex_short(&self, room_id: Option<OwnedRoomId>, all: bool
 			.await?;
 	} else {
 		let rid = room_id.expect("room_id required when --all not set");
-		let stats = self.services.rooms.timeline.reindex_short(&rid).await?;
+		let stats = self
+			.services
+			.rooms
+			.timeline
+			.reindex_short(&rid, rebuild_topo)
+			.await?;
 		self.write_str(&format!("Reindex complete for {rid}: {stats}"))
 			.await?;
 	}

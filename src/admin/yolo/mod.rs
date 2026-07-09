@@ -599,6 +599,11 @@ pub enum YoloCommand {
 		/// Reindex all rooms.
 		#[arg(long)]
 		all: bool,
+
+		/// Skip rebuilding roomid_topologicalorder_pducount. Use when a
+		/// reorder-timeline run will immediately rebuild topo ordering.
+		#[arg(long)]
+		skip_topo: bool,
 	},
 
 	/// Purge obsolete duplicate read receipts from the database.
