@@ -270,8 +270,34 @@ async fn build_state_and_timeline(
 	let joined_since_last_sync =
 		check_joined_since_last_sync(services, room_id, shortstatehashes, sync_context).await?;
 
-	let timeline =
+	let mut timeline =
 		build_timeline(services, sync_context, room_id, joined_since_last_sync).await?;
+
+	// The timeline should always include at least one PDU if the syncing user
+	// joined since the last sync (their join event). If it's empty, the join
+	// event was likely appended after current_count was captured at sync start
+	// (a race between federation join and sync). Re-fetch without the upper
+	// bound to include it.
+	if joined_since_last_sync && timeline.pdus.is_empty() {
+		warn!(%room_id, "timeline for newly joined room is empty, retrying without upper bound");
+		let timeline_limit = sync_context
+			.filter
+			.room
+			.timeline
+			.limit
+			.and_then(|limit| limit.try_into().ok())
+			.unwrap_or(DEFAULT_TIMELINE_LIMIT);
+
+		timeline = load_timeline(
+			services,
+			sync_context.syncing_user,
+			room_id,
+			sync_context.last_sync_end_count.map(PduCount::Normal),
+			None,
+			timeline_limit,
+		)
+		.await?;
+	}
 
 	let (state_events, state_after, notification_counts) = try_join3(
 		build_state_events(
@@ -295,13 +321,6 @@ async fn build_state_and_timeline(
 		"build_state_and_timeline: results"
 	);
 
-	// the timeline should always include at least one PDU if the syncing user
-	// joined since the last sync, that being the syncing user's join event. if
-	// it's empty something is wrong.
-	if joined_since_last_sync && timeline.pdus.is_empty() {
-		warn!(%room_id, "timeline for newly joined room is empty");
-	}
-
 	let (summary, device_list_updates) = try_join(
 		build_room_summary(
 			services,
@@ -324,7 +343,11 @@ async fn build_state_and_timeline(
 	)
 	.await?;
 
-	let TimelinePdus { pdus, limited: timeline_limited } = timeline;
+	let TimelinePdus {
+		pdus,
+		limited: timeline_limited,
+		prev_batch,
+	} = timeline;
 
 	let user_has_join_event_in_sync = pdus
 		.iter()
@@ -360,7 +383,7 @@ async fn build_state_and_timeline(
 	// the token which may be passed to the messages endpoint to backfill room
 	// history. If the timeline is empty, fallback to the start of this sync window
 	// to ensure clients always have a valid topological pagination token.
-	let prev_batch = pdus.front().map(at!(0)).map(|c| c.to_string()).or_else(|| {
+	let prev_batch = prev_batch.map(|c| c.to_string()).or_else(|| {
 		limited
 			.then_some(())
 			.and(sync_context.last_sync_end_count)
