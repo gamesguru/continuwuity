@@ -302,6 +302,8 @@ fn to_lean(pdu: &PduEvent) -> rezzy::LeanEvent {
 		prev_events: pdu.prev_events.iter().map(ToString::to_string).collect(),
 		auth_events: pdu.auth_events.iter().map(ToString::to_string).collect(),
 		depth: u64::from(pdu.depth),
+		rejected: false,
+		soft_fail: false,
 	}
 }
 
@@ -400,6 +402,7 @@ fn resolve_via_rezzy(
 	// Build LeanEvent maps
 	let mut conflicted_events: HashMap<String, rezzy::LeanEvent> = HashMap::new();
 	let mut auth_context: HashMap<String, rezzy::LeanEvent> = HashMap::new();
+	let mut pl_cache: HashMap<String, i64> = HashMap::new();
 
 	// All state set values + union auth
 	let mut all_ids: HashSet<OwnedEventId> = union_auth;
@@ -420,8 +423,13 @@ fn resolve_via_rezzy(
 	}
 
 	let version = to_rezzy_version(room_version);
-	let resolved_lean =
-		rezzy::resolve_iterative_sort(unconflicted, conflicted_events, &auth_context, version);
+	let resolved_lean = rezzy::resolve_iterative_sort(
+		unconflicted,
+		conflicted_events,
+		&auth_context,
+		version,
+		&mut pl_cache,
+	);
 
 	// Convert back to Ruma StateMap
 	let mut resolved = StateMap::new();
