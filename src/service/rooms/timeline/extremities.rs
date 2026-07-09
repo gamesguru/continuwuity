@@ -892,7 +892,7 @@ mod tests {
 		);
 		assert!(
 			!tips.contains(&fork_b),
-			"direct accepted merge should retire fork_b even though an outlier also references it"
+			"direct accepted merge should retire fork_b (even if an outlier also references it)"
 		);
 
 		let current_event_ids = HashSet::from([

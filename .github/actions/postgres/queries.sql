@@ -11,7 +11,7 @@ WITH baseline_commit AS (
     SELECT b.commit_hash
     FROM runs b
     WHERE {baseline_run_filter}
-    ORDER BY b.run_date DESC LIMIT 1
+    ORDER BY b.run_date DESC, b.id DESC LIMIT 1
 ),
 baseline_runs AS (
     SELECT b2.id, b2.os, b2.arch, b2.profile, COALESCE(b2.room_version, '11') AS room_version
