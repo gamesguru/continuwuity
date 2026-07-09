@@ -10,7 +10,7 @@ use conduwuit::{
 	utils::{
 		IterStream, ReadyExt,
 		result::LogErr,
-		stream::{BroadbandExt, TryIgnore, WidebandExt},
+		stream::{BroadbandExt, TryIgnore},
 	},
 };
 use conduwuit_service::{
@@ -161,29 +161,49 @@ pub(crate) async fn get_message_events_route(
 			.boxed(),
 	};
 
-	let events: Vec<_> = it
-		.ready_take_while(|(token, _)| Some(*token) != to)
-		.ready_filter_map(|item| event_filter(item, filter))
-		.wide_filter_map(|item| ignored_filter(&services, item, sender_user))
-		.wide_filter_map(
-			|item| async move { visibility_filter(&services, item, sender_user).await },
-		)
-		.take(limit)
-		.wide_then(move |mut pdu| async move {
-			pdu.1.set_unsigned(Some(sender_user));
-			add_membership_to_unsigned(&services, sender_user, &mut pdu.1).await;
-			if let Err(e) = services
-				.rooms
-				.pdu_metadata
-				.add_bundled_aggregations_to_pdu(sender_user, &mut pdu.1)
-				.await
-			{
-				debug_warn!("Failed to add bundled aggregations: {e}");
-			}
-			pdu
-		})
-		.collect()
-		.await;
+	let mut events = Vec::with_capacity(limit);
+	let mut next_token = None;
+	let mut exhausted = true;
+
+	let mut stream = it;
+	while let Some(item) = stream.next().await {
+		let (token, pdu) = item;
+
+		if Some(token) == to {
+			break;
+		}
+
+		next_token = Some(token);
+
+		let Some(item) = event_filter((token, pdu), filter) else {
+			continue;
+		};
+
+		let Some(item) = ignored_filter(&services, item, sender_user).await else {
+			continue;
+		};
+
+		let Some(mut item) = visibility_filter(&services, item, sender_user).await else {
+			continue;
+		};
+
+		item.1.set_unsigned(Some(sender_user));
+		add_membership_to_unsigned(&services, sender_user, &mut item.1).await;
+		if let Err(e) = services
+			.rooms
+			.pdu_metadata
+			.add_bundled_aggregations_to_pdu(sender_user, &mut item.1)
+			.await
+		{
+			debug_warn!("Failed to add bundled aggregations: {e}");
+		}
+		events.push(item);
+
+		if events.len() == limit {
+			exhausted = false;
+			break;
+		}
+	}
 
 	let lazy_loading_context = lazy_loading::Context {
 		user_id: sender_user,
@@ -221,13 +241,15 @@ pub(crate) async fn get_message_events_route(
 		.collect()
 		.await;
 
-	// Always return `end` when events are present so the client can
-	// continue paginating. Omit it only when no events were returned,
-	// signalling the start/end of the timeline has been reached.
-	// The previous heuristic (events.len() < limit ⟹ exhausted) broke
-	// when filters caused fewer results than the limit despite more
-	// events existing further back in the timeline.
-	let next_token = events.last().map(at!(0));
+	// Return the raw cursor of the oldest event we actually consumed, not the
+	// last visible event. That keeps pagination moving even when filters skip an
+	// entire page, and it still preserves the old "omit end when nothing matched"
+	// behavior at the edge of the timeline.
+	let next_token = if events.is_empty() && exhausted {
+		None
+	} else {
+		next_token
+	};
 
 	let chunk = events
 		.into_iter()

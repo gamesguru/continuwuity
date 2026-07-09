@@ -336,5 +336,7 @@ fn pdu_to_lean(pdu: &conduwuit_core::PduEvent) -> rezzy::LeanEvent<String> {
 		prev_events: pdu.prev_events.iter().map(ToString::to_string).collect(),
 		auth_events: pdu.auth_events.iter().map(ToString::to_string).collect(),
 		depth: u64::from(pdu.depth),
+		rejected: false,
+		soft_fail: false,
 	}
 }

@@ -580,6 +580,8 @@ pub async fn promote_outliers_sorted(
 			prev_events: pdu.prev_events.iter().map(ToString::to_string).collect(),
 			power_level: 0,
 			depth: u64::from(pdu.depth),
+			rejected: false,
+			soft_fail: false,
 		};
 		events_map.insert(event_id.to_string(), lean);
 	}
@@ -603,11 +605,13 @@ pub async fn promote_outliers_sorted(
 			| ver => return Err!(Database("Unsupported room version for topo sort: {ver}")),
 		}
 	};
+	let mut pl_cache = rezzy::HashMap::new();
 	let sorted_ids = rezzy::resolve::sorting::lean_kahn_sort(
 		&events_map,
 		&events_map, // auth context is the same set
 		create_ev,
 		state_res_version,
+		&mut pl_cache,
 	);
 
 	debug!(

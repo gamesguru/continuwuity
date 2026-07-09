@@ -68,6 +68,8 @@ fn pdu_to_lean(pdu: &conduwuit::PduEvent) -> rezzy::LeanEvent {
 		prev_events: pdu.prev_events.iter().map(ToString::to_string).collect(),
 		auth_events: pdu.auth_events.iter().map(ToString::to_string).collect(),
 		depth: u64::from(pdu.depth),
+		rejected: false,
+		soft_fail: false,
 	}
 }
 
@@ -370,6 +372,8 @@ impl super::Service {
 					prev_events: prev.iter().map(ToString::to_string).collect(),
 					auth_events: auth.iter().map(ToString::to_string).collect(),
 					depth: *depth,
+					rejected: false,
+					soft_fail: false,
 					..Default::default()
 				}
 			};
@@ -788,11 +792,13 @@ impl super::Service {
 			version,
 		);
 		let rezzy_start = Instant::now();
+		let mut pl_cache = HashMap::new();
 		let resolved_lean = rezzy::resolve_iterative_sort(
 			unconflicted.into(),
 			conflicted_events,
 			&auth_context,
 			version,
+			&mut pl_cache,
 		);
 		eprintln!(
 			"[resolve_fork] rezzy::resolve_iterative_sort took {:?}",
