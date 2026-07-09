@@ -191,10 +191,13 @@ where
 			}
 
 			if !misses.is_empty() {
+				const BUFSIZE: usize = size_of::<ShortEventId>();
 				let db_results: Vec<Result<database::Handle<'_>>> = stream::iter(misses.clone())
 					.get(&self.db.eventid_shorteventid)
 					.collect()
 					.await;
+
+				let mut unresolved = Vec::new();
 
 				for (idx, (result, event_id)) in miss_indices
 					.into_iter()
@@ -209,9 +212,71 @@ where
 								.insert(short, event_id.to_owned());
 							short
 						},
-						| Err(_) => self.create_shorteventid(event_id),
+						| Err(_) => {
+							unresolved.push((idx, event_id));
+							continue;
+						},
 					};
 					results[idx] = Some(short);
+				}
+
+				if !unresolved.is_empty() {
+					let _guard = self.shorteventid_create_mutex.lock();
+					let mut new_event_ids = Vec::new();
+					let mut new_allocations = std::collections::HashMap::new();
+
+					for &(_, event_id) in &unresolved {
+						if new_allocations.contains_key(event_id)
+							|| new_event_ids.contains(&event_id)
+						{
+							continue;
+						}
+
+						if let Ok(handle) = self
+							.db
+							.eventid_shorteventid
+							.get_blocking(event_id.as_bytes())
+						{
+							let short = utils::u64_from_u8(&handle);
+							new_allocations.insert(event_id, short);
+							self.eventid_shorteventid_cache
+								.insert(event_id.to_owned(), short);
+							self.shorteventid_eventid_cache
+								.insert(short, event_id.to_owned());
+						} else {
+							new_event_ids.push(event_id);
+						}
+					}
+
+					if !new_event_ids.is_empty() {
+						let mut next_id = self
+							.services
+							.globals
+							.next_count_batch(u64::try_from(new_event_ids.len()).unwrap())
+							.unwrap();
+
+						for event_id in new_event_ids {
+							let short = next_id.saturating_add(1);
+							next_id = short;
+
+							self.db
+								.eventid_shorteventid
+								.raw_aput::<BUFSIZE, _, _>(event_id, short);
+							self.db
+								.shorteventid_eventid
+								.aput_raw::<BUFSIZE, _, _>(short, event_id);
+
+							new_allocations.insert(event_id, short);
+							self.eventid_shorteventid_cache
+								.insert(event_id.to_owned(), short);
+							self.shorteventid_eventid_cache
+								.insert(short, event_id.to_owned());
+						}
+					}
+
+					for (idx, event_id) in unresolved {
+						results[idx] = Some(new_allocations[event_id]);
+					}
 				}
 			}
 
