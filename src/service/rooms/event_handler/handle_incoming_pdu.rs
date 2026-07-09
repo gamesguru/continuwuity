@@ -137,7 +137,12 @@ pub async fn handle_incoming_pdu<'a>(
 	trace!("processing incoming PDU from {origin} for room {room_id} with event id {event_id}");
 
 	// 1.1 Check we even know about the room
-	let meta_exists = self.services.metadata.exists(room_id).map(Ok);
+	let is_joining = self.services.state_cache.is_joining(room_id);
+	let meta_exists = self
+		.services
+		.metadata
+		.exists(room_id)
+		.map(move |exists| Ok(exists || is_joining));
 
 	// 1.2 Check if the room is disabled
 	let is_disabled = self.services.metadata.is_disabled(room_id).map(Ok);
@@ -238,8 +243,8 @@ pub async fn handle_incoming_pdu<'a>(
 		.services
 		.timeline
 		.first_pdu_in_room(room_id)
-		.await?
-		.origin_server_ts();
+		.await
+		.map_or_else(|_| create_event.origin_server_ts(), |pdu| pdu.origin_server_ts());
 
 	// 9. Fetch any missing prev events doing all checks listed here starting at 1.
 	//    These are timeline events

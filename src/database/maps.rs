@@ -179,18 +179,23 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
-		name: "roomid_shortroomid",
-		val_size_hint: Some(8),
+		name: "roomid_roomversion",
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
-		name: "roomid_roomversion",
+		name: "roomid_shortroomid",
+		val_size_hint: Some(8),
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
 		name: "roomid_shortstatehash",
 		val_size_hint: Some(8),
 		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "roomid_timestamp_pducount",
+		key_size_hint: Some(25),
+		..descriptor::SEQUENTIAL
 	},
 	Descriptor {
 		name: "roomserverids",
@@ -477,6 +482,18 @@ pub(super) static MAPS: &[Descriptor] = &[
 	},
 	Descriptor {
 		name: "userroomid_invitesender",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "delayid_scheduleddelayedevent",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "delayid_finalizeddelayedevent",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "userroomdelayid",
 		..descriptor::RANDOM_SMALL
 	},
 ];

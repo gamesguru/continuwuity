@@ -2535,6 +2535,10 @@ pub struct ExperimentalConfig {
 	/// MSC4222: state_after in sync v2
 	#[serde(default)]
 	pub msc4222_enabled: bool,
+
+	/// MSC3030: timestamp to event
+	#[serde(default)]
+	pub msc3030_enabled: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]

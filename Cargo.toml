@@ -386,6 +386,7 @@ features = [
     "unstable-msc4186",
     "unstable-msc4203", # sending to-device events to appservices
     "unstable-msc4210", # remove legacy mentions
+    "unstable-msc4140", # delayed events MSC4140
     "unstable-extensible-events",
     "unstable-pdu",
     "unstable-msc4143", # livekit well_known response
