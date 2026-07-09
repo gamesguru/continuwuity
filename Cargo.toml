@@ -405,7 +405,9 @@ features = [
 ]
 
 [workspace.dependencies.rezzy]
-path = "../rezzy"
+git = "https://github.com/gamesguru/rezzy.git"
+branch = "dev"
+#path = "../rezzy" # NOTE: do NOT push with this enabled, it won't work!
 
 [workspace.dependencies.rust-rocksdb]
 git = "https://forgejo.ellis.link/continuwuation/rust-rocksdb-zaidoon1"
