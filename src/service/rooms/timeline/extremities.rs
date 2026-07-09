@@ -826,6 +826,113 @@ mod tests {
 		);
 	}
 
+	#[test]
+	fn test_accepted_extremity_graph_stress_mixed_real_world_edges() {
+		let root = 1;
+		let fork_a = 2;
+		let fork_b = 3;
+		let rejected_a = 4;
+		let soft_failed_a = 5;
+		let accepted_after_bad_chain = 6;
+		let outlier_a = 7;
+		let accepted_after_outlier = 8;
+		let merge_tip = 9;
+		let independent_tip = 10;
+		let rejected_only_child = 11;
+		let outlier_only_child = 12;
+		let accepted_after_rejected_only_child = 13;
+
+		let raw_edges: HashMap<ShortEventId, Vec<ShortEventId>> = HashMap::from([
+			(root, Vec::new()),
+			(fork_a, vec![root]),
+			(fork_b, vec![root]),
+			(rejected_a, vec![fork_a]),
+			(soft_failed_a, vec![rejected_a]),
+			(accepted_after_bad_chain, vec![soft_failed_a]),
+			(outlier_a, vec![fork_b]),
+			(accepted_after_outlier, vec![outlier_a]),
+			(merge_tip, vec![accepted_after_bad_chain, fork_b]),
+			(independent_tip, vec![root]),
+			(rejected_only_child, vec![independent_tip]),
+			(outlier_only_child, vec![accepted_after_outlier]),
+			(accepted_after_rejected_only_child, vec![rejected_only_child]),
+		]);
+		let accepted_events: HashSet<ShortEventId> = HashSet::from([
+			root,
+			fork_a,
+			fork_b,
+			accepted_after_bad_chain,
+			accepted_after_outlier,
+			merge_tip,
+			independent_tip,
+			accepted_after_rejected_only_child,
+		]);
+		let bridge_events: HashSet<ShortEventId> =
+			HashSet::from([rejected_a, soft_failed_a, rejected_only_child]);
+
+		let graph = accepted_extremity_graph(&raw_edges, &accepted_events, &bridge_events);
+		let tips = rezzy::state::at::find_forward_extremities_roaring(graph.clone());
+		let tips: HashSet<ShortEventId> = tips.into_iter().collect();
+
+		assert!(tips.contains(&merge_tip));
+		assert!(tips.contains(&accepted_after_outlier));
+		assert!(tips.contains(&accepted_after_rejected_only_child));
+		assert_eq!(
+			tips.len(),
+			3,
+			"only accepted timeline leaves should remain as recalculated tips"
+		);
+		assert!(
+			!tips.contains(&independent_tip),
+			"accepted child beyond rejected event should retire the older tip"
+		);
+		assert!(
+			!tips.contains(&fork_a),
+			"accepted child beyond rejected/soft-failed chain should retire fork_a"
+		);
+		assert!(
+			!tips.contains(&fork_b),
+			"direct accepted merge should retire fork_b even though an outlier also references it"
+		);
+
+		let current_event_ids = HashSet::from([
+			event_id!("$fork_a").to_owned(),
+			event_id!("$fork_b").to_owned(),
+			event_id!("$merge_tip").to_owned(),
+			event_id!("$accepted_after_outlier").to_owned(),
+			event_id!("$external_tip").to_owned(),
+		]);
+		let true_extremities = HashSet::from([
+			event_id!("$merge_tip").to_owned(),
+			event_id!("$accepted_after_outlier").to_owned(),
+			event_id!("$accepted_after_rejected_only_child").to_owned(),
+		]);
+		let current_extremities = vec![
+			(event_id!("$fork_a").to_owned(), Some(fork_a)),
+			(event_id!("$fork_b").to_owned(), Some(fork_b)),
+			(event_id!("$merge_tip").to_owned(), Some(merge_tip)),
+			(event_id!("$accepted_after_outlier").to_owned(), Some(accepted_after_outlier)),
+			(event_id!("$external_tip").to_owned(), None),
+		];
+
+		let merged = merge_recalculated_extremities(
+			true_extremities,
+			&accepted_events,
+			current_extremities,
+		);
+
+		assert!(!merged.contains(&event_id!("$fork_a").to_owned()));
+		assert!(!merged.contains(&event_id!("$fork_b").to_owned()));
+		assert!(merged.contains(&event_id!("$merge_tip").to_owned()));
+		assert!(merged.contains(&event_id!("$accepted_after_outlier").to_owned()));
+		assert!(merged.contains(&event_id!("$accepted_after_rejected_only_child").to_owned()));
+		assert!(
+			merged.contains(&event_id!("$external_tip").to_owned()),
+			"current tips outside the accepted graph remain unverifiable and should be preserved"
+		);
+		assert_ne!(merged, current_event_ids);
+	}
+
 	// --- Roaring bitmap variant tests ---
 
 	#[test]
