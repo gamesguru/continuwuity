@@ -59,6 +59,9 @@ if new_passes_match:
         new_passes = False
     args_str = args_str.replace(new_passes_match.group(0), "")
 
+super_mode = bool(re.search(r"(^|\s)--super(\s|$)", args_str))
+args_str = re.sub(r"(^|\s)--super(\s|$)", " ", args_str).strip()
+
 # Extract order (it takes whatever is left if it starts with order=)
 order_match = re.search(
     r"order=(.+?)(?:$| like=| limit=| new_passes=)", args_str + " ", re.IGNORECASE
@@ -70,6 +73,11 @@ if new_passes:
     columns_tail = "new_failures_list,\n    new_passes_list"
 else:
     columns_tail = "new_failures_list"
+
+if super_mode:
+    super_columns = "run_total,\n    detail_n_pass,\n    detail_n_fail,\n    detail_n_skip,\n    baseline_run_id,\n    baseline_n_pass,\n    baseline_n_fail,\n    baseline_n_skip,"
+else:
+    super_columns = ""
 
 if baseline:
     # A specific commit/branch was requested as the baseline
@@ -94,6 +102,7 @@ query = base_query_template.format(
     order=order,
     limit=limit,
     like_filter=like_filter,
+    super_columns=super_columns,
 )
 
 print(f"\nExecuting Query:\n{query}\n")

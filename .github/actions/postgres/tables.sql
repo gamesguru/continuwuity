@@ -26,9 +26,11 @@ CREATE TABLE IF NOT EXISTS runs (
     room_version text
 );
 
--- Unique index to prevent duplicate machine reports
-CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_unique_machine_run
-ON runs (commit_hash, run_date, arch, os, profile, room_version) NULLS NOT DISTINCT;
+-- Unique index to prevent duplicate machine reports.
+-- Keep this in sync with ON CONFLICT targets in ingest scripts.
+DROP INDEX IF EXISTS idx_runs_unique_machine_run;
+CREATE UNIQUE INDEX idx_runs_unique_machine_run
+ON runs (commit_hash, run_date, arch, os, profile, room_version, features) NULLS NOT DISTINCT;
 
 -- Create run_details table
 CREATE TABLE IF NOT EXISTS run_details (
@@ -79,7 +81,11 @@ CROSS JOIN LATERAL (
     SELECT id AS default_baseline_run_id FROM runs
     WHERE (branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream')
     OR version_string LIKE '%main%')
-    AND room_version IS NOT DISTINCT FROM r.room_version
+    AND COALESCE(room_version, '11') IS NOT DISTINCT FROM COALESCE(r.room_version, '11')
+    AND arch IS NOT DISTINCT FROM r.arch
+    AND os IS NOT DISTINCT FROM r.os
+    AND profile IS NOT DISTINCT FROM r.profile
+    AND COALESCE(regexp_replace(btrim(features, ' ,'), '[,\s]+', ' ', 'g'), '') IS NOT DISTINCT FROM COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '')
     ORDER BY run_date DESC
     LIMIT 1
 ) dbr
