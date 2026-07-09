@@ -5,10 +5,11 @@ use std::{
 	time::Duration,
 };
 
-use axum::extract::State;
+use axum::{Json, extract::State, response::IntoResponse};
 use axum_client_ip::ClientIp;
+use bytes::BytesMut;
 use conduwuit::{
-	Err, Error, Result, at, error, extract_variant, is_equal_to,
+	Err, Error, Result, at, err, error, extract_variant, is_equal_to,
 	matrix::{Event, TypeStateKey, pdu::PduCount},
 	trace,
 	utils::{
@@ -27,7 +28,10 @@ use futures::{
 };
 use ruma::{
 	DeviceId, OwnedEventId, OwnedRoomId, RoomId, UInt, UserId,
-	api::client::sync::sync_events::{self, DeviceLists, UnreadNotificationsCount},
+	api::{
+		OutgoingResponse,
+		client::sync::sync_events::{self, DeviceLists, UnreadNotificationsCount},
+	},
 	directory::RoomTypeFilter,
 	events::{
 		AnyRawAccountDataEvent, AnySyncEphemeralRoomEvent, AnySyncStateEvent, StateEventType,
@@ -38,6 +42,7 @@ use ruma::{
 	serde::Raw,
 	uint,
 };
+use serde_json::Value;
 
 use super::share_encrypted_room;
 use crate::{
@@ -50,6 +55,14 @@ use crate::{
 type SyncInfo<'a> = (&'a UserId, &'a DeviceId, u64, &'a sync_events::v5::Request);
 type TodoRooms = BTreeMap<OwnedRoomId, (BTreeSet<TypeStateKey>, usize, u64)>;
 type KnownRooms = BTreeMap<String, BTreeMap<OwnedRoomId, u64>>;
+type RoomExtras = BTreeMap<OwnedRoomId, RoomExtra>;
+
+#[derive(Default)]
+struct RoomExtra {
+	lists: BTreeSet<String>,
+	membership: Option<MembershipState>,
+	expanded_timeline: bool,
+}
 
 /// `POST /_matrix/client/unstable/org.matrix.simplified_msc3575/sync`
 /// ([MSC4186])
@@ -65,7 +78,7 @@ pub(crate) async fn sync_events_v5_route(
 	State(ref services): State<crate::State>,
 	ClientIp(client_ip): ClientIp,
 	body: Ruma<sync_events::v5::Request>,
-) -> Result<sync_events::v5::Response> {
+) -> Result<axum::response::Response> {
 	debug_assert!(DEFAULT_BUMP_TYPES.is_sorted(), "DEFAULT_BUMP_TYPES is not sorted");
 	let sender_user = body.sender_user.as_ref().expect("user is authenticated");
 	let sender_device = body.sender_device.as_ref().expect("user is authenticated");
@@ -106,7 +119,7 @@ pub(crate) async fn sync_events_v5_route(
 		.sync
 		.update_snake_sync_request_with_cache(&snake_key, &mut body);
 
-	let mut response = build_sync_events_v5(
+	let (mut response, mut room_extras) = build_sync_events_v5(
 		services,
 		sender_user,
 		sender_device,
@@ -125,7 +138,7 @@ pub(crate) async fn sync_events_v5_route(
 
 				// Rebuild the response after waking up to avoid returning advanced tokens
 				// without their associated events.
-				response = build_sync_events_v5(
+				(response, room_extras) = build_sync_events_v5(
 					services,
 					sender_user,
 					sender_device,
@@ -145,7 +158,7 @@ pub(crate) async fn sync_events_v5_route(
 		receipts = ?response.extensions.receipts.rooms.len(),
 		"responding to request with"
 	);
-	Ok(response)
+	sync_events_v5_json_response(response, room_extras)
 }
 
 async fn build_sync_events_v5(
@@ -156,7 +169,7 @@ async fn build_sync_events_v5(
 	body: &sync_events::v5::Request,
 	known_rooms: &KnownRooms,
 	timeline_limits: &BTreeMap<OwnedRoomId, usize>,
-) -> Result<sync_events::v5::Response> {
+) -> Result<(sync_events::v5::Response, RoomExtras)> {
 	let next_batch = services.globals.current_count()?;
 
 	let all_joined_rooms = services
@@ -186,17 +199,33 @@ async fn build_sync_events_v5(
 		.rooms_knocked(sender_user)
 		.map(|r| r.0)
 		.collect::<Vec<OwnedRoomId>>();
+	let all_left_rooms = services
+		.rooms
+		.state_cache
+		.rooms_left(sender_user)
+		.ready_filter(|(room_id, pdu)| {
+			pdu.as_ref().is_some_and(|pdu| pdu.sender != sender_user)
+				|| known_rooms
+					.values()
+					.any(|rooms| rooms.contains_key(room_id))
+		})
+		.map(at!(0))
+		.collect::<Vec<OwnedRoomId>>();
 
-	let (all_joined_rooms, all_invited_rooms, all_knocked_rooms) =
-		join3(all_joined_rooms, all_invited_rooms, all_knocked_rooms).await;
+	let ((all_joined_rooms, all_invited_rooms, all_knocked_rooms), all_left_rooms) = tokio::join!(
+		join3(all_joined_rooms, all_invited_rooms, all_knocked_rooms),
+		all_left_rooms
+	);
 
 	let all_joined_rooms = all_joined_rooms.iter().map(AsRef::as_ref);
 	let all_invited_rooms = all_invited_rooms.iter().map(AsRef::as_ref);
 	let all_knocked_rooms = all_knocked_rooms.iter().map(AsRef::as_ref);
+	let all_left_rooms = all_left_rooms.iter().map(AsRef::as_ref);
 	let all_rooms = all_joined_rooms
 		.clone()
 		.chain(all_invited_rooms.clone())
-		.chain(all_knocked_rooms.clone());
+		.chain(all_knocked_rooms.clone())
+		.chain(all_left_rooms.clone());
 
 	let pos = next_batch.clone().to_string();
 
@@ -230,6 +259,7 @@ async fn build_sync_events_v5(
 		rooms: BTreeMap::new(),
 		extensions,
 	};
+	let mut room_extras = RoomExtras::new();
 
 	handle_lists(
 		services,
@@ -240,6 +270,7 @@ async fn build_sync_events_v5(
 		&mut todo_rooms,
 		known_rooms,
 		&mut response,
+		&mut room_extras,
 	)
 	.await;
 
@@ -254,6 +285,7 @@ async fn build_sync_events_v5(
 		&mut response,
 		body,
 		timeline_limits,
+		&mut room_extras,
 	)
 	.await?;
 
@@ -272,7 +304,7 @@ async fn build_sync_events_v5(
 			.update_snake_sync_timeline_limits(&snake_key, next_limits);
 	}
 
-	Ok(response)
+	Ok((response, room_extras))
 }
 
 async fn fetch_subscriptions(
@@ -344,6 +376,7 @@ async fn handle_lists<'a, Rooms, AllRooms>(
 	todo_rooms: &'a mut TodoRooms,
 	known_rooms: &'a KnownRooms,
 	response: &'_ mut sync_events::v5::Response,
+	room_extras: &mut RoomExtras,
 ) -> KnownRooms
 where
 	Rooms: Iterator<Item = &'a RoomId> + Clone + Send + 'a,
@@ -388,8 +421,12 @@ where
 			active_rooms_with_ts.push((room, ts));
 		}
 
-		// Sort descending by timestamp (most recent first)
-		active_rooms_with_ts.sort_by(|a, b| b.1.cmp(&a.1));
+		// Sort descending by timestamp (most recent first), then by room ID for a
+		// deterministic order when multiple rooms have the same bump timestamp.
+		active_rooms_with_ts.sort_by(|(room_a, ts_a), (room_b, ts_b)| {
+			ts_b.cmp(ts_a)
+				.then_with(|| room_a.as_str().cmp(room_b.as_str()))
+		});
 		let active_rooms: Vec<&RoomId> =
 			active_rooms_with_ts.into_iter().map(|(r, _)| r).collect();
 
@@ -413,8 +450,13 @@ where
 				room_ids.clone().into_iter().map(From::from).collect();
 
 			new_known_rooms.extend(new_rooms);
-			//new_known_rooms.extend(room_ids..cloned());
 			for room_id in room_ids {
+				room_extras
+					.entry(room_id.to_owned())
+					.or_default()
+					.lists
+					.insert(list_id.clone());
+
 				let todo_room = todo_rooms.entry(room_id.to_owned()).or_insert((
 					BTreeSet::new(),
 					0_usize,
@@ -471,6 +513,7 @@ async fn process_rooms<'a, Rooms>(
 	response: &mut sync_events::v5::Response,
 	body: &sync_events::v5::Request,
 	timeline_limits: &BTreeMap<OwnedRoomId, usize>,
+	room_extras: &mut RoomExtras,
 ) -> Result<BTreeMap<OwnedRoomId, sync_events::v5::response::Room>>
 where
 	Rooms: Iterator<Item = &'a RoomId> + Clone + Send + 'a,
@@ -588,9 +631,16 @@ where
 				.is_none_or(Vec::is_empty)
 			&& receipt_size == 0
 			&& last_notification_read <= *roomsince
+			&& required_state_request.is_empty()
 		{
 			continue;
 		}
+
+		let live_count = timeline_pdus
+			.iter()
+			.filter(|(count, _)| matches!(count, PduCount::Normal(count) if count > roomsince))
+			.count();
+		let num_live = (live_count > 0).then(|| ruma_from_usize(live_count));
 
 		let prev_batch = timeline_pdus
 			.front()
@@ -620,6 +670,11 @@ where
 		)
 		.await;
 
+		let include_stable_room_fields = roomsince == &0
+			|| timeline_pdus
+				.iter()
+				.any(|(_, pdu)| pdu.event_type().to_string() == "m.room.name");
+
 		let room_events: Vec<_> = timeline_pdus
 			.iter()
 			.stream()
@@ -628,6 +683,12 @@ where
 			.map(Event::into_format)
 			.collect()
 			.await;
+
+		let membership = user_membership_for_sync(services, sender_user, room_id).await;
+
+		let extra = room_extras.entry(room_id.clone()).or_default();
+		extra.membership = membership;
+		extra.expanded_timeline = is_expanded_timeline && !timeline_pdus.is_empty();
 
 		for (_, pdu) in timeline_pdus {
 			let ts = pdu.origin_server_ts;
@@ -691,13 +752,17 @@ where
 		};
 
 		rooms.insert(room_id.clone(), sync_events::v5::response::Room {
-			name: services
-				.rooms
-				.state_accessor
-				.get_name(room_id)
-				.await
-				.ok()
-				.or(name),
+			name: if include_stable_room_fields {
+				services
+					.rooms
+					.state_accessor
+					.get_name(room_id)
+					.await
+					.ok()
+					.or(name)
+			} else {
+				None
+			},
 			avatar: match heroes_avatar {
 				| Some(heroes_avatar) => ruma::JsOption::Some(heroes_avatar),
 				| _ => match services.rooms.state_accessor.get_avatar(room_id).await {
@@ -706,7 +771,7 @@ where
 					| ruma::JsOption::Undefined => ruma::JsOption::Undefined,
 				},
 			},
-			initial: Some(roomsince == &0),
+			initial: (roomsince == &0).then_some(true),
 			is_dm: None,
 			invite_state,
 			unread_notifications: UnreadNotificationsCount {
@@ -753,12 +818,90 @@ where
 					.try_into()
 					.unwrap_or_else(|_| uint!(0)),
 			),
-			num_live: None, // Count events in timeline greater than global sync counter
+			num_live,
 			bump_stamp: timestamp,
 			heroes: Some(heroes),
 		});
 	}
 	Ok(rooms)
+}
+
+fn sync_events_v5_json_response(
+	response: sync_events::v5::Response,
+	room_extras: RoomExtras,
+) -> Result<axum::response::Response> {
+	let response = response
+		.try_into_http_response::<BytesMut>()
+		.map_err(|e| err!(Database("failed to serialize sync v5 response: {e}")))?;
+	let mut value = serde_json::from_slice::<Value>(response.body())?;
+	let Some(rooms) = value.get_mut("rooms").and_then(Value::as_object_mut) else {
+		return Ok(Json(value).into_response());
+	};
+
+	for (room_id, extra) in room_extras {
+		let Some(room) = rooms
+			.get_mut(room_id.as_str())
+			.and_then(Value::as_object_mut)
+		else {
+			continue;
+		};
+
+		if let Some(membership) = extra.membership {
+			room.insert(
+				"membership".to_owned(),
+				Value::String(membership_state_to_str(&membership).to_owned()),
+			);
+		}
+
+		room.insert("lists".to_owned(), serde_json::to_value(extra.lists)?);
+
+		if extra.expanded_timeline {
+			room.insert("expanded_timeline".to_owned(), Value::Bool(true));
+		}
+	}
+
+	Ok(Json(value).into_response())
+}
+
+fn membership_state_to_str(membership: &MembershipState) -> &str {
+	match membership {
+		| MembershipState::Ban => "ban",
+		| MembershipState::Invite => "invite",
+		| MembershipState::Join => "join",
+		| MembershipState::Knock => "knock",
+		| MembershipState::Leave => "leave",
+		| _ => membership.as_ref(),
+	}
+}
+
+async fn user_membership_for_sync(
+	services: &Services,
+	sender_user: &UserId,
+	room_id: &RoomId,
+) -> Option<MembershipState> {
+	let membership = services
+		.rooms
+		.state_cache
+		.user_membership(sender_user, room_id)
+		.await;
+
+	if membership != Some(MembershipState::Leave) {
+		return membership;
+	}
+
+	services
+		.rooms
+		.state_cache
+		.left_state(sender_user, room_id)
+		.await
+		.ok()
+		.flatten()
+		.and_then(|pdu| {
+			(pdu.state_key.as_deref() == Some(sender_user.as_str()))
+				.then(|| pdu.get_content::<RoomMemberEventContent>().ok())
+				.flatten()
+		})
+		.map_or(membership, |content| Some(content.membership))
 }
 
 /// Collect the required state events for a room

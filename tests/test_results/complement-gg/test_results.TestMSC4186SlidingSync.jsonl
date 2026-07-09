@@ -1,5 +1,5 @@
 {"Action":"pass","Test":"TestMSC4186SlidingSyncBulkLoad"}
-{"Action":"fail","Test":"TestMSC4186SlidingSyncExpandedTimeline"}
+{"Action":"pass","Test":"TestMSC4186SlidingSyncExpandedTimeline"}
 {"Action":"fail","Test":"TestMSC4186SlidingSyncIncrementalRoomDeltas"}
 {"Action":"fail","Test":"TestMSC4186SlidingSyncIncrementalRoomDeltas/Required_state_expansion_returns_newly_requested_state_immediately"}
 {"Action":"fail","Test":"TestMSC4186SlidingSyncIncrementalRoomDeltas/State_changes_are_delivered_as_deltas_without_replaying_unchanged_state"}
