@@ -429,6 +429,28 @@ impl Service {
 			.insert(shorteventid, shortstatehash);
 	}
 
+	/// Batch-overwrite event state snapshots. Used by rebuild-state to avoid
+	/// one RocksDB write per event.
+	pub fn set_pdu_shortstatehash_batch(&self, entries: &[(u64, u64)]) {
+		if entries.is_empty() {
+			return;
+		}
+
+		let mut batch = conduwuit_database::rocksdb::WriteBatch::default();
+		for &(shorteventid, shortstatehash) in entries {
+			let key = shorteventid.to_be_bytes();
+			let val = shortstatehash.to_be_bytes();
+			self.db
+				.shorteventid_shortstatehash
+				.insert_into_batch(&mut batch, &key, val);
+			self.services
+				.short
+				.shorteventid_shortstatehash_cache
+				.insert(shorteventid, shortstatehash);
+		}
+		self.db.shorteventid_shortstatehash.apply_batch(&batch);
+	}
+
 	/// Generates a new StateHash and associates it with the incoming event.
 	///
 	/// This adds all current state events (not including the incoming event)

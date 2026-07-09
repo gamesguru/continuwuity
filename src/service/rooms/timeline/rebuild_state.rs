@@ -432,7 +432,6 @@ impl super::Service {
 		});
 
 		// ── Consume stream and write SSH for each event ──
-		let shortroomid = self.services.short.get_or_create_shortroomid(room_id).await;
 		let empty_ssh = self
 			.services
 			.state_compressor
@@ -462,6 +461,7 @@ impl super::Service {
 		let mut t_write = std::time::Duration::ZERO;
 		let mut t_recv_wait = std::time::Duration::ZERO;
 		let mut _t_last_recv = Instant::now();
+		let mut pdu_ssh_batch: Vec<(u64, u64)> = Vec::with_capacity(4096);
 
 		while let Some((resolved_id, owned_update)) = {
 			let t0 = Instant::now();
@@ -470,7 +470,7 @@ impl super::Service {
 			_t_last_recv = Instant::now();
 			result
 		} {
-			let Some(&(eid, _, _, state_key, _)) = events_meta_map.get(resolved_id.as_str())
+			let Some(&(eid, _, _, _state_key, _)) = events_meta_map.get(resolved_id.as_str())
 			else {
 				continue;
 			};
@@ -547,23 +547,15 @@ impl super::Service {
 
 			let tw0 = Instant::now();
 			// Write pdu_shortstatehash for this event
-			if state_key.is_some() {
-				if let Ok((pdu, mut json)) = self.db.get_from_eventid_pdu(eid).await {
-					let pdu_id: conduwuit_core::matrix::pdu::RawPduId =
-						conduwuit_core::matrix::pdu::PduId {
-							shortroomid,
-							shorteventid: conduwuit_core::matrix::pdu::PduCount::Normal(0),
-						}
-						.into();
-					let mut ssh_mut = ssh;
-					self.compute_state_for_event(&pdu, eid, &mut json, &mut ssh_mut, &pdu_id)
-						.await;
+			let shorteventid = sei_cache.get(eid).copied().unwrap_or(0);
+			if shorteventid != 0 {
+				pdu_ssh_batch.push((shorteventid, ssh));
+				if pdu_ssh_batch.len() >= 4096 {
+					self.services
+						.state
+						.set_pdu_shortstatehash_batch(&pdu_ssh_batch);
+					pdu_ssh_batch.clear();
 				}
-			} else {
-				let shorteventid = sei_cache.get(eid).copied().unwrap_or(0);
-				self.services
-					.state
-					.set_pdu_shortstatehash(shorteventid, ssh);
 			}
 			t_write = t_write.saturating_add(tw0.elapsed());
 
@@ -575,6 +567,12 @@ impl super::Service {
 				tokio::task::yield_now().await;
 				cork = Some(self.db.db.cork());
 			}
+		}
+
+		if !pdu_ssh_batch.is_empty() {
+			self.services
+				.state
+				.set_pdu_shortstatehash_batch(&pdu_ssh_batch);
 		}
 
 		drop(cork.take());
