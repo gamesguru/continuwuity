@@ -75,15 +75,15 @@ SELECT
     counts.new_failures_list,
     counts.new_passes_list
 FROM runs r
-CROSS JOIN LATERAL (
+LEFT JOIN LATERAL (
     SELECT id AS default_baseline_run_id FROM runs
     WHERE (branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream')
     OR version_string LIKE '%main%')
-    AND room_version IS NOT DISTINCT FROM r.room_version
+    AND COALESCE(room_version, '11') IS NOT DISTINCT FROM COALESCE(r.room_version, '11')
     AND arch IS NOT DISTINCT FROM r.arch
     AND os IS NOT DISTINCT FROM r.os
     AND profile IS NOT DISTINCT FROM r.profile
-    AND features IS NOT DISTINCT FROM r.features
+    AND regexp_replace(btrim(features, ' ,'), '[,\s]+', ' ', 'g') IS NOT DISTINCT FROM regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g')
     AND EXISTS (
         SELECT 1
         FROM run_details rd_base
@@ -91,7 +91,7 @@ CROSS JOIN LATERAL (
     )
     ORDER BY run_date DESC
     LIMIT 1
-) dbr
+) dbr ON TRUE
 LEFT JOIN LATERAL (
     SELECT
         COUNT(*) as run_total,

@@ -410,19 +410,32 @@ where
 				.await,
 		};
 
-		let mut active_rooms_with_ts = Vec::with_capacity(active_rooms.len());
-		for room in active_rooms {
-			let ts = if let Some(ts) = bump_timestamps.get(room) {
-				*ts
-			} else {
-				let ts = match services.rooms.timeline.latest_pdu_in_room(room).await {
+		let missing_rooms: Vec<_> = active_rooms
+			.iter()
+			.filter(|room| !bump_timestamps.contains_key::<RoomId>(*room))
+			.map(|room| (*room).to_owned())
+			.collect::<BTreeSet<_>>()
+			.into_iter()
+			.collect();
+
+		let fetched_timestamps = missing_rooms
+			.into_iter()
+			.stream()
+			.wide_then(|room_id| async move {
+				let ts = match services.rooms.timeline.latest_pdu_in_room(&room_id).await {
 					| Ok(pdu) => pdu.origin_server_ts().get().into(),
 					| Err(_) => 0_u64,
 				};
-				bump_timestamps.insert(room.to_owned(), ts);
-				ts
-			};
-			active_rooms_with_ts.push((room, ts));
+				(room_id, ts)
+			})
+			.collect::<Vec<_>>()
+			.await;
+
+		bump_timestamps.extend(fetched_timestamps);
+
+		let mut active_rooms_with_ts = Vec::with_capacity(active_rooms.len());
+		for room in active_rooms {
+			active_rooms_with_ts.push((room, bump_timestamps.get(room).copied().unwrap_or(0)));
 		}
 
 		// Sort descending by timestamp (most recent first), then by room ID for a

@@ -4,19 +4,7 @@ Created on Sat Apr 04 13:21:17 2026
 @author: shane
 */
 
-WITH baseline_commit AS (
-    SELECT b.commit_hash
-    FROM runs b
-    WHERE {baseline_run_filter}
-    ORDER BY b.run_date DESC LIMIT 1
-),
-baseline_runs AS (
-    SELECT b2.id, b2.os, b2.arch, b2.profile, b2.features, COALESCE(b2.room_version, '11') AS room_version
-    FROM runs b2
-    WHERE b2.commit_hash = (SELECT commit_hash FROM baseline_commit)
-      AND EXISTS (SELECT 1 FROM run_details rd_base WHERE rd_base.run_id = b2.id)
-),
-recent_runs AS (
+WITH recent_runs AS (
     SELECT r.*
     FROM runs r
     WHERE r.n_pass > 0
@@ -46,13 +34,16 @@ run_regs AS (
         counts.new_passes_list
     FROM recent_runs r
     LEFT JOIN LATERAL (
-        SELECT b2.id AS baseline_run_id
-        FROM baseline_runs b2
-        WHERE b2.os IS NOT DISTINCT FROM r.os
-          AND b2.arch IS NOT DISTINCT FROM r.arch
-          AND b2.profile IS NOT DISTINCT FROM r.profile
-          AND b2.features IS NOT DISTINCT FROM r.features
-          AND b2.room_version IS NOT DISTINCT FROM COALESCE(r.room_version, '11')
+        SELECT b.id AS baseline_run_id
+        FROM runs b
+        WHERE {baseline_run_filter}
+          AND b.os IS NOT DISTINCT FROM r.os
+          AND b.arch IS NOT DISTINCT FROM r.arch
+          AND b.profile IS NOT DISTINCT FROM r.profile
+          AND regexp_replace(btrim(b.features, ' ,'), '[,\s]+', ' ', 'g') IS NOT DISTINCT FROM regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g')
+          AND COALESCE(b.room_version, '11') IS NOT DISTINCT FROM COALESCE(r.room_version, '11')
+          AND EXISTS (SELECT 1 FROM run_details rd_base WHERE rd_base.run_id = b.id)
+        ORDER BY b.run_date DESC
         LIMIT 1
     ) mb_run_id ON TRUE
     LEFT JOIN LATERAL (

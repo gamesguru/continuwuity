@@ -373,9 +373,51 @@ jobs:
           PROFILE="${{ matrix.profile }}"
           ROOM_VERSION="${{ matrix.room_version }}"
 
-          # Fetch the newly failing and passing tests for this specific run
-          NEW_FAILURES=$(./bin/db-shell -A -t -c "SELECT new_failures_list FROM v_run_regressions WHERE commit_hash LIKE '${SHA}%' AND arch = '${ARCH}' AND os = '${OS}' AND profile = '${PROFILE}' AND room_version IS NOT DISTINCT FROM '${ROOM_VERSION}' ORDER BY run_date DESC, id DESC LIMIT 1;" | sed 's/\\n/\n/g')
-          NEW_PASSES=$(./bin/db-shell -A -t -c "SELECT new_passes_list FROM v_run_regressions WHERE commit_hash LIKE '${SHA}%' AND arch = '${ARCH}' AND os = '${OS}' AND profile = '${PROFILE}' AND room_version IS NOT DISTINCT FROM '${ROOM_VERSION}' ORDER BY run_date DESC, id DESC LIMIT 1;" | sed 's/\\n/\n/g')
+          # Fetch the newly failing and passing tests for this specific run.
+          # Keep this query branch-local instead of depending on v_run_regressions,
+          # because that shared view may be managed by another branch.
+          COMMON_CTES="
+            WITH current_run AS (
+              SELECT r.*
+              FROM runs r
+              WHERE r.commit_hash LIKE '${SHA}%'
+                AND r.arch IS NOT DISTINCT FROM '${ARCH}'
+                AND r.os IS NOT DISTINCT FROM '${OS}'
+                AND r.profile IS NOT DISTINCT FROM '${PROFILE}'
+                AND r.room_version IS NOT DISTINCT FROM '${ROOM_VERSION}'
+                AND EXISTS (SELECT 1 FROM run_details rd WHERE rd.run_id = r.id)
+              ORDER BY r.run_date DESC, r.id DESC
+              LIMIT 1
+            ),
+            baseline_run AS (
+              SELECT b.id
+              FROM runs b
+              CROSS JOIN current_run r
+              WHERE (b.branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream')
+                OR b.version_string LIKE '%main%')
+                AND b.arch IS NOT DISTINCT FROM r.arch
+                AND b.os IS NOT DISTINCT FROM r.os
+                AND b.profile IS NOT DISTINCT FROM r.profile
+                AND regexp_replace(btrim(b.features, ' ,'), '[,\s]+', ' ', 'g') IS NOT DISTINCT FROM regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g')
+                AND COALESCE(b.room_version, '11') IS NOT DISTINCT FROM COALESCE(r.room_version, '11')
+                AND EXISTS (SELECT 1 FROM run_details rd_base WHERE rd_base.run_id = b.id)
+              ORDER BY b.run_date DESC, b.id DESC
+              LIMIT 1
+            )"
+          NEW_FAILURES=$(./bin/db-shell -A -t -c "${COMMON_CTES}
+            SELECT COALESCE(STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name), '')
+            FROM current_run r
+            JOIN run_details rd ON rd.run_id = r.id
+            LEFT JOIN baseline_run br ON TRUE
+            LEFT JOIN run_details mb ON mb.test_name = rd.test_name AND mb.run_id = br.id
+            WHERE rd.status = 'fail' AND mb.status IS NOT NULL AND mb.status != 'fail';" | sed 's/\\n/\n/g')
+          NEW_PASSES=$(./bin/db-shell -A -t -c "${COMMON_CTES}
+            SELECT COALESCE(STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name), '')
+            FROM current_run r
+            JOIN run_details rd ON rd.run_id = r.id
+            LEFT JOIN baseline_run br ON TRUE
+            LEFT JOIN run_details mb ON mb.test_name = rd.test_name AND mb.run_id = br.id
+            WHERE rd.status = 'pass' AND mb.status IS NOT NULL AND mb.status != 'pass';" | sed 's/\\n/\n/g')
 
           echo "new_failures<<EOF" | tee -a "$GITHUB_OUTPUT"
           echo "$NEW_FAILURES" | tee -a "$GITHUB_OUTPUT"
@@ -479,19 +521,23 @@ jobs:
               c.body && c.body.includes(marker)
             );
 
+            const heading = `## Complement Test Results (${arch} ${os})`;
+            const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const extractRuns = (body) => {
+              return body
+                .replace(marker, '')
+                .split(new RegExp(`(?=^${escapeRegExp(heading)}$)`, 'm'))
+                .map(section => section.trim())
+                .filter(section => section.startsWith(heading));
+            };
+
             let body = currentRun + '\n\n' + marker;
 
             if (existing) {
-              let oldBody = existing.body.replace(marker, '').replace(`## Complement Test Results (${arch} ${os})`, '').trim();
-              if (oldBody.length > 0) {
-                const maxPreviousRuns = 6;
-                let parts = oldBody.split('<details><summary>Previous Runs</summary>');
-                if (parts.length > maxPreviousRuns + 1) {
-                  parts = parts.slice(0, maxPreviousRuns + 1);
-                  oldBody = parts.join('<details><summary>Previous Runs</summary>');
-                  oldBody += '\n\n' + '</details>\n\n'.repeat(maxPreviousRuns).trim();
-                }
-                body = currentRun + '\n\n<details><summary>Previous Runs</summary>\n\n' + oldBody + '\n\n</details>\n\n' + marker;
+              const maxPreviousRuns = 6;
+              const previousRuns = extractRuns(existing.body).slice(0, maxPreviousRuns);
+              if (previousRuns.length > 0) {
+                body = currentRun + '\n\n<details><summary>Previous Runs</summary>\n\n' + previousRuns.join('\n\n') + '\n\n</details>\n\n' + marker;
               }
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,
