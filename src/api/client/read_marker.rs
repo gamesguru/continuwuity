@@ -162,12 +162,18 @@ async fn update_read_receipt(
 	thread: ReceiptThread,
 ) -> Result<()> {
 	// Spec: server SHOULD NOT allow read receipts to move backwards
+	services
+		.rooms
+		.timeline
+		.get_pdu_in_room(Some(room_id), event_id)
+		.await
+		.map_err(|_| conduwuit::err!(Request(NotFound("Event not found in room."))))?;
 	let new_count = services
 		.rooms
 		.timeline
 		.get_pdu_count(event_id)
 		.await
-		.map_err(|_| conduwuit::err!(Request(NotFound("Event not found."))))?;
+		.map_err(|_| conduwuit::err!(Request(NotFound("Event not found in room."))))?;
 
 	let mut ignore_receipt = false;
 	if let PduCount::Normal(new_count) = new_count {
@@ -240,12 +246,18 @@ async fn update_private_read_receipt(
 	event_id: &ruma::EventId,
 	thread: ReceiptThread,
 ) -> Result<()> {
+	services
+		.rooms
+		.timeline
+		.get_pdu_in_room(Some(room_id), event_id)
+		.await
+		.map_err(|_| conduwuit::err!(Request(NotFound("Event not found in room."))))?;
 	let count = services
 		.rooms
 		.timeline
 		.get_pdu_count(event_id)
 		.await
-		.map_err(|_| conduwuit::err!(Request(NotFound("Event not found."))))?;
+		.map_err(|_| conduwuit::err!(Request(NotFound("Event not found in room."))))?;
 
 	let PduCount::Normal(new_count) = count else {
 		return Err!(Request(InvalidParam(
@@ -256,7 +268,7 @@ async fn update_private_read_receipt(
 	let old_count = services
 		.rooms
 		.read_receipt
-		.private_read_get_count(room_id, sender_user)
+		.private_read_get_count(room_id, sender_user, Some(&thread))
 		.await
 		.unwrap_or(0);
 

@@ -117,16 +117,7 @@ pub(crate) async fn sync_events_v5_route(
 	)
 	.await?;
 
-	if response.rooms.iter().all(|(id, r)| {
-		r.timeline.is_empty()
-			&& r.required_state.is_empty()
-			&& !response.extensions.receipts.rooms.contains_key(id)
-	}) && response
-		.extensions
-		.to_device
-		.clone()
-		.is_none_or(|to| to.events.is_empty())
-	{
+	if response.rooms.is_empty() && response.extensions.is_empty() {
 		// Hang until new info arrives, or the client's timeout expires
 		if let Some(timeout) = body.timeout {
 			if timeout > Duration::from_secs(0) {
@@ -360,6 +351,7 @@ where
 {
 	// TODO MSC4186: Implement remaining list filters: is_dm, is_encrypted,
 	// room_types.
+	let mut bump_timestamps = HashMap::new();
 	for (list_id, list) in &body.lists {
 		let active_rooms: Vec<_> = match list.filters.as_ref().and_then(|f| f.is_invite) {
 			| None => all_rooms.clone().collect(),
@@ -383,9 +375,15 @@ where
 
 		let mut active_rooms_with_ts = Vec::with_capacity(active_rooms.len());
 		for room in active_rooms {
-			let ts = match services.rooms.timeline.latest_pdu_in_room(room).await {
-				| Ok(pdu) => pdu.origin_server_ts().get().into(),
-				| Err(_) => 0_u64,
+			let ts = if let Some(ts) = bump_timestamps.get(room) {
+				*ts
+			} else {
+				let ts = match services.rooms.timeline.latest_pdu_in_room(room).await {
+					| Ok(pdu) => pdu.origin_server_ts().get().into(),
+					| Err(_) => 0_u64,
+				};
+				bump_timestamps.insert(room.to_owned(), ts);
+				ts
 			};
 			active_rooms_with_ts.push((room, ts));
 		}
@@ -481,8 +479,8 @@ where
 	for (room_id, (required_state_request, timeline_limit, roomsince)) in todo_rooms {
 		let roomsincecount = PduCount::Normal(*roomsince);
 
-		let old_limit = timeline_limits.get(room_id).copied().unwrap_or(0);
-		let is_expanded_timeline = *timeline_limit > old_limit && old_limit > 0;
+		let old_limit = timeline_limits.get(room_id).copied();
+		let is_expanded_timeline = old_limit.is_some_and(|old| *timeline_limit > old);
 
 		let mut timestamp: Option<_> = None;
 		let mut invite_state = None;
@@ -1097,7 +1095,7 @@ where
 									device_list_changes.insert(user_id.to_owned());
 								}
 							},
-							| MembershipState::Leave => {
+							| MembershipState::Leave | MembershipState::Ban => {
 								// Write down users that have left encrypted rooms we
 								// are in
 								left_encrypted_users.insert(user_id.to_owned());

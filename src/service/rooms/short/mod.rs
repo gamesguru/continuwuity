@@ -6,7 +6,7 @@ use std::{
 
 pub use conduwuit::matrix::pdu::{ShortEventId, ShortId, ShortRoomId, ShortStateKey};
 use conduwuit::{
-	Result, err, implement,
+	Result, SyncMutex, err, implement,
 	matrix::StateKey,
 	pair_of,
 	utils::{self, IterStream, ReadyExt},
@@ -30,6 +30,7 @@ pub struct Service {
 		moka::sync::Cache<(StateEventType, StateKey), ShortStateKey>,
 	pub shortstatekey_statekey_cache:
 		moka::sync::Cache<ShortStateKey, (StateEventType, StateKey)>,
+	shorteventid_create_mutex: SyncMutex<()>,
 }
 
 struct Data {
@@ -107,6 +108,7 @@ impl crate::Service for Service {
 			shortstatekey_statekey_cache: moka::sync::Cache::builder()
 				.max_capacity(shortstatekey_cap.into())
 				.build(),
+			shorteventid_create_mutex: SyncMutex::new(()),
 		}))
 	}
 
@@ -257,6 +259,21 @@ where
 #[implement(Service)]
 fn create_shorteventid(&self, event_id: &EventId) -> ShortEventId {
 	const BUFSIZE: usize = size_of::<ShortEventId>();
+
+	let _guard = self.shorteventid_create_mutex.lock();
+
+	if let Ok(handle) = self
+		.db
+		.eventid_shorteventid
+		.get_blocking(event_id.as_bytes())
+	{
+		let short = utils::u64_from_u8(&handle);
+		self.eventid_shorteventid_cache
+			.insert(event_id.to_owned(), short);
+		self.shorteventid_eventid_cache
+			.insert(short, event_id.to_owned());
+		return short;
+	}
 
 	let short = self.services.globals.next_count().unwrap();
 	debug_assert!(size_of_val(&short) == BUFSIZE, "buffer requirement changed");

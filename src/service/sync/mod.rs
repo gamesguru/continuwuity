@@ -2,6 +2,7 @@ mod watch;
 
 use std::{
 	collections::{BTreeMap, BTreeSet},
+	mem::take,
 	sync::Arc,
 	time::Duration,
 };
@@ -14,8 +15,9 @@ use ruma::{
 	api::client::sync::sync_events::{
 		self,
 		v4::{ExtensionsConfig, SyncRequestList},
-		v5,
+		v5::{self, request as v5_request},
 	},
+	uint,
 };
 
 use crate::{Dep, rooms};
@@ -58,6 +60,9 @@ struct SlidingSyncCache {
 
 #[derive(Default)]
 struct SnakeSyncCache {
+	lists: BTreeMap<String, v5_request::List>,
+	subscriptions: BTreeMap<OwnedRoomId, v5_request::RoomSubscription>,
+	extensions: v5_request::Extensions,
 	known_rooms: BTreeMap<String, BTreeMap<OwnedRoomId, u64>>,
 	timeline_limits: BTreeMap<OwnedRoomId, usize>,
 }
@@ -122,12 +127,47 @@ impl Service {
 	pub fn update_snake_sync_request_with_cache(
 		&self,
 		snake_key: &SnakeConnectionsKey,
-		_request: &mut v5::Request,
+		request: &mut v5::Request,
 	) -> (BTreeMap<String, BTreeMap<OwnedRoomId, u64>>, BTreeMap<OwnedRoomId, usize>) {
 		let cached_arc = self
 			.snake_connections
 			.get_with(snake_key.clone(), || Arc::new(SyncMutex::new(SnakeSyncCache::default())));
-		let cached = cached_arc.lock();
+		let mut cached = cached_arc.lock();
+
+		for (list_id, list) in &mut request.lists {
+			if let Some(cached_list) = cached.lists.get(list_id) {
+				list_or_sticky(&mut list.ranges, &cached_list.ranges);
+				list_or_sticky(
+					&mut list.room_details.required_state,
+					&cached_list.room_details.required_state,
+				);
+				if list.room_details.timeline_limit == uint!(0) {
+					list.room_details.timeline_limit = cached_list.room_details.timeline_limit;
+				}
+				match (&mut list.filters, cached_list.filters.clone()) {
+					| (Some(filter), Some(cached_filter)) => {
+						some_or_sticky(&mut filter.is_invite, cached_filter.is_invite);
+						list_or_sticky(&mut filter.not_room_types, &cached_filter.not_room_types);
+					},
+					| (_, Some(cached_filters)) => list.filters = Some(cached_filters),
+					| (Some(list_filters), _) => list.filters = Some(list_filters.clone()),
+					| (..) => {},
+				}
+			}
+			cached.lists.insert(list_id.clone(), list.clone());
+		}
+		request.lists.extend(cached.lists.clone());
+
+		cached
+			.subscriptions
+			.extend(take(&mut request.room_subscriptions));
+		request
+			.room_subscriptions
+			.extend(cached.subscriptions.clone());
+
+		sticky_v5_extensions(&mut request.extensions, &cached.extensions);
+		cached.extensions = request.extensions.clone();
+
 		(cached.known_rooms.clone(), cached.timeline_limits.clone())
 	}
 
@@ -357,4 +397,54 @@ fn some_or_sticky<T>(target: &mut Option<T>, cached: Option<T>) {
 	if target.is_none() {
 		*target = cached;
 	}
+}
+
+fn sticky_v5_extensions(target: &mut v5_request::Extensions, cache: &v5_request::Extensions) {
+	target.e2ee.enabled = target.e2ee.enabled.or(cache.e2ee.enabled);
+
+	target.to_device.enabled = target.to_device.enabled.or(cache.to_device.enabled);
+	target.to_device.limit = target.to_device.limit.or(cache.to_device.limit);
+	target.to_device.since = target
+		.to_device
+		.since
+		.clone()
+		.or_else(|| cache.to_device.since.clone());
+
+	sticky_v5_room_extension(
+		&mut target.account_data.enabled,
+		&mut target.account_data.lists,
+		&mut target.account_data.rooms,
+		cache.account_data.enabled,
+		cache.account_data.lists.as_ref(),
+		cache.account_data.rooms.as_ref(),
+	);
+	sticky_v5_room_extension(
+		&mut target.receipts.enabled,
+		&mut target.receipts.lists,
+		&mut target.receipts.rooms,
+		cache.receipts.enabled,
+		cache.receipts.lists.as_ref(),
+		cache.receipts.rooms.as_ref(),
+	);
+	sticky_v5_room_extension(
+		&mut target.typing.enabled,
+		&mut target.typing.lists,
+		&mut target.typing.rooms,
+		cache.typing.enabled,
+		cache.typing.lists.as_ref(),
+		cache.typing.rooms.as_ref(),
+	);
+}
+
+fn sticky_v5_room_extension<T: Clone>(
+	target_enabled: &mut Option<bool>,
+	target_lists: &mut Option<Vec<String>>,
+	target_rooms: &mut Option<Vec<T>>,
+	cache_enabled: Option<bool>,
+	cache_lists: Option<&Vec<String>>,
+	cache_rooms: Option<&Vec<T>>,
+) {
+	*target_enabled = target_enabled.or(cache_enabled);
+	*target_lists = target_lists.clone().or_else(|| cache_lists.cloned());
+	*target_rooms = target_rooms.clone().or_else(|| cache_rooms.cloned());
 }

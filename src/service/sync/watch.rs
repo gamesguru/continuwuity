@@ -52,11 +52,14 @@ pub async fn setup_watch<'a>(
 				loop {
 					match typing_rx.recv().await {
 						| Ok(typing_room_id) if user_rooms.contains(&typing_room_id) => return,
-						// If it lagged or was for a room we aren't in, just try again
-						| Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) =>
-							continue,
-						// Server shutting down / channel closed
-						| Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
+						// If it was for a room we aren't in, just try again
+						| Ok(_) => continue,
+						// If it lagged, we know typing changed but lost which room; recompute.
+						// Server shutdown / channel close should also wake the waiter.
+						| Err(
+							tokio::sync::broadcast::error::RecvError::Lagged(_)
+							| tokio::sync::broadcast::error::RecvError::Closed,
+						) => return,
 					}
 				}
 			}

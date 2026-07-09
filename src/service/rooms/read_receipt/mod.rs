@@ -116,8 +116,11 @@ impl Service {
 		&self,
 		room_id: &RoomId,
 		user_id: &UserId,
+		thread: Option<&ruma::events::receipt::ReceiptThread>,
 	) -> Result<u64> {
-		self.db.private_read_get_count(room_id, user_id).await
+		self.db
+			.private_read_get_count(room_id, user_id, thread)
+			.await
 	}
 
 	/// Returns the PDU count of the last typing update in this room.
@@ -195,8 +198,6 @@ where
 								}
 							}
 
-							user_locations.insert(location_key, event_id.clone());
-
 							let event_receipts =
 								json.entry(event_id.clone()).or_insert_with(BTreeMap::new);
 							let users = event_receipts
@@ -211,8 +212,10 @@ where
 								users.entry(user_id.clone())
 							{
 								e.insert(new_receipt);
+								user_locations.insert(location_key, event_id.clone());
 							} else if is_unthreaded {
 								users.insert(user_id, new_receipt);
+								user_locations.insert(location_key, event_id.clone());
 							}
 						}
 					}
