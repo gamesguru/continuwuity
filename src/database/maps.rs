@@ -465,4 +465,16 @@ pub(super) static MAPS: &[Descriptor] = &[
 		name: "userroomid_invitesender",
 		..descriptor::RANDOM_SMALL
 	},
+	Descriptor {
+		name: "delayid_scheduleddelayedevent",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "delayid_finalizeddelayedevent",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "userroomdelayid",
+		..descriptor::RANDOM_SMALL
+	},
 ];
