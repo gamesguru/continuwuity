@@ -450,7 +450,12 @@ impl Service {
 		self.submission_queue_sender.send((submission_time, delay_id.clone()))
 			.map_err(|_err|{
 				err!(Request(Unknown(
-					debug_error!(%event.user_id, "Server was unable to process delayed even request (queue full).")
+					err!(Request(Unknown(
+						debug_error!(
+							%event.user_id,
+							"Server was unable to process delayed event request (worker not running?)"
+						)
+					)))
 				)))
 			})?;
 

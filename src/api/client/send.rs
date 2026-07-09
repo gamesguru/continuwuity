@@ -40,7 +40,12 @@ fn parse_cached_send_txn_response(
 	}
 
 	if legacy_is_delay_id {
-		utils::string_from_bytes(data).map(CachedSendTxnResponse::DelayId)
+		// Legacy cache entries may contain an event_id; prefer parsing as event_id when possible.
+		if let Ok(event_id) = parse_cached_send_event_id(data) {
+			Ok(CachedSendTxnResponse::EventId(event_id))
+		} else {
+			utils::string_from_bytes(data).map(CachedSendTxnResponse::DelayId)
+		}
 	} else {
 		parse_cached_send_event_id(data).map(CachedSendTxnResponse::EventId)
 	}
