@@ -328,6 +328,7 @@ impl Service {
 		}
 
 		let timestamp = MilliSecondsSinceUnixEpoch::now();
+		let relation = (event.user_id.clone(), event.room_id.clone(), delay_id.clone());
 
 		let result = match action {
 			| UpdateAction::Send => {
@@ -433,6 +434,7 @@ impl Service {
 		};
 
 		self.db.delayid_scheduleddelayedevent.remove(delay_id);
+		self.db.userroomdelayid.del(&relation);
 
 		result
 	}
@@ -444,21 +446,6 @@ impl Service {
 		let delay_id = utils::random_string(DELAY_ID_SIZE);
 
 		let submission_time = event.running_since + event.delay;
-
-		self.scheduled_events.lock().await.insert(delay_id.clone());
-
-		self.submission_queue_sender.send((submission_time, delay_id.clone()))
-			.map_err(|_err|{
-				err!(Request(Unknown(
-					err!(Request(Unknown(
-						debug_error!(
-							%event.user_id,
-							"Server was unable to process delayed event request (worker not running?)"
-						)
-					)))
-				)))
-			})?;
-
 		let relation = (event.user_id.clone(), event.room_id.clone(), delay_id.clone());
 
 		self.db
@@ -466,6 +453,16 @@ impl Service {
 			.put(&delay_id, Json(event));
 
 		self.db.userroomdelayid.put(&relation, ());
+
+		self.scheduled_events.lock().await.insert(delay_id.clone());
+
+		self.submission_queue_sender
+			.send((submission_time, delay_id.clone()))
+			.map_err(|_err| {
+				err!(Request(Unknown(debug_error!(
+					"Server was unable to process delayed event request (queue full)."
+				))))
+			})?;
 
 		Ok(delay_id)
 	}

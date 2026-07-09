@@ -40,7 +40,7 @@ fn parse_cached_send_txn_response(
 	}
 
 	if legacy_is_delay_id {
-		// Legacy cache entries may contain an event_id; prefer parsing as event_id when possible.
+		// Legacy cache may have an event_id; prefer parsing as event_id if possible.
 		if let Ok(event_id) = parse_cached_send_event_id(data) {
 			Ok(CachedSendTxnResponse::EventId(event_id))
 		} else {
@@ -90,8 +90,6 @@ pub(crate) async fn send_message_event_route(
 		.users
 		.update_device_last_seen(sender_user, body.sender_device.as_deref(), client_ip)
 		.await;
-
-	let state_lock = services.rooms.state.mutex.lock(&body.room_id).await;
 
 	if let Some(delay) = body.delay {
 		// Check if this is a new transaction id
@@ -152,6 +150,8 @@ pub(crate) async fn send_message_event_route(
 
 		return cached_send_txn_response(&response, false);
 	}
+
+	let state_lock = services.rooms.state.mutex.lock(&body.room_id).await;
 
 	let event_id = Box::pin(services.rooms.timeline.send_message_event_helper(
 		sender_user,
@@ -220,6 +220,18 @@ mod tests {
 		}
 
 		match parse_cached_send_txn_response(b"$legacy:example.com", false)? {
+			| CachedSendTxnResponse::EventId(parsed) => {
+				assert_eq!(parsed.as_str(), "$legacy:example.com")
+			},
+			| CachedSendTxnResponse::DelayId(_) => panic!("expected event id"),
+		}
+
+		Ok(())
+	}
+
+	#[test]
+	fn cached_send_txn_response_prefers_legacy_event_id_in_delay_branch() -> Result<()> {
+		match parse_cached_send_txn_response(b"$legacy:example.com", true)? {
 			| CachedSendTxnResponse::EventId(parsed) => {
 				assert_eq!(parsed.as_str(), "$legacy:example.com")
 			},
