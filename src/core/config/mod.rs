@@ -2537,7 +2537,7 @@ pub struct ExperimentalConfig {
 	pub msc4222_enabled: bool,
 
 	/// MSC3030: timestamp to event
-	#[serde(default)]
+	#[serde(default = "true_fn")]
 	pub msc3030_enabled: bool,
 }
 
