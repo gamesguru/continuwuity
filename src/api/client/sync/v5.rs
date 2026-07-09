@@ -264,6 +264,7 @@ async fn build_sync_events_v5(
 	handle_lists(
 		services,
 		sync_info,
+		next_batch,
 		all_invited_rooms.clone(),
 		all_joined_rooms.clone(),
 		all_rooms,
@@ -274,7 +275,7 @@ async fn build_sync_events_v5(
 	)
 	.await;
 
-	fetch_subscriptions(services, sync_info, known_rooms, &mut todo_rooms).await;
+	fetch_subscriptions(services, sync_info, next_batch, known_rooms, &mut todo_rooms).await;
 
 	response.rooms = process_rooms(
 		services,
@@ -309,7 +310,8 @@ async fn build_sync_events_v5(
 
 async fn fetch_subscriptions(
 	services: &Services,
-	(sender_user, sender_device, globalsince, body): SyncInfo<'_>,
+	(sender_user, sender_device, _, body): SyncInfo<'_>,
+	next_batch: u64,
 	known_rooms: &KnownRooms,
 	todo_rooms: &mut TodoRooms,
 ) {
@@ -361,7 +363,7 @@ async fn fetch_subscriptions(
 			&snake_key,
 			"subscriptions".to_owned(),
 			known_subscription_rooms,
-			globalsince,
+			next_batch,
 		);
 	}
 }
@@ -369,7 +371,8 @@ async fn fetch_subscriptions(
 #[allow(clippy::too_many_arguments)]
 async fn handle_lists<'a, Rooms, AllRooms>(
 	services: &Services,
-	(sender_user, sender_device, globalsince, body): SyncInfo<'_>,
+	(sender_user, sender_device, _, body): SyncInfo<'_>,
+	next_batch: u64,
 	all_invited_rooms: Rooms,
 	all_joined_rooms: Rooms,
 	all_rooms: AllRooms,
@@ -495,7 +498,7 @@ where
 				&snake_key,
 				list_id.clone(),
 				new_known_rooms,
-				globalsince,
+				next_batch,
 			);
 		}
 	}
@@ -629,7 +632,6 @@ where
 				.rooms
 				.get(room_id)
 				.is_none_or(Vec::is_empty)
-			&& receipt_size == 0
 			&& last_notification_read <= *roomsince
 			&& required_state_request.is_empty()
 		{
@@ -670,7 +672,7 @@ where
 		)
 		.await;
 
-		let include_stable_room_fields = roomsince == &0
+		let include_stable_room_fields = body.pos.is_none()
 			|| timeline_pdus
 				.iter()
 				.any(|(_, pdu)| pdu.event_type().to_string() == "m.room.name");
@@ -690,14 +692,19 @@ where
 		extra.membership = membership;
 		extra.expanded_timeline = is_expanded_timeline && !timeline_pdus.is_empty();
 
+		let mut fallback_timestamp = None;
 		for (_, pdu) in timeline_pdus {
 			let ts = pdu.origin_server_ts;
+			if fallback_timestamp.is_none_or(|time| time <= ts) {
+				fallback_timestamp = Some(ts);
+			}
 			if DEFAULT_BUMP_TYPES.binary_search(&pdu.kind).is_ok()
 				&& timestamp.is_none_or(|time| time <= ts)
 			{
 				timestamp = Some(ts);
 			}
 		}
+		timestamp = timestamp.or(fallback_timestamp);
 
 		// Heroes
 		let heroes: Vec<_> = services
@@ -771,7 +778,7 @@ where
 					| ruma::JsOption::Undefined => ruma::JsOption::Undefined,
 				},
 			},
-			initial: (roomsince == &0).then_some(true),
+			initial: (body.pos.is_none() && roomsince == &0).then_some(true),
 			is_dm: None,
 			invite_state,
 			unread_notifications: UnreadNotificationsCount {
