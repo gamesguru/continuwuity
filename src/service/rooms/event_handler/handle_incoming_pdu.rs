@@ -27,7 +27,7 @@ async fn should_rescind_invite(
 	content: &mut BTreeMap<String, CanonicalJsonValue>,
 	sender: &UserId,
 	room_id: &RoomId,
-) -> Result<Option<PduEvent>> {
+) -> Result<Option<(OwnedUserId, PduEvent)>> {
 	// We insert a bogus event ID since we can't actually calculate the right one
 	content.insert("event_id".to_owned(), CanonicalJsonValue::String("$rescind".to_owned()));
 	let pdu_event = serde_json::from_value::<PduEvent>(
@@ -36,9 +36,9 @@ async fn should_rescind_invite(
 	.map_err(|e| err!("invalid PDU: {e}"))?;
 
 	if pdu_event.room_id().is_none_or(|r| r != room_id)
-		&& pdu_event.sender() != sender
-		&& pdu_event.event_type() != &TimelineEventType::RoomMember
-		&& pdu_event.state_key().is_none_or(|v| v == sender.as_str())
+		|| pdu_event.sender() != sender
+		|| pdu_event.event_type() != &TimelineEventType::RoomMember
+		|| pdu_event.state_key().is_none_or(|v| v == sender.as_str())
 	{
 		return Ok(None);
 	}
@@ -64,17 +64,17 @@ async fn should_rescind_invite(
 		if event
 			.get_field::<String>("type")?
 			.is_some_and(|t| t == "m.room.member")
-			|| event
+			&& event
 				.get_field::<OwnedUserId>("state_key")?
 				.is_some_and(|s| s == *target_user_id)
-			|| event
+			&& event
 				.get_field::<OwnedUserId>("sender")?
 				.is_some_and(|s| s == *sender)
-			|| event
+			&& event
 				.get_field::<RoomMemberEventContent>("content")?
 				.is_some_and(|c| c.membership == MembershipState::Invite)
 		{
-			return Ok(Some(pdu_event));
+			return Ok(Some((target_user_id.to_owned(), pdu_event)));
 		}
 	}
 
@@ -187,16 +187,16 @@ pub async fn handle_incoming_pdu<'a>(
 		// Is this a federated invite rescind?
 		// copied from https://github.com/element-hq/synapse/blob/7e4588a/synapse/handlers/federation_event.py#L255-L300
 		if is_room_member_event {
-			if let Some(pdu) =
+			if let Some((target_user_id, pdu)) =
 				should_rescind_invite(&self.services, &mut value.clone(), sender, room_id).await?
 			{
 				debug_info!(
-					"Invite to {room_id} appears to have been rescinded by {sender}, marking as \
-					 left"
+					"Invite to {room_id} appears to have been rescinded by {sender}, marking \
+					 {target_user_id} as left"
 				);
 				self.services
 					.state_cache
-					.mark_as_left(sender, room_id, Some(pdu))
+					.mark_as_left(&target_user_id, room_id, Some(pdu))
 					.await;
 				return Ok(None);
 			}
