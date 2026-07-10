@@ -2521,7 +2521,7 @@ pub struct DraupnirConfig {
 	pub secret: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Default)]
+#[derive(Clone, Debug, Deserialize)]
 #[config_example_generator(
 	filename = "conduwuit-example.toml",
 	section = "global.experimental_features",
@@ -2539,6 +2539,16 @@ pub struct ExperimentalConfig {
 	/// MSC3030: timestamp to event
 	#[serde(default = "true_fn")]
 	pub msc3030_enabled: bool,
+}
+
+impl Default for ExperimentalConfig {
+	fn default() -> Self {
+		Self {
+			msc3266_enabled: false,
+			msc4222_enabled: false,
+			msc3030_enabled: true,
+		}
+	}
 }
 
 #[derive(Clone, Debug, Deserialize)]
