@@ -37,7 +37,7 @@ and your application compiled with debug symbols (`cargo build`).
    Inside the `(gdb)` prompt, you can set breakpoints using the `break` or `b`
    command followed by the file and line number, or the function name.
 
-    ```gdb
+    ```bash
     (gdb) break src/main/main.rs:10
     (gdb) break continuwuity::main
     ```
@@ -47,7 +47,7 @@ and your application compiled with debug symbols (`cargo build`).
    path to your configuration file here using the `--config` flag or by setting
    the `CONDUWUIT_CONFIG` environment variable beforehand.
 
-    ```gdb
+    ```bash
     (gdb) run --config /path/to/conduwuit.toml
     ```
 

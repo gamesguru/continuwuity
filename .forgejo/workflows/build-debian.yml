@@ -10,7 +10,7 @@ on:
       - "v*.*.*"
   workflow_dispatch:
   schedule:
-    - cron: '30 0 * * *'
+    - cron: '30 0 * * 1'
 
 jobs:
   build:
@@ -41,26 +41,15 @@ jobs:
       #    else
       #      echo "No workaround needed for llvm-project#153385"
       #    fi
-      - name: Pick compatible clang version
-        id: clang-version
-        run: |
-          # both latest need to use clang-23, but oldstable and previous can just use clang
-          if [[ "${{ matrix.container }}" == "ubuntu-latest" ]]; then
-            echo "Using clang-23 package for ${{ matrix.container }}"
-            echo "version=clang-23" >> $GITHUB_OUTPUT
-          else
-            echo "Using default clang package for ${{ matrix.container }}"
-            echo "version=clang" >> $GITHUB_OUTPUT
-          fi
 
       - name: Checkout repository with full history
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           fetch-depth: 0
           ref: ${{ github.ref_name }}
 
       - name: Cache Cargo registry
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.cargo/registry
@@ -93,10 +82,10 @@ jobs:
           # VERSION is the package version, COMPONENT is used in
           # apt's repository config like a git repo branch
           VERSION=$BASE_VERSION
-          if [[ ${{ forge.ref_name }} =~ ^v+[0-9]\.+[0-9]\.+[0-9]$ ]]; then
+          if [[ ${{ forge.ref_name }} =~ ^v+[0-9]+\.+[0-9]+\.+[0-9]+$ ]]; then
             # Use the "stable" component for tagged semver releases
             COMPONENT="stable"
-          elif [[ ${{ forge.ref_name }} =~ ^v+[0-9]\.+[0-9]\.+[0-9] ]]; then
+          elif [[ ${{ forge.ref_name }} =~ ^v+[0-9]+\.+[0-9]+\.+[0-9]+ ]]; then
             # Use the "unstable" component for tagged semver pre-releases
             COMPONENT="unstable"
           else
@@ -130,7 +119,7 @@ jobs:
         run: |
           apt-get update -y
           # Build dependencies for rocksdb
-          apt-get install -y liburing-dev ${{ steps.clang-version.outputs.version }}
+          apt-get install -y liburing-dev clang
 
       - name: Run cargo-deb
         id: cargo-deb

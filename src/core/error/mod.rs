@@ -87,6 +87,8 @@ pub enum Error {
 	YamlDe(#[from] serde_saphyr::Error),
 	#[error(transparent)]
 	YamlSer(#[from] serde_saphyr::ser_error::Error),
+	#[error(transparent)]
+	ResolveServer(#[from] resolvematrix::error::ResolveServerError),
 
 	// ruma/conduwuit
 	#[error("Arithmetic operation failed: {0}")]
@@ -117,8 +119,6 @@ pub enum Error {
 	Mxc(#[from] ruma::MxcUriError),
 	#[error(transparent)]
 	Mxid(#[from] ruma::IdParseError),
-	#[error("from {0}: {1}")]
-	Redaction(ruma::OwnedServerName, ruma::canonical_json::RedactionError),
 	#[error("{0:?}: {1}")]
 	Request(ErrorKind, Cow<'static, str>, http::StatusCode),
 	#[error(transparent)]
@@ -170,6 +170,7 @@ impl Error {
 			| Self::FederationConnection(origin) =>
 				format!("Federation connection error for {origin}"),
 			| Self::Ruma(error) => response::ruma_error_message(error),
+			| Self::Request(_, message, _) => message.clone().into_owned(),
 			| _ => format!("{self}"),
 		}
 	}

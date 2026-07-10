@@ -17,7 +17,7 @@ use std::{
 	},
 };
 
-use conduwuit::{Err, Result, debug, info, trace, warn};
+use conduwuit::{Err, Result, debug, err, info, warn};
 use rocksdb::{
 	AsColumnFamilyRef, BoundColumnFamily, DBCommon, DBWithThreadMode, MultiThreaded,
 	WaitForCompactOptions,
@@ -48,7 +48,6 @@ impl Engine {
 		),
 	)]
 	pub fn wait_compactions_blocking(&self) -> Result {
-		info!("Waiting for database compactions to finish... This may block for a while.");
 		let mut opts = WaitForCompactOptions::default();
 		opts.set_abort_on_pause(true);
 		opts.set_flush(false);
@@ -65,7 +64,6 @@ impl Engine {
 		),
 	)]
 	pub fn sort(&self) -> Result {
-		info!("Flushing database... This may block temporarily.");
 		let flushoptions = rocksdb::FlushOptions::default();
 		result(DBCommon::flush_opt(&self.db, &flushoptions))
 	}
@@ -77,20 +75,13 @@ impl Engine {
 			sequence = ?self.current_sequence(),
 		),
 	)]
-	pub fn update(&self) -> Result {
-		info!("Catching up with primary... This may block.");
-		self.db.try_catch_up_with_primary().map_err(map_err)
-	}
+	pub fn update(&self) -> Result { self.db.try_catch_up_with_primary().map_err(map_err) }
 
-	pub fn sync(&self) -> Result {
-		trace!("Syncing database WAL...");
-		result(DBCommon::flush_wal(&self.db, true))
-	}
+	#[tracing::instrument(level = "info", skip_all)]
+	pub fn sync(&self) -> Result { result(DBCommon::flush_wal(&self.db, true)) }
 
-	pub fn flush(&self) -> Result {
-		trace!("Flushing database WAL...");
-		result(DBCommon::flush_wal(&self.db, false))
-	}
+	#[tracing::instrument(level = "debug", skip_all)]
+	pub fn flush(&self) -> Result { result(DBCommon::flush_wal(&self.db, false)) }
 
 	#[inline]
 	pub(crate) fn cork(&self) { self.corks.fetch_add(1, Ordering::Relaxed); }
@@ -135,6 +126,12 @@ impl Engine {
 		tracing::Span::current().record("sequence", sequence);
 
 		sequence
+	}
+
+	pub fn drop_column(&self, name: &str) -> Result {
+		self.db
+			.drop_cf(name)
+			.map_err(|err| err!("Failed to drop {name}: {err}"))
 	}
 }
 

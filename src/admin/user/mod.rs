@@ -27,12 +27,9 @@ pub enum UserCommand {
 		username: String,
 		/// New password for the user, if unspecified one is generated
 		password: Option<String>,
-	},
 
-	/// Issue a self-service password reset link for a user.
-	IssuePasswordResetLink {
-		/// Username of the user who may use the link
-		username: String,
+		#[arg(long)]
+		convert_to_local_account: bool,
 	},
 
 	/// Get a user's associated email address.

@@ -11,7 +11,7 @@ use ruma::{
 	},
 	thirdparty::{Medium, ThirdPartyIdentifierInit},
 };
-use service::{mailer::messages, uiaa::Identity};
+use service::mailer::messages;
 
 use crate::{Ruma, router::ClientIdentity};
 
@@ -24,6 +24,10 @@ pub(crate) async fn third_party_route(
 ) -> Result<get_3pids::v3::Response> {
 	let sender_user = body.identity.expect_sender_user()?;
 	let mut threepids = vec![];
+
+	if !services.threepid.email_requirement().may_view() {
+		return Ok(get_3pids::v3::Response::new(vec![]));
+	}
 
 	if let Some(email) = services
 		.threepid
@@ -124,15 +128,18 @@ pub(crate) async fn add_3pid_route(
 		.uiaa
 		.authenticate_password(
 			&body.auth,
-			Some(Identity::from_user_id(body.identity.expect_sender_user()?)),
+			body.identity.expect_sender_user()?,
+			body.identity.sender_device(),
+			None,
 		)
 		.await?;
 
 	let email = services
 		.threepid
-		.consume_valid_session(&body.sid, &body.client_secret)
+		.get_valid_session(&body.sid, &body.client_secret)
 		.await
-		.map_err(|message| err!(Request(ThreepidAuthFailed("{message}"))))?;
+		.map_err(|message| err!(Request(ThreepidAuthFailed("{message}"))))?
+		.consume();
 
 	services
 		.threepid

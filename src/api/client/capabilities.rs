@@ -7,10 +7,11 @@ use ruma::{
 	api::client::discovery::get_capabilities::{
 		self,
 		v3::{
-			Capabilities, GetLoginTokenCapability, RoomVersionStability, RoomVersionsCapability,
-			ThirdPartyIdChangesCapability,
+			Capabilities, GetLoginTokenCapability, ProfileFieldsCapability, RoomVersionStability,
+			RoomVersionsCapability, ThirdPartyIdChangesCapability,
 		},
 	},
+	assign,
 };
 use serde_json::json;
 
@@ -46,19 +47,20 @@ pub(crate) async fn get_capabilities_route(
 	// MSC4133 capability
 	capabilities.set("uk.tcpip.msc4133.profile_fields", json!({"enabled": true}))?;
 
-	capabilities.set(
-		"org.matrix.msc4267.forget_forced_upon_leave",
-		json!({"enabled": services.config.forget_forced_upon_leave}),
-	)?;
+	capabilities.forget_forced_upon_leave.enabled = services.config.forget_forced_upon_leave;
 
 	if services
 		.users
 		.is_admin(body.identity.expect_sender_user()?)
 		.await
 	{
-		// Advertise suspension API
-		capabilities.set("uk.timedout.msc4323", json!({"suspend": true, "lock": false}))?;
+		capabilities.account_moderation.lock = true;
+		capabilities.account_moderation.suspend = true;
 	}
+
+	capabilities.profile_fields = Some(
+		assign!(ProfileFieldsCapability::new(true), { disallowed: Some(services.oidc.restricted_profile_fields()) }),
+	);
 
 	Ok(get_capabilities::v3::Response::new(capabilities))
 }

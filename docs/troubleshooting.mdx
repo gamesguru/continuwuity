@@ -10,7 +10,7 @@ Please check that your issues are not due to problems with your Docker setup.
 
 ### Slow joins to rooms
 
-Some slowness is to be expected if you're the first person on your homserver to join a room (which will
+Some slowness is to be expected if you're the first person on your homeserver to join a room (which will
 always be the case for single-user homeservers). In this situation, your homeserver has to verify the signatures of
 all of the state events sent by other servers before your join. To make this process as fast as possible, make sure you have
 multiple fast, trusted servers listed in `trusted_servers` in your configuration, and ensure
@@ -60,7 +60,7 @@ This is likely due to your DNS server being overloaded. Most likely, these probl
 
 Matrix federation is extremely heavy and sends wild amounts of DNS requests. This makes normal resolvers like the ones above unsuitable for its activity. Ultimately, the best solution/fix for this is to selfhost a high quality caching DNS resolver such as Unbound, and configure Continuwuity to use it.
 
-Follow the [**DNS tuning guide**](./advanced/dns) for details on setting it up.
+Follow the [**DNS tuning guide**](./guides/dns) for details on setting it up.
 
 ### Intermittent federation failures to a specific server
 

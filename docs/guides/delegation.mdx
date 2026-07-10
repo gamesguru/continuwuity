@@ -1,0 +1,317 @@
+# Delegation/split-domain deployment
+
+Matrix allows clients and servers to discover a homeserver's "true" destination via **`.well-known` delegation**. This is especially useful if you would like to:
+
+- Serve Continuwuity on a subdomain while having only the base domain for your usernames
+- Use a port other than `:8448` for server-to-server connections
+
+This guide will show you how to have `@user:example.com` usernames while serving Continuwuity on `https://matrix.example.com`. It assumes you are using port 443 for both client-to-server connections and server-to-server federation.
+
+## Configuration
+
+First, ensure you have set up A/AAAA records for `matrix.example.com` and `example.com` pointing to your IP.
+
+Then, ensure that the `server_name` field matches your intended username suffix. If this is not the case, you **MUST** wipe the database directory and reinstall Continuwuity with your desired `server_name`.
+
+Then, in the `[global.well_known]` section of your config file, add the following fields:
+
+```toml
+[global.well_known]
+
+# defaults to port :443 if not specified
+client = "https://matrix.example.com"
+
+# port number MUST be specified
+server = "matrix.example.com:443"
+
+# (optional) customize your support contacts
+# Defaults to members of the admin room if unset
+#support_page =
+#support_role = "m.role.admin"
+#support_email =
+#support_mxid = "@user:example.com"
+```
+
+Alternatively if you are using Docker, you can set the `CONTINUWUITY_WELL_KNOWN` environment variable as below:
+
+```yaml
+services:
+  continuwuity:
+    ...
+    environment:
+      CONTINUWUITY_WELL_KNOWN: |
+        {
+        client=https://matrix.example.com,
+        server=matrix.example.com:443
+        }
+
+      # You can also configure individual `.well-knowns` like this
+      # CONTINUWUITY_WELL_KNOWN__CLIENT: https://matrix.example.com
+      # CONTINUWUITY_WELL_KNOWN__SERVER: matrix.example.com:443
+```
+
+After doing the steps above, Continuwuity will serve these 3 JSON files:
+
+- `/.well-known/matrix/client`: for Client-Server discovery
+- `/.well-known/matrix/server`: for Server-Server (federation) discovery
+- `/.well-known/matrix/support`: admin contact details (strongly recommended to have)
+
+To enable full discovery, you will need to reverse proxy these paths from the base domain back to Continuwuity.
+
+## Reverse proxying well-known files to Continuwuity
+
+<details>
+
+<summary>For **Caddy**</summary>
+
+```
+matrix.example.com:443 {
+  reverse_proxy 127.0.0.1:8008
+}
+
+example.com:443 {
+  reverse_proxy /.well-known/matrix* 127.0.0.1:8008
+}
+```
+
+</details>
+
+<details>
+
+<summary>For **Traefik** (via Docker labels)</summary>
+
+```
+services:
+  continuwuity:
+    ...
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.continuwuity.rule=(Host(`matrix.example.com`) || (Host(`example.com`) && PathPrefix(`/.well-known/matrix`)))"
+      - "traefik.http.routers.continuwuity.service=continuwuity"
+      - "traefik.http.services.continuwuity.loadbalancer.server.port=8008"
+```
+
+</details>
+
+
+For **Docker** users, consult the compose files in the [Appendix section](#docker-compose-examples).
+
+After applying these changes, restart Continuwuity and your reverse proxy.Visit these routes and check that the responses match the examples below:
+
+<details open>
+
+<summary>`https://example.com/.well-known/matrix/server`</summary>
+
+```json
+{ "m.server": "matrix.example.com:443" }
+```
+
+</details>
+
+<details open>
+
+<summary>`https://example.com/.well-known/matrix/client`</summary>
+
+```json
+{
+  "m.homeserver": {
+    "base_url": "https://matrix.example.com/"
+  }
+}
+```
+
+</details>
+
+### Serving well-known files manually
+
+Instead of reverse proxying well-known URIs, you can serve these files directly as static JSON that match the ones above. This is useful if your base domain points to a different physical server, and reverse proxying isn't feasible.
+
+:::warning
+Even if you choose to serve the well-known files manually, if you are using delegation at all, you **must** still set the `global.well_known.client` configuration option to the domain you're delegating to. Continuwuity needs to know the domain it runs on for OAuth-compatible clients to work correctly.
+:::
+
+<details>
+
+<summary>Example Caddyfile **for the base domain**</summary>
+
+```
+https://example.com {
+
+    respond /.well-known/matrix/server 200 {
+        body `{"m.server":"matrix.example.com:443"}`
+    }
+
+    handle /.well-known/matrix/client {
+    header Access-Control-Allow-Origin *
+    respond <<JSON
+    {
+        "m.homeserver": {
+            "base_url": "https://matrix.example.com/"
+        }
+    }
+    JSON
+    }
+}
+```
+
+</details>
+
+<details>
+
+<summary>Accompanying Continuwuity configuration</summary>
+
+```toml
+[global.well_known]
+client = "https://matrix.example.com/"
+```
+
+</details>
+
+Remember to set the `Access-Control-Allow-Origin: *` header in your `/.well-known/matrix/client` path for web clients to work.
+
+## Troubleshooting
+
+Check that other servers can connect to you.
+Here are some tools that can help identify federation issues:
+
+- [Matrix Connectivity Tester](https://federationtester.mtrnord.blog/)
+- [Matrix Federation Tester](https://federationtester.matrix.org/)
+
+### Cannot log in with web clients
+
+Make sure there is an `Access-Control-Allow-Origin: *` header in your `/.well-known/matrix/client` path. While Continuwuity serves this header by default, it may be dropped by reverse proxies or other middlewares.
+
+### Issues with alternative setups
+
+As Matrix clients prioritize well-known URIs for their destination, this can lead to issues with alternative methods of accessing the server that doesn't use a publicly routeable IP and domain name. You will probably find yourself connecting to non-existent/undesired URLs in certain cases like:
+
+- Accessing to the server via localhost IPs (e.g. for testing purposes)
+- Accessing the server from behind a VPN, or from alternative networks (such as from an onionsite)
+
+In these scenarios, further configurations would be needed. Refer to the [Related Documentation](#related-documentation) section for resolution steps and see how they could apply to your use case.
+
+---
+
+## Using SRV records (not recommended)
+
+:::warning
+The following methods are **not recommended** due to increased complexity with little benefits. If you have already set up `.well-known` delegation as above, you can safely skip this part.
+:::
+
+The following methods uses SRV DNS records and only work with federation traffic. They are only included for completeness.
+
+<details>
+
+<summary>Using only SRV records</summary>
+
+If you can't set up `/.well-known/matrix/server` on :443 for some reason, you can set up a SRV record (via your DNS provider) as below:
+
+- Service and name: `_matrix-fed._tcp.example.com.`
+- Priority: `10` (can be any number)
+- Weight: `10` (can be any number)
+- Port: `443`
+- Target: `matrix.example.com.`
+
+On the target's IP at port 443, you must configure a valid route and cert for your server name, `example.com`. Therefore, this method only works to redirect traffic into the right IP/port combo, and can not delegate your federation to a different domain.
+
+</details>
+
+<details>
+
+<summary>Using SRV records + .well-known</summary>
+
+You can also set up `/.well-known/matrix/server` with a delegated domain but no ports:
+
+```toml
+[global.well_known]
+server = "matrix.example.com"
+```
+
+Then, set up a SRV record (via your DNS provider) to announce the port number as below:
+
+- Service and name: `_matrix-fed._tcp.matrix.example.com.`
+- Priority: `10` (can be any number)
+- Weight: `10` (can be any number)
+- Port: `443`
+- Target: `matrix.example.com.`
+
+On the target's IP at port 443, you'll need to provide a valid route and cert for `matrix.example.com`. It provides the same feature as pure `.well-known` delegation, albeit with more parts to handle.
+
+</details>
+
+<details>
+
+<summary>Using SRV records as a fallback for .well-known delegation</summary>
+
+Assume your delegation is as below:
+
+```toml
+[global.well_known]
+server = "example.com:443"
+```
+
+If your Continuwuity instance becomes temporarily unreachable, other servers will not be able to find your `/.well-known/matrix/server` file, and defaults to using `server_name:8448`. This incorrect cache can persist for a long time, and would hinder re-federation when your server eventually comes back online.
+
+If you want other servers to default to using port :443 even when it is offline, you could set up a SRV record (via your DNS provider) as follows:
+
+- Service and name: `_matrix-fed._tcp.example.com.`
+- Priority: `10` (can be any number)
+- Weight: `10` (can be any number)
+- Port: `443`
+- Target: `example.com.`
+
+On the target's IP at port 443, you'll need to provide a valid route and cert for `example.com`.
+
+</details>
+
+---
+
+## Related Documentation
+
+See the following Matrix Specs for full details on client/server resolution mechanisms:
+
+- [Server-to-Server resolution](https://spec.matrix.org/v1.17/server-server-api/#resolving-server-names) (see this for more information on SRV records)
+- [Client-to-Server resolution](https://spec.matrix.org/v1.17/client-server-api/#server-discovery)
+- [MSC1929: Homeserver Admin Contact and Support page](https://github.com/matrix-org/matrix-spec-proposals/pull/1929)
+
+## Appendix
+
+### Docker Compose examples
+
+The following Compose files are taken from [Docker instructions](../deploying/docker.mdx) and reconfigured to support split-domain delegation. Note the updated `CONTINUWUITY_WELL_KNOWN` variable and relevant changes in reverse proxy rules.
+
+<details>
+<summary>Caddy (using Caddyfile) - delegated.docker-compose.with-caddy.yml ([view raw](/advanced/delegated.docker-compose.with-caddy.yml))</summary>
+
+```yaml file="../public/advanced/delegated.docker-compose.with-caddy.yml"
+
+```
+
+</details>
+
+<details>
+<summary>Caddy (using labels) - delegated.docker-compose.with-caddy-labels.yml ([view raw](/advanced/delegated.docker-compose.with-caddy-labels.yml))</summary>
+
+```yaml file="../public/advanced/delegated.docker-compose.with-caddy-labels.yml"
+
+```
+
+</details>
+
+<details>
+<summary>Traefik (for existing setup) - delegated.docker-compose.for-traefik.yml ([view raw](/advanced/delegated.docker-compose.for-traefik.yml))</summary>
+
+```yaml file="../public/advanced/delegated.docker-compose.for-traefik.yml"
+
+```
+
+</details>
+
+<details>
+<summary>Traefik included - delegated.docker-compose.with-traefik.yml ([view raw](/advanced/delegated.docker-compose.with-traefik.yml))</summary>
+
+```yaml file="../public/advanced/delegated.docker-compose.with-traefik.yml"
+
+```
+
+</details>

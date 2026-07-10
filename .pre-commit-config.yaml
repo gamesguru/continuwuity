@@ -24,7 +24,7 @@ repos:
         - id: check-added-large-files
 
   - repo: https://github.com/crate-ci/typos
-    rev: v1.47.2
+    rev: v1.48.0
     hooks:
       - id: typos
       - id: typos
@@ -57,3 +57,15 @@ repos:
         types: [rust]
         stages:
           - pre-push
+
+  - repo: local
+    hooks:
+      - id: docs-build
+        name: docs build
+        entry: npm run docs:build
+        language: system
+        pass_filenames: false
+        files: docs/
+        types: [mdx]
+        stages:
+          - pre-commit

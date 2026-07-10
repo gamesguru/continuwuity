@@ -46,7 +46,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
       - name: Prepare Docker build environment
@@ -62,7 +62,7 @@ jobs:
           registry_password: ${{ secrets.BUILTIN_REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
       - name: Build and push Docker image by digest
         id: build
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           file: "docker/Dockerfile"
@@ -74,6 +74,7 @@ jobs:
             CARGO_INCREMENTAL=${{ env.BUILDKIT_ENDPOINT != '' && '1' || '0' }}
             TARGET_CPU=
             RUST_PROFILE=release
+            CARGO_FEATURES=default
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.prepare.outputs.metadata_labels }}
           annotations: ${{ steps.prepare.outputs.metadata_annotations }}
@@ -100,7 +101,7 @@ jobs:
     needs: build-release
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
       - name: Create multi-platform manifest
@@ -133,7 +134,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
       - name: Prepare max-perf Docker build environment
@@ -149,7 +150,7 @@ jobs:
           registry_password: ${{ secrets.BUILTIN_REGISTRY_PASSWORD || secrets.GITHUB_TOKEN }}
       - name: Build and push max-perf Docker image by digest
         id: build
-        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7
         with:
           context: .
           file: "docker/Dockerfile"
@@ -161,6 +162,7 @@ jobs:
             CARGO_INCREMENTAL=${{ env.BUILDKIT_ENDPOINT != '' && '1' || '0' }}
             TARGET_CPU=${{ matrix.target_cpu }}
             RUST_PROFILE=release-max-perf
+            CARGO_FEATURES=default,release_max_log_level
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.prepare.outputs.metadata_labels }}
           annotations: ${{ steps.prepare.outputs.metadata_annotations }}
@@ -187,7 +189,7 @@ jobs:
     needs: build-maxperf
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           persist-credentials: false
       - name: Create max-perf manifest
@@ -216,7 +218,7 @@ jobs:
           path: binaries
           merge-multiple: true
       - name: Create Release and Upload
-        uses: https://github.com/softprops/action-gh-release@b4309332981a82ec1c5618f44dd2e27cc8bfbfda # v3
+        uses: https://github.com/softprops/action-gh-release@718ea10b132b3b2eba29c1007bb80653f286566b # v3
         with:
           draft: true
           files: binaries/*

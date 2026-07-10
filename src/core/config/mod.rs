@@ -17,10 +17,12 @@ use either::{
 use figment::providers::{Env, Format, Toml};
 pub use figment::{Figment, value::Value as FigmentValue};
 use lettre::message::Mailbox;
+use openidconnect::{ClientId, ClientSecret, Scope};
 use regex::RegexSet;
 use ruma::{
 	OwnedRoomId, OwnedRoomOrAliasId, OwnedServerName, OwnedUserId, RoomVersionId,
 	api::client::{discovery::discover_support::ContactRole, rtc::RtcTransport},
+	profile::ProfileFieldName,
 	serde::Base64,
 };
 use serde::{Deserialize, Serialize, de::IgnoredAny};
@@ -375,6 +377,27 @@ pub struct Config {
 	#[serde(default = "default_ip_lookup_strategy")]
 	pub ip_lookup_strategy: u8,
 
+	/// The source to use for discovering the real connecting client IP.
+	///
+	/// Takes any of the following options:
+	///
+	/// "cf_connecting_ip" - `Cf-Connecting-Ip` header
+	/// "cloudfront_viewer_address" - `CloudFront-Viewer-Address` header
+	/// "fly_client_ip" - `Fly-Client-IP` header
+	/// "x_forwarded_for" - rightmost value of the `X-Forwarded-For` header
+	/// "true_client_ip" - `True-Client-Ip` header
+	/// "x_envoy_external_address" - `X-Envoy-External-Address` header
+	/// "x_real_ip" - `X-Real-Ip` header
+	///
+	/// Only set this if you are certain only your reverse proxy
+	/// will send the expected header. There is no "is the connecting IP allowed
+	/// to set this header" check; if the header selected is present, it is
+	/// used.
+	///
+	/// Defaults to the IP address actually making the connection.
+	#[serde(default)]
+	pub request_ip_source: Option<String>,
+
 	/// Max request size for file uploads in bytes. Defaults to 20MB.
 	/// Also limits incoming federated media.
 	///
@@ -382,7 +405,7 @@ pub struct Config {
 	#[serde(default = "default_max_request_size")]
 	pub max_request_size: usize,
 
-	/// default: 192
+	/// default: 1024
 	#[serde(default = "default_max_fetch_prev_events")]
 	pub max_fetch_prev_events: u16,
 
@@ -662,19 +685,25 @@ pub struct Config {
 	/// even if `recaptcha_site_key` is set.
 	pub recaptcha_private_site_key: Option<String>,
 
-	/// Policy documents, such as terms and conditions or a privacy policy,
-	/// which users must agree to when registering an account.
-	///
-	/// Example:
-	/// ```ignore
-	/// [global.registration_terms.privacy_policy]
-	/// en = { name = "Privacy Policy", url = "https://homeserver.example/en/privacy_policy.html" }
-	/// es = { name = "Política de Privacidad", url = "https://homeserver.example/es/privacy_policy.html" }
-	/// ```
-	///
-	/// default: {}
+	/// display: nested
 	#[serde(default)]
-	pub registration_terms: HashMap<String, HashMap<String, TermsDocument>>,
+	pub registration_terms: RegistrationTerms,
+
+	/// display: nested
+	#[serde(default)]
+	pub oauth: OauthConfig,
+
+	/// Controls whether users are allowed to deactivate their own accounts
+	/// through the account management panel or their Matrix clients. Server
+	/// admins can always deactivate users using the relevant admin commands.
+	///
+	/// Note that, in some jurisdictions, you may be legally required to honor
+	/// users who request to deactivate their accounts if you set this option
+	/// to `false`.
+	///
+	/// default: true
+	#[serde(default = "true_fn")]
+	pub allow_deactivation: bool,
 
 	/// Controls whether encrypted rooms and events are allowed.
 	#[serde(default = "true_fn")]
@@ -787,6 +816,16 @@ pub struct Config {
 	/// ACLs in existing rooms will not be updated automatically. This is not
 	/// a substitute for moderation bots.
 	pub default_room_acl_deny: Option<Vec<String>>,
+
+	/// The number of forward extremities to tolerate in a room before
+	/// attempting to manually squash them with a "dummy event". Setting this
+	/// above 20 will hinder its efficacy, and setting it below 5 will cause
+	/// more dummy events to be sent than necessary (which increases federation
+	/// traffic).
+	///
+	/// default: 10
+	#[serde(default = "default_extremity_threshold")]
+	pub dummy_event_threshold: u8,
 
 	/// display: nested
 	#[serde(default)]
@@ -1669,6 +1708,11 @@ pub struct Config {
 	#[serde(default)]
 	pub send_messages_from_ignored_users_to_client: bool,
 
+	/// Send "org.matrix.dummy_event" events to the client. This is a debugging
+	/// option.
+	#[serde(default)]
+	pub send_dummy_events_to_clients: bool,
+
 	/// Vector list of IPv4 and IPv6 CIDR ranges / subnets *in quotes* that you
 	/// do not want continuwuity to send outbound requests to. Defaults to
 	/// RFC1918, unroutable, loopback, multicast, and testnet addresses for
@@ -2390,11 +2434,200 @@ pub struct SmtpConfig {
 	pub require_email_for_token_registration: bool,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[config_example_generator(
+	filename = "conduwuit-example.toml",
+	section = "global.registration_terms",
+	optional = "true"
+)]
+pub struct RegistrationTerms {
+	/// The language code to provide to clients along with the policy documents.
+	///
+	/// default: "en"
+	#[serde(default = "default_terms_language")]
+	pub language: String,
+	/// Policy documents, such as terms and conditions or a privacy policy,
+	/// which users must agree to when registering an account.
+	///
+	/// Example:
+	/// ```ignore
+	/// [global.registration_terms.documents]
+	/// privacy_policy = { name = "Privacy Policy", url = "https://homeserver.example/en/privacy_policy.html" }
+	/// ```
+	pub documents: BTreeMap<String, TermsDocument>,
+}
+
 /// A policy document for use with a m.login.terms stage.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TermsDocument {
 	pub name: String,
 	pub url: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[config_example_generator(
+	filename = "conduwuit-example.toml",
+	section = "global.oauth",
+	optional = "true"
+)]
+pub struct OauthConfig {
+	/// The compatibility mode to use for OAuth.
+	///
+	/// - "disabled": OAuth will be unavailable. Users will only be able to log
+	///   in using legacy authentication.
+	/// - "hybrid": OAuth and legacy authentication will both be available. Some
+	///   clients may only use one or the other.
+	/// - "exclusive": Only OAuth will be available. Clients which require
+	///   legacy authentication will be unable to log in.
+	///
+	/// default: "hybrid"
+	compatibility_mode: OAuthMode,
+
+	/// display: hidden
+	pub oidc: Option<OidcConfig>,
+}
+
+impl OauthConfig {
+	#[must_use]
+	pub fn compatibility_mode(&self) -> OAuthMode {
+		if self.oidc.is_some() {
+			OAuthMode::Exclusive
+		} else {
+			self.compatibility_mode
+		}
+	}
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OAuthMode {
+	Disabled,
+	#[default]
+	Hybrid,
+	Exclusive,
+}
+
+impl OAuthMode {
+	#[must_use]
+	pub fn uiaa_available(&self) -> bool { matches!(self, Self::Disabled | Self::Hybrid) }
+
+	#[must_use]
+	pub fn oauth_available(&self) -> bool { matches!(self, Self::Hybrid | Self::Exclusive) }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[config_example_generator(
+	filename = "conduwuit-example.toml",
+	section = "global.oauth.oidc",
+	optional = "true",
+	subheader = "\
+# Uncommenting this section will enable Continuwuity's support for
+# authenticating users using an OpenID Connect-compatible identity provider.
+# This is referred to as \"delegated authentication\".
+#
+# IMPORTANT NOTE: When delegated authentication is active, Continuwuity will behave as if
+# the `global.oauth.compatibility_mode` setting is set to `exclusive`.
+# Matrix clients which do not support OAuth login (also referred to as \"next-gen auth\") will \
+	             NOT be able
+# to log in while delegated authentication is active."
+)]
+pub struct OidcConfig {
+	/// The OIDC issuer URL. Continuwuity will use OpenID Connect Discovery to
+	/// automatically fetch the identity provider's metadata from this URL.
+	/// Generally you should set this to the base domain your identity provider
+	/// runs on.
+	pub discovery_url: String,
+
+	/// The OAuth client ID for Continuwuity to use when communicating with the
+	/// identity provider.
+	pub client_id: ClientId,
+
+	/// The OAuth client secret for Continuwuity to use when communicating with
+	/// the identity provider.
+	pub client_secret: Option<ClientSecret>,
+
+	/// A path to a file which Continuwuity will read the client secret from.
+	/// If this option is set, it will override `client_secret`.
+	///
+	/// The server will fail to start if the file cannot be read.
+	pub client_secret_file: Option<PathBuf>,
+
+	/// Additional scopes Continuwuity should request from the IDP. This may be
+	/// necessary to access certain claims. Continuwuity always requests the
+	/// `openid` scope.
+	///
+	/// default: []
+	#[serde(default)]
+	pub additional_scopes: Vec<Scope>,
+
+	/// Whether the user should be prompted to choose a localpart
+	/// when signing in for the first time. If this is `false`, Continuwuity
+	/// will attempt to use the value of the `preferred_username_claim`
+	/// (see below) as the user's localpart. Authentication will
+	/// fail if this claim is missing or is not a valid localpart.
+	///
+	/// default: true
+	#[serde(default = "true_fn")]
+	pub prompt_for_localpart: bool,
+
+	/// The claim to use for the user's localpart, if `prompt_for_localpart` is
+	/// false.
+	///
+	/// default: "preferred_username"
+	#[serde(default = "default_preferred_username_claim")]
+	pub preferred_username_claim: String,
+
+	/// The claim which will be used to set the user's email address,
+	/// either on initial registration or on every login depending on
+	/// the value of `profile_key_import_mode`. Continuwuity assumes that
+	/// the IDP has taken care of verifying that the user controls the email
+	/// address it provides.
+	///
+	/// This option does nothing if SMTP is not configured.
+	///
+	/// If this option is set, and `profile_key_import_mode` is `on_login`,
+	/// users will not be able to change their email addresses themselves.
+	///
+	/// default: "email"
+	pub email_claim: Option<String>,
+
+	/// Defines how claims returned from the IDP should be mapped to a user's
+	/// profile data. The profile field named in each key will be set from the
+	/// claim named in the corresponding value when the user first registers,
+	/// and possibly on subsequent logins as well, depending on the value of
+	/// `profile_key_import_mode` (see below).
+	///
+	/// Per-room overrides to the user's display name or avatar will be
+	/// preserved by the import process.
+	///
+	/// SECURITY NOTE: If the `avatar_url` field is set, Continuwuity will
+	/// perform a HTTP GET to the URL in the mapped claim and use the returned
+	/// file as the user's profile picture. Make sure your users are not able
+	/// to set the value of the mapped claim to an arbitrary URL.
+	///
+	/// default: { displayname = "name" }
+	#[serde(default = "default_profile_key_map")]
+	pub profile_key_map: HashMap<String, String>,
+
+	/// When profile keys should be imported from the IDP's claims.
+	///
+	/// - "on_registration": Listed keys will be imported once, when the user
+	///   logs in for the first time and their shadow account is created.
+	/// - "on_login": Listed keys will be imported every time the user logs in.
+	///   Additionally, users will not be able to manually edit any listed keys
+	///   through their Matrix client.
+	///
+	/// default: "on_registration"
+	#[serde(default)]
+	pub profile_key_import_mode: OidcProfileKeyImportMode,
+}
+
+#[derive(Clone, Debug, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OidcProfileKeyImportMode {
+	#[default]
+	OnRegistration,
+	OnLogin,
 }
 
 const DEPRECATED_KEYS: &[&str] = &[
@@ -2588,7 +2821,7 @@ fn default_pusher_timeout() -> u64 { 60 }
 
 fn default_pusher_idle_timeout() -> u64 { 15 }
 
-fn default_max_fetch_prev_events() -> u16 { 192_u16 }
+fn default_max_fetch_prev_events() -> u16 { 1024 }
 
 fn default_max_concurrent_inbound_transactions() -> usize { 150 }
 
@@ -2691,6 +2924,8 @@ fn default_rocksdb_stats_level() -> u8 { 1 }
 #[inline]
 pub fn default_default_room_version() -> RoomVersionId { RoomVersionId::V12 }
 
+fn default_extremity_threshold() -> u8 { 10 }
+
 fn default_ip_range_denylist() -> Vec<String> {
 	vec![
 		"127.0.0.0/8".to_owned(),
@@ -2777,3 +3012,11 @@ fn default_client_response_timeout() -> u64 { 120 }
 fn default_client_shutdown_timeout() -> u64 { 10 }
 
 fn default_sender_shutdown_timeout() -> u64 { 5 }
+
+fn default_terms_language() -> String { "en".to_owned() }
+
+fn default_preferred_username_claim() -> String { "preferred_username".to_owned() }
+
+fn default_profile_key_map() -> HashMap<String, String> {
+	HashMap::from_iter([(ProfileFieldName::DisplayName.to_string(), "name".to_owned())])
+}

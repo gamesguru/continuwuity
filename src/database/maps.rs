@@ -50,6 +50,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "clientid_clientmetadata",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "disabledroomids",
 		..descriptor::RANDOM_SMALL
 	},
@@ -121,6 +125,14 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "openidsubject_localpart",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "openidsubject_currentpictureurl",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "fallbackkeyid_fallbackkey",
 		..descriptor::RANDOM_SMALL
 	},
@@ -158,8 +170,16 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM
 	},
 	Descriptor {
+		name: "refreshtoken_refreshtokeninfo",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "registrationtoken_info",
 		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "remoteuserid_remoteuser",
+		..descriptor::RANDOM
 	},
 	Descriptor {
 		name: "roomid_invitedcount",
@@ -188,17 +208,16 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "roomid_mindepth",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "roomserverids",
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
 		name: "roomsynctoken_shortstatehash",
-		file_shape: 3,
-		val_size_hint: Some(8),
-		block_size: 512,
-		compression_level: 3,
-		bottommost_level: Some(6),
-		..descriptor::SEQUENTIAL
+		..descriptor::DROPPED
 	},
 	Descriptor {
 		name: "roomuserdataid_accountdata",
@@ -372,6 +391,14 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "userdeviceid_oauthsessioninfo",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "userdeviceid_tokenexpires",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "userfilterid_filter",
 		..descriptor::RANDOM_SMALL
 	},
@@ -382,6 +409,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 	Descriptor {
 		name: "userid_blurhash",
 		..descriptor::DROPPED
+	},
+	Descriptor {
+		name: "userid_deactivated",
+		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
 		name: "userid_dehydrateddevice",
@@ -473,6 +504,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 	},
 	Descriptor {
 		name: "userroomid_invitesender",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "websessionid_session",
 		..descriptor::RANDOM_SMALL
 	},
 ];

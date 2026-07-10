@@ -263,6 +263,15 @@ impl Service {
 				continue;
 			}
 
+			// Bail out if queue length exceeds 50 to keep cycles in the space graph from
+			// blowing up the traversal. If you actually have over fifty nested spaces,
+			// and you're looking at this function to figure out what the issue is, I
+			// suggest you reconsider some of the choices you made which led you to this
+			// point.
+			if queue.len() > 50 {
+				return Err!("Space hierarchy is unreasonably large");
+			}
+
 			// Add accessible children as a new layer
 			if !summary.children.is_empty() {
 				queue.push(summary.children);

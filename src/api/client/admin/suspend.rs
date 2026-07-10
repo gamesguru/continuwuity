@@ -1,7 +1,7 @@
 use axum::extract::State;
 use conduwuit::{Err, Result};
 use futures::future::{join, join3};
-use ruminuwuity::admin::{get_suspended, set_suspended};
+use ruma::api::client::admin::{is_user_suspended, suspend_user};
 
 use crate::Ruma;
 
@@ -10,23 +10,21 @@ use crate::Ruma;
 /// Check the suspension status of a target user
 pub(crate) async fn get_suspended_status(
 	State(services): State<crate::State>,
-	body: Ruma<get_suspended::v1::Request>,
-) -> Result<get_suspended::v1::Response> {
-	let (admin, active) = join(
+	body: Ruma<is_user_suspended::v1::Request>,
+) -> Result<is_user_suspended::v1::Response> {
+	let (admin, status) = join(
 		services.users.is_admin(body.identity.expect_sender_user()?),
-		services.users.is_active(&body.user_id),
+		services.users.status(&body.user_id),
 	)
 	.await;
+
 	if !admin {
 		return Err!(Request(Forbidden("Only server administrators can use this endpoint")));
 	}
-	if !services.globals.user_is_local(&body.user_id) {
-		return Err!(Request(InvalidParam("Can only check the suspended status of local users")));
-	}
-	if !active {
-		return Err!(Request(NotFound("Unknown user")));
-	}
-	Ok(get_suspended::v1::Response::new(
+
+	status.ensure_active()?;
+
+	Ok(is_user_suspended::v1::Response::new(
 		services.users.is_suspended(&body.user_id).await?,
 	))
 }
@@ -36,13 +34,13 @@ pub(crate) async fn get_suspended_status(
 /// Set the suspension status of a target user
 pub(crate) async fn put_suspended_status(
 	State(services): State<crate::State>,
-	body: Ruma<set_suspended::v1::Request>,
-) -> Result<set_suspended::v1::Response> {
+	body: Ruma<suspend_user::v1::Request>,
+) -> Result<suspend_user::v1::Response> {
 	let sender_user = body.identity.expect_sender_user()?;
 
-	let (sender_admin, active, target_admin) = join3(
+	let (sender_admin, status, target_admin) = join3(
 		services.users.is_admin(sender_user),
-		services.users.is_active(&body.user_id),
+		services.users.status(&body.user_id),
 		services.users.is_admin(&body.user_id),
 	)
 	.await;
@@ -50,21 +48,20 @@ pub(crate) async fn put_suspended_status(
 	if !sender_admin {
 		return Err!(Request(Forbidden("Only server administrators can use this endpoint")));
 	}
-	if !services.globals.user_is_local(&body.user_id) {
-		return Err!(Request(InvalidParam("Can only set the suspended status of local users")));
-	}
-	if !active {
-		return Err!(Request(NotFound("Unknown user")));
-	}
+
+	status.ensure_active()?;
+
 	if body.user_id == *sender_user {
 		return Err!(Request(Forbidden("You cannot suspend yourself")));
 	}
+
 	if target_admin {
 		return Err!(Request(Forbidden("You cannot suspend another server administrator")));
 	}
+
 	if services.users.is_suspended(&body.user_id).await? == body.suspended {
 		// No change
-		return Ok(set_suspended::v1::Response::new(body.suspended));
+		return Ok(suspend_user::v1::Response::new(body.suspended));
 	}
 
 	let action = if body.suspended {
@@ -86,5 +83,5 @@ pub(crate) async fn put_suspended_status(
 			.await;
 	}
 
-	Ok(set_suspended::v1::Response::new(body.suspended))
+	Ok(suspend_user::v1::Response::new(body.suspended))
 }

@@ -1,23 +1,22 @@
 use clap::Subcommand;
 use conduwuit::{Err, Result, utils::time};
-use futures::StreamExt;
+use resolvematrix::resolution::Resolution;
 use ruma::OwnedServerName;
 
-use crate::{admin_command, admin_command_dispatch};
+use crate::admin_command_dispatch;
 
 #[admin_command_dispatch]
 #[derive(Debug, Subcommand)]
 #[allow(clippy::enum_variant_names)]
 /// Resolver service and caches
 pub enum ResolverCommand {
-	/// Query the destinations cache
-	DestinationsCache {
+	/// Query the destinations or overrides cache, depending on the value of the
+	/// `overrides` flag (default false)
+	Cache {
 		server_name: Option<OwnedServerName>,
-	},
 
-	/// Query the overrides cache
-	OverridesCache {
-		name: Option<String>,
+		#[arg(short, long)]
+		overrides: Option<bool>,
 	},
 
 	/// Flush a given server from the resolver caches or flush them completely
@@ -39,67 +38,61 @@ pub enum ResolverCommand {
 	},
 }
 
-#[admin_command]
-async fn destinations_cache(&self, server_name: Option<OwnedServerName>) -> Result {
-	use service::resolver::cache::CachedDest;
+impl crate::Context<'_> {
+	async fn cache(
+		&self,
+		server_name: Option<OwnedServerName>,
+		overrides: Option<bool>,
+	) -> Result {
+		writeln!(self, "| Server Name | Destination | SNI | Override | Step | Expires |").await?;
+		writeln!(self, "| ----------- | ----------- | --- | -------- | ---- | ------- |").await?;
 
-	writeln!(self, "| Server Name | Destination | Hostname | Expires |").await?;
-	writeln!(self, "| ----------- | ----------- | -------- | ------- |").await?;
+		let entries = self.services.client.matrix_resolver.get_all_cache_entries();
 
-	let mut destinations = self.services.resolver.cache.destinations().boxed();
-
-	while let Some((name, CachedDest { dest, host, expire })) = destinations.next().await {
-		if let Some(server_name) = server_name.as_ref() {
-			if name != *server_name {
+		for (host, entry) in entries {
+			if let Some(ors) = overrides
+				&& entry.is_override != ors
+			{
 				continue;
 			}
-		}
 
-		let expire = time::format(expire, "%+");
-		self.write_str(&format!("| {name} | {dest} | {host} | {expire} |\n"))
-			.await?;
-	}
-
-	Ok(())
-}
-
-#[admin_command]
-async fn overrides_cache(&self, server_name: Option<String>) -> Result {
-	use service::resolver::cache::CachedOverride;
-
-	writeln!(self, "| Server Name | IP  | Port | Expires | Overriding |").await?;
-	writeln!(self, "| ----------- | --- | ----:| ------- | ---------- |").await?;
-
-	let mut overrides = self.services.resolver.cache.overrides().boxed();
-
-	while let Some((name, CachedOverride { ips, port, expire, overriding })) =
-		overrides.next().await
-	{
-		if let Some(server_name) = server_name.as_ref() {
-			if name != *server_name {
+			if let Some(server_name) = server_name.as_ref()
+				&& host != *server_name
+			{
 				continue;
 			}
+
+			let Resolution {
+				destination,
+				is_override,
+				host: sni_host,
+				resolution_step,
+			} = entry.resolution;
+			let expires = time::format(entry.expires_at, "%Y-%m-%dT%H:%M:%S%.3f%z");
+			self.write_str(&format!(
+				"| {host} | {destination:?} | {sni_host} | {is_override:?} | {resolution_step} \
+				 | {expires} |\n"
+			))
+			.await?;
 		}
 
-		let expire = time::format(expire, "%+");
-		self.write_str(&format!("| {name} | {ips:?} | {port} | {expire} | {overriding:?} |\n"))
-			.await?;
+		Ok(())
 	}
 
-	Ok(())
-}
-
-#[admin_command]
-async fn flush_cache(&self, name: Option<OwnedServerName>, all: bool) -> Result {
-	if all {
-		self.services.resolver.cache.clear().await;
-		writeln!(self, "Resolver caches cleared!").await
-	} else if let Some(name) = name {
-		self.services.resolver.cache.del_destination(&name);
-		self.services.resolver.cache.del_override(&name);
-		self.write_str(&format!("Cleared {name} from resolver caches!"))
-			.await
-	} else {
-		Err!("Missing name. Supply a name or use --all to flush the whole cache.")
+	async fn flush_cache(&self, name: Option<OwnedServerName>, all: bool) -> Result {
+		if all {
+			self.services.client.matrix_resolver.clear_cache();
+			self.services.client.dns_resolver.clear_cache();
+			writeln!(self, "Resolver and DNS caches cleared!").await
+		} else if let Some(name) = name {
+			self.services
+				.client
+				.matrix_resolver
+				.remove_cache_entry(name.as_str());
+			self.write_str(&format!("Cleared {name} from resolver caches!"))
+				.await
+		} else {
+			Err!("Missing name. Supply a name or use --all to flush the whole cache.")
+		}
 	}
 }

@@ -11,12 +11,11 @@ use std::{
 use axum::extract::State;
 use axum_client_ip::ClientIp;
 use conduwuit::{
-	Err, Result, at, extract_variant,
+	Err, Result, at, error, extract_variant,
 	utils::{
 		ReadyExt, TryFutureExtExt,
 		stream::{BroadbandExt, Tools, WidebandExt},
 	},
-	warn,
 };
 use conduwuit_service::Services;
 use futures::{FutureExt, StreamExt, TryFutureExt, future::OptionFuture};
@@ -111,6 +110,9 @@ struct SyncContext<'a> {
 	/// The sync filter, which the client uses to specify what data should be
 	/// included in the sync response.
 	filter: &'a FilterDefinition,
+	/// Whether the state at the end of the timeline should be used when
+	/// calculating state diffs for sync.
+	use_state_after: bool,
 }
 
 impl<'a> SyncContext<'a> {
@@ -199,9 +201,6 @@ pub(crate) async fn sync_events_route(
 		.update_device_last_seen(sender_user, Some(sender_device), client_ip)
 		.await;
 
-	// Setup watchers, so if there's no response, we can wait for them
-	let watcher = services.sync.watch(sender_user, sender_device);
-
 	let response = build_sync_events(&services, &body).await?;
 	if body.body.since.is_none()
 		|| body.body.full_state
@@ -218,7 +217,7 @@ pub(crate) async fn sync_events_route(
 	// Stop hanging if new info arrives
 	let default = Duration::from_secs(30);
 	let duration = cmp::min(body.body.timeout.unwrap_or(default), default);
-	_ = tokio::time::timeout(duration, watcher).await;
+	_ = tokio::time::timeout(duration, services.sync.wait_for_wake(sender_user)).await;
 
 	// Retry returning data
 	build_sync_events(&services, &body).await
@@ -265,6 +264,7 @@ pub(crate) async fn build_sync_events(
 		current_count,
 		full_state,
 		filter: &filter,
+		use_state_after: body.use_state_after,
 	};
 
 	let joined_rooms = services
@@ -277,7 +277,7 @@ pub(crate) async fn build_sync_events(
 			match joined_room {
 				| Ok((room, updates)) => Some((room_id, room, updates)),
 				| Err(err) => {
-					warn!(?err, %room_id, "error loading joined room");
+					error!(?err, %room_id, "error loading joined room");
 					None
 				},
 			}
@@ -306,7 +306,7 @@ pub(crate) async fn build_sync_events(
 				| Ok(Some(left_room)) => Some((room_id, left_room)),
 				| Ok(None) => None,
 				| Err(err) => {
-					warn!(?err, %room_id, "error loading joined room");
+					error!(?err, %room_id, "error loading joined room");
 					None
 				},
 			}

@@ -1,19 +1,26 @@
 use std::{sync::Arc, time::Duration};
 
-use conduwuit::{Config, Result, err, implement, trace};
+use async_trait::async_trait;
+use conduwuit::{Config, Result, Server, err, trace};
 use either::Either;
+use hickory_resolver::{
+	TokioResolver, config::ConnectionConfig, net::runtime::TokioRuntimeProvider,
+};
 use ipaddress::IPAddress;
 use reqwest::redirect;
+use resolvematrix::server::{MatrixResolver, MatrixResolverBuilder};
 
-use crate::{resolver, service};
+use crate::service;
 
 pub struct Service {
+	pub matrix_resolver: Arc<MatrixResolver>,
+	pub dns_resolver: Arc<TokioResolver>,
+
 	pub default: reqwest::Client,
 	pub url_preview: reqwest::Client,
 	pub extern_media: reqwest::Client,
-	pub well_known: reqwest::Client,
 	pub federation: reqwest::Client,
-	pub synapse: reqwest::Client,
+	pub federation_slow: reqwest::Client,
 	pub sender: reqwest::Client,
 	pub appservice: reqwest::Client,
 	pub pusher: reqwest::Client,
@@ -21,10 +28,27 @@ pub struct Service {
 	pub cidr_range_denylist: Vec<IPAddress>,
 }
 
+#[async_trait]
 impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
 		let config = &args.server.config;
-		let resolver = args.require::<resolver::Service>("resolver");
+
+		let dns_resolver = get_dns_resolver(args.server)?;
+
+		let matrix_resolver = Arc::new(MatrixResolverBuilder::new()
+			.dangerous_tls_accept_invalid_certs(args.server.config.allow_invalid_tls_certificates_yes_i_know_what_the_fuck_i_am_doing_with_this_and_i_know_this_is_insecure)
+			.http_client(
+				base(&args.server.config)?
+					.connect_timeout(Duration::from_secs(args.server.config.well_known_conn_timeout))
+					.read_timeout(Duration::from_secs(args.server.config.well_known_timeout))
+					.timeout(Duration::from_secs(args.server.config.well_known_timeout))
+					.pool_max_idle_per_host(0)
+					.redirect(redirect::Policy::limited(4))
+					.build()?
+			)
+			.dns_resolver(dns_resolver.clone())
+			.build()?);
+		let matrix_dns_resolver = matrix_resolver.create_dns_resolver();
 
 		let url_preview_bind_addr = config
 			.url_preview_bound_interface
@@ -39,11 +63,14 @@ impl crate::Service for Service {
 		let url_preview_user_agent = config
 			.url_preview_user_agent
 			.clone()
-			.unwrap_or_else(|| conduwuit::version::user_agent_media().to_owned());
+			.unwrap_or_else(|| conduwuit::user_agent_media().to_owned());
 
 		Ok(Arc::new(Self {
+			matrix_resolver,
+			dns_resolver,
+
 			default: base(config)?
-				.dns_resolver(resolver.resolver.clone())
+				.dns_resolver(matrix_dns_resolver.clone())
 				.build()?,
 
 			url_preview: {
@@ -65,7 +92,7 @@ impl crate::Service for Service {
 						builder_interface(builder, url_preview_bind_iface.as_deref())
 					})?
 					.local_address(url_preview_bind_addr)
-					.dns_resolver(resolver.resolver.clone())
+					.dns_resolver(matrix_dns_resolver.clone())
 					.timeout(Duration::from_secs(config.url_preview_timeout))
 					.redirect(redirect::Policy::limited(3))
 					.user_agent(url_preview_user_agent)
@@ -74,21 +101,12 @@ impl crate::Service for Service {
 			},
 
 			extern_media: base(config)?
-				.dns_resolver(resolver.resolver.clone())
+				.dns_resolver(matrix_dns_resolver.clone())
 				.redirect(redirect::Policy::limited(3))
 				.build()?,
 
-			well_known: base(config)?
-				.dns_resolver(resolver.resolver.clone())
-				.connect_timeout(Duration::from_secs(config.well_known_conn_timeout))
-				.read_timeout(Duration::from_secs(config.well_known_timeout))
-				.timeout(Duration::from_secs(config.well_known_timeout))
-				.pool_max_idle_per_host(0)
-				.redirect(redirect::Policy::limited(4))
-				.build()?,
-
 			federation: base(config)?
-				.dns_resolver(resolver.resolver.hooked.clone())
+				.dns_resolver(matrix_dns_resolver.clone())
 				.connect_timeout(Duration::from_secs(config.federation_conn_timeout))
 				.read_timeout(Duration::from_secs(config.federation_timeout))
 				.timeout(Duration::from_secs(
@@ -101,8 +119,8 @@ impl crate::Service for Service {
 				.redirect(redirect::Policy::limited(3))
 				.build()?,
 
-			synapse: base(config)?
-				.dns_resolver(resolver.resolver.hooked.clone())
+			federation_slow: base(config)?
+				.dns_resolver(matrix_dns_resolver.clone())
 				.connect_timeout(Duration::from_secs(config.federation_conn_timeout))
 				.read_timeout(Duration::from_secs(config.federation_timeout.saturating_mul(6)))
 				.timeout(Duration::from_secs(
@@ -116,7 +134,7 @@ impl crate::Service for Service {
 				.build()?,
 
 			sender: base(config)?
-				.dns_resolver(resolver.resolver.hooked.clone())
+				.dns_resolver(matrix_dns_resolver.clone())
 				.connect_timeout(Duration::from_secs(config.federation_conn_timeout))
 				.read_timeout(Duration::from_secs(config.sender_timeout))
 				.timeout(Duration::from_secs(config.sender_timeout))
@@ -126,7 +144,7 @@ impl crate::Service for Service {
 				.build()?,
 
 			appservice: base(config)?
-				.dns_resolver(resolver.resolver.clone())
+				.dns_resolver(matrix_dns_resolver.clone())
 				.connect_timeout(Duration::from_secs(5))
 				.read_timeout(Duration::from_secs(config.appservice_timeout))
 				.timeout(Duration::from_secs(config.appservice_timeout))
@@ -136,7 +154,7 @@ impl crate::Service for Service {
 				.build()?,
 
 			pusher: base(config)?
-				.dns_resolver(resolver.resolver.clone())
+				.dns_resolver(matrix_dns_resolver)
 				.connect_timeout(Duration::from_secs(config.pusher_conn_timeout))
 				.timeout(Duration::from_secs(config.pusher_timeout))
 				.pool_max_idle_per_host(1)
@@ -154,10 +172,25 @@ impl crate::Service for Service {
 		}))
 	}
 
-	fn name(&self) -> &str { service::make_name(std::module_path!()) }
+	async fn clear_cache(&self) {
+		self.matrix_resolver.clear_cache();
+		self.dns_resolver.clear_cache();
+	}
+
+	fn name(&self) -> &str { service::make_name(module_path!()) }
 }
 
-fn base(config: &Config) -> Result<reqwest::ClientBuilder> {
+impl Service {
+	#[inline]
+	#[must_use]
+	pub fn valid_cidr_range(&self, ip: &IPAddress) -> bool {
+		self.cidr_range_denylist
+			.iter()
+			.all(|cidr| !cidr.includes(ip))
+	}
+}
+
+pub fn base(config: &Config) -> Result<reqwest::ClientBuilder> {
 	let mut builder = reqwest::Client::builder()
 		.hickory_dns(true)
 		.connect_timeout(Duration::from_secs(config.request_conn_timeout))
@@ -165,7 +198,7 @@ fn base(config: &Config) -> Result<reqwest::ClientBuilder> {
 		.timeout(Duration::from_secs(config.request_total_timeout))
 		.pool_idle_timeout(Duration::from_secs(config.request_idle_timeout))
 		.pool_max_idle_per_host(config.request_idle_per_host.into())
-		.user_agent(conduwuit::version::user_agent())
+		.user_agent(conduwuit::user_agent())
 		.redirect(redirect::Policy::limited(6))
         .danger_accept_invalid_certs(config.allow_invalid_tls_certificates_yes_i_know_what_the_fuck_i_am_doing_with_this_and_i_know_this_is_insecure)
 		.connection_verbose(cfg!(debug_assertions));
@@ -244,11 +277,57 @@ fn builder_interface(
 	}
 }
 
-#[inline]
-#[must_use]
-#[implement(Service)]
-pub fn valid_cidr_range(&self, ip: &IPAddress) -> bool {
-	self.cidr_range_denylist
-		.iter()
-		.all(|cidr| !cidr.includes(ip))
+fn get_dns_resolver(server: &Arc<Server>) -> Result<Arc<TokioResolver>> {
+	let config = &server.config;
+	let (sys_conf, mut opts) = hickory_resolver::system_conf::read_system_conf()
+		.map_err(|e| err!(error!("Failed to configure DNS resolver from system: {e}")))?;
+
+	let mut conf = hickory_resolver::config::ResolverConfig::default();
+
+	if let Some(domain) = sys_conf.domain() {
+		conf.set_domain(domain.clone());
+	}
+
+	for sys_conf in sys_conf.search() {
+		conf.add_search(sys_conf.clone());
+	}
+
+	for sys_conf in sys_conf.name_servers() {
+		let mut ns = sys_conf.clone();
+
+		if config.query_over_tcp_only {
+			ns.connections = vec![ConnectionConfig::tcp()];
+		}
+
+		ns.trust_negative_responses = !config.query_all_nameservers;
+
+		conf.add_name_server(ns);
+	}
+
+	opts.cache_size = u64::from(config.dns_cache_entries);
+	opts.preserve_intermediates = true;
+	opts.negative_min_ttl = Some(Duration::from_secs(config.dns_min_ttl_nxdomain));
+	opts.negative_max_ttl = Some(Duration::from_hours(720));
+	opts.positive_min_ttl = Some(Duration::from_secs(config.dns_min_ttl));
+	opts.positive_max_ttl = Some(Duration::from_hours(168));
+	opts.timeout = Duration::from_secs(config.dns_timeout);
+	opts.attempts = config.dns_attempts.into();
+	opts.try_tcp_on_error = config.dns_tcp_fallback;
+	opts.num_concurrent_reqs = 1;
+	opts.edns0 = true;
+	opts.case_randomization = true;
+	opts.ip_strategy = match config.ip_lookup_strategy {
+		| 1 => hickory_resolver::config::LookupIpStrategy::Ipv4Only,
+		| 2 => hickory_resolver::config::LookupIpStrategy::Ipv6Only,
+		| 3 => hickory_resolver::config::LookupIpStrategy::Ipv4AndIpv6,
+		| 4 => hickory_resolver::config::LookupIpStrategy::Ipv6thenIpv4,
+		| _ => hickory_resolver::config::LookupIpStrategy::Ipv4thenIpv6,
+	};
+
+	let runtime_provider = TokioRuntimeProvider::new();
+	let mut builder = TokioResolver::builder_with_config(conf, runtime_provider);
+	*builder.options_mut() = opts;
+	let resolver = Arc::new(builder.build().expect("failed to build resolver :("));
+
+	Ok(resolver)
 }

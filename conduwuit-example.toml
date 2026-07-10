@@ -297,6 +297,27 @@
 #
 #ip_lookup_strategy = 5
 
+# The source to use for discovering the real connecting client IP.
+#
+# Takes any of the following options:
+#
+# "cf_connecting_ip" - `Cf-Connecting-Ip` header
+# "cloudfront_viewer_address" - `CloudFront-Viewer-Address` header
+# "fly_client_ip" - `Fly-Client-IP` header
+# "x_forwarded_for" - rightmost value of the `X-Forwarded-For` header
+# "true_client_ip" - `True-Client-Ip` header
+# "x_envoy_external_address" - `X-Envoy-External-Address` header
+# "x_real_ip" - `X-Real-Ip` header
+#
+# Only set this if you are certain only your reverse proxy
+# will send the expected header. There is no "is the connecting IP allowed
+# to set this header" check; if the header selected is present, it is
+# used.
+#
+# Defaults to the IP address actually making the connection.
+#
+#request_ip_source = false
+
 # Max request size for file uploads in bytes. Defaults to 20MB.
 # Also limits incoming federated media.
 #
@@ -304,7 +325,7 @@
 
 # This item is undocumented. Please contribute documentation for it.
 #
-#max_fetch_prev_events = 192
+#max_fetch_prev_events = 1024
 
 # How many incoming federation transactions the server is willing to be
 # processing at any given time before it becomes overloaded and starts
@@ -528,17 +549,15 @@
 #
 #recaptcha_private_site_key =
 
-# Policy documents, such as terms and conditions or a privacy policy,
-# which users must agree to when registering an account.
+# Controls whether users are allowed to deactivate their own accounts
+# through the account management panel or their Matrix clients. Server
+# admins can always deactivate users using the relevant admin commands.
 #
-# Example:
-# ```ignore
-# [global.registration_terms.privacy_policy]
-# en = { name = "Privacy Policy", url = "https://homeserver.example/en/privacy_policy.html" }
-# es = { name = "Política de Privacidad", url = "https://homeserver.example/es/privacy_policy.html" }
-# ```
+# Note that, in some jurisdictions, you may be legally required to honor
+# users who request to deactivate their accounts if you set this option
+# to `false`.
 #
-#registration_terms = {}
+#allow_deactivation = true
 
 # Controls whether encrypted rooms and events are allowed.
 #
@@ -651,6 +670,14 @@
 # a substitute for moderation bots.
 #
 #default_room_acl_deny =
+
+# The number of forward extremities to tolerate in a room before
+# attempting to manually squash them with a "dummy event". Setting this
+# above 20 will hinder its efficacy, and setting it below 5 will cause
+# more dummy events to be sent than necessary (which increases federation
+# traffic).
+#
+#dummy_event_threshold = 10
 
 # Enable OpenTelemetry OTLP tracing export. This replaces the deprecated
 # Jaeger exporter. Traces will be sent via OTLP to a collector (such as
@@ -1445,6 +1472,11 @@
 #
 #send_messages_from_ignored_users_to_client = false
 
+# Send "org.matrix.dummy_event" events to the client. This is a debugging
+# option.
+#
+#send_dummy_events_to_clients = false
+
 # Vector list of IPv4 and IPv6 CIDR ranges / subnets *in quotes* that you
 # do not want continuwuity to send outbound requests to. Defaults to
 # RFC1918, unroutable, loopback, multicast, and testnet addresses for
@@ -2014,3 +2046,126 @@
 # `require_email_for_registration`.
 #
 #require_email_for_token_registration = false
+
+#[global.registration_terms]
+
+# The language code to provide to clients along with the policy documents.
+#
+#language = "en"
+
+# Policy documents, such as terms and conditions or a privacy policy,
+# which users must agree to when registering an account.
+#
+# Example:
+# ```ignore
+# [global.registration_terms.documents]
+# privacy_policy = { name = "Privacy Policy", url = "https://homeserver.example/en/privacy_policy.html" }
+# ```
+#
+#documents =
+
+#[global.oauth]
+
+# The compatibility mode to use for OAuth.
+#
+# - "disabled": OAuth will be unavailable. Users will only be able to log
+#   in using legacy authentication.
+# - "hybrid": OAuth and legacy authentication will both be available. Some
+#   clients may only use one or the other.
+# - "exclusive": Only OAuth will be available. Clients which require
+#   legacy authentication will be unable to log in.
+#
+#compatibility_mode = "hybrid"
+
+#[global.oauth.oidc]
+# Uncommenting this section will enable Continuwuity's support for
+# authenticating users using an OpenID Connect-compatible identity provider.
+# This is referred to as "delegated authentication".
+#
+# IMPORTANT NOTE: When delegated authentication is active, Continuwuity will behave as if
+# the `global.oauth.compatibility_mode` setting is set to `exclusive`.
+# Matrix clients which do not support OAuth login (also referred to as "next-gen auth") will NOT be able
+# to log in while delegated authentication is active.
+
+
+# The OIDC issuer URL. Continuwuity will use OpenID Connect Discovery to
+# automatically fetch the identity provider's metadata from this URL.
+# Generally you should set this to the base domain your identity provider
+# runs on.
+#
+#discovery_url =
+
+# The OAuth client ID for Continuwuity to use when communicating with the
+# identity provider.
+#
+#client_id =
+
+# The OAuth client secret for Continuwuity to use when communicating with
+# the identity provider.
+#
+#client_secret =
+
+# A path to a file which Continuwuity will read the client secret from.
+# If this option is set, it will override `client_secret`.
+#
+# The server will fail to start if the file cannot be read.
+#
+#client_secret_file =
+
+# Additional scopes Continuwuity should request from the IDP. This may be
+# necessary to access certain claims. Continuwuity always requests the
+# `openid` scope.
+#
+#additional_scopes = []
+
+# Whether the user should be prompted to choose a localpart
+# when signing in for the first time. If this is `false`, Continuwuity
+# will attempt to use the value of the `preferred_username_claim`
+# (see below) as the user's localpart. Authentication will
+# fail if this claim is missing or is not a valid localpart.
+#
+#prompt_for_localpart = true
+
+# The claim to use for the user's localpart, if `prompt_for_localpart` is
+# false.
+#
+#preferred_username_claim = "preferred_username"
+
+# The claim which will be used to set the user's email address,
+# either on initial registration or on every login depending on
+# the value of `profile_key_import_mode`. Continuwuity assumes that
+# the IDP has taken care of verifying that the user controls the email
+# address it provides.
+#
+# This option does nothing if SMTP is not configured.
+#
+# If this option is set, and `profile_key_import_mode` is `on_login`,
+# users will not be able to change their email addresses themselves.
+#
+#email_claim = "email"
+
+# Defines how claims returned from the IDP should be mapped to a user's
+# profile data. The profile field named in each key will be set from the
+# claim named in the corresponding value when the user first registers,
+# and possibly on subsequent logins as well, depending on the value of
+# `profile_key_import_mode` (see below).
+#
+# Per-room overrides to the user's display name or avatar will be
+# preserved by the import process.
+#
+# SECURITY NOTE: If the `avatar_url` field is set, Continuwuity will
+# perform a HTTP GET to the URL in the mapped claim and use the returned
+# file as the user's profile picture. Make sure your users are not able
+# to set the value of the mapped claim to an arbitrary URL.
+#
+#profile_key_map = { displayname = "name" }
+
+# When profile keys should be imported from the IDP's claims.
+#
+# - "on_registration": Listed keys will be imported once, when the user
+#   logs in for the first time and their shadow account is created.
+# - "on_login": Listed keys will be imported every time the user logs in.
+#   Additionally, users will not be able to manually edit any listed keys
+#   through their Matrix client.
+#
+#profile_key_import_mode = "on_registration"

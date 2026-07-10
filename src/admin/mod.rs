@@ -16,6 +16,7 @@ pub(crate) mod check;
 pub(crate) mod debug;
 pub(crate) mod federation;
 pub(crate) mod media;
+pub(crate) mod oidc;
 pub(crate) mod query;
 pub(crate) mod room;
 pub(crate) mod server;
@@ -26,7 +27,7 @@ extern crate conduwuit_api as api;
 extern crate conduwuit_core as conduwuit;
 extern crate conduwuit_service as service;
 
-pub(crate) use conduwuit_macros::{admin_command, admin_command_dispatch};
+pub(crate) use conduwuit_macros::admin_command_dispatch;
 
 pub(crate) use crate::{context::Context, utils::get_room_info};
 

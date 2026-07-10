@@ -43,11 +43,11 @@ jobs:
     name: Renovate
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/renovatebot/renovate:43.214.6@sha256:fd228b92f067204e444ddea1ec2fefb007592f9a46845e966f9334d5bd4bb52c
+      image: ghcr.io/renovatebot/renovate:43.252.1@sha256:121eb04ef758537019fb58f587aa53c99e5fda4e703993ce2ca01bd4b3926bd4
       options: --tmpfs /tmp:exec
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           show-progress: false
 
@@ -55,7 +55,7 @@ jobs:
         run: /usr/local/renovate/node -e 'console.log(`node heap limit = ${require("v8").getHeapStatistics().heap_size_limit / (1024 * 1024)} Mb`)'
 
       - name: Restore renovate repo cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             /tmp/renovate/cache/renovate/repository
@@ -64,7 +64,7 @@ jobs:
             renovate-repo-cache-
 
       - name: Restore renovate package cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             /tmp/renovate/cache/renovate/renovate-cache-sqlite
@@ -73,7 +73,7 @@ jobs:
             renovate-package-cache-
 
       - name: Restore renovate OSV cache
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             /tmp/osv
@@ -117,7 +117,7 @@ jobs:
 
       - name: Save renovate package cache
         if: always()
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             /tmp/renovate/cache/renovate/renovate-cache-sqlite
@@ -125,7 +125,7 @@ jobs:
 
       - name: Save renovate OSV cache
         if: always()
-        uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             /tmp/osv

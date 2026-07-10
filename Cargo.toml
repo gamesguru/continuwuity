@@ -12,7 +12,7 @@ license = "Apache-2.0"
 # See also `rust-toolchain.toml`
 readme = "README.md"
 repository = "https://forgejo.ellis.link/continuwuation/continuwuity"
-version = "0.5.9"
+version = "26.6.0"
 
 [workspace.metadata.crane]
 name = "conduwuit"
@@ -45,7 +45,7 @@ version = "1.0.6"
 version = "1.0.0"
 
 [workspace.dependencies.cargo_toml]
-version = "0.22"
+version = "1.0"
 default-features = false
 features = ["features"]
 
@@ -124,7 +124,7 @@ default-features = false
 features = ["util"]
 
 [workspace.dependencies.tower-http]
-version = "0.6.8"
+version = "0.7.0"
 default-features = false
 features = [
     "add-extension",
@@ -140,6 +140,12 @@ features = [
 [workspace.dependencies.rustls]
 version = "0.23.25"
 default-features = false
+
+[workspace.dependencies.aws-lc-sys]
+version = "0.41.0"
+
+[workspace.dependencies.aws-lc-rs]
+version = "1.17.0"
 
 [workspace.dependencies.reqwest]
 version = "0.13.2"
@@ -164,7 +170,7 @@ features = ["raw_value"]
 
 # Used for appservice registration files
 [workspace.dependencies.serde-saphyr]
-version = "0.0.26"
+version = "0.0.29"
 
 # Used to load forbidden room/user regex from config
 [workspace.dependencies.serde_regex]
@@ -296,7 +302,7 @@ default-features = false
 features = ["env", "toml"]
 
 [workspace.dependencies.hickory-resolver]
-version = "0.25.2"
+version = "0.26.0"
 default-features = false
 features = [
     "serde",
@@ -316,7 +322,7 @@ default-features = false
 
 # Used to make working with iterators easier, was already a transitive depdendency
 [workspace.dependencies.itertools]
-version = "0.14.0"
+version = "0.15.0"
 
 # to parse user-friendly time durations in admin commands
 #TODO: overlaps chrono?
@@ -344,7 +350,7 @@ version = "1.1.1"
 [workspace.dependencies.ruma]
 # version = "0.14.1"
 git = "https://github.com/ruma/ruma.git"
-rev = "3ecd80b92794d2d93f657a7b3db62d4be237526b"
+rev = "fca1dbc060f730c1aaf84c9c2fb1e8a587455be8"
 features = [
     "appservice-api-c",
     "client-api",
@@ -356,6 +362,7 @@ features = [
     "ring-compat",
     "compat-upload-signatures",
     "compat-optional-txn-pdus",
+    "compat-get-3pids",
     "unstable-msc2666",
     "unstable-msc2867",
     "unstable-msc2870",
@@ -401,6 +408,9 @@ default-features = false
 [workspace.dependencies.sha1]
 version = "0.11.0"
 default-features = false
+
+[workspace.dependencies.openidconnect]
+version = "4.0.1"
 
 # optional opentelemetry, performance measurements, flamegraphs, etc for performance measurements and monitoring
 [workspace.dependencies.opentelemetry]
@@ -561,6 +571,12 @@ version = "0.3.0"
 
 [workspace.dependencies.roaring]
 version = "0.11.4"
+
+[workspace.dependencies.resolvematrix]
+version = "1.1.0"
+
+[workspace.dependencies.serde_urlencoded]
+version = "0.7.1"
 
 #
 # Patches

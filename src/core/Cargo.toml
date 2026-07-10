@@ -9,6 +9,7 @@ repository.workspace = true
 version.workspace = true
 
 [lib]
+doctest = false
 path = "mod.rs"
 crate-type = [
 	"rlib",
@@ -120,6 +121,8 @@ roaring.workspace = true
 parking_lot.workspace = true
 lock_api.workspace = true
 hyper-util.workspace = true
+resolvematrix.workspace = true
+openidconnect.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true

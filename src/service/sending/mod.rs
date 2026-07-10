@@ -56,7 +56,6 @@ pub struct Service {
 struct Services {
 	client: Dep<client::Service>,
 	globals: Dep<globals::Service>,
-	state: Dep<rooms::state::Service>,
 	state_cache: Dep<rooms::state_cache::Service>,
 	user: Dep<rooms::user::Service>,
 	users: Dep<users::Service>,
@@ -101,7 +100,6 @@ impl crate::Service for Service {
 			services: Services {
 				client: args.depend::<client::Service>("client"),
 				globals: args.depend::<globals::Service>("globals"),
-				state: args.depend::<rooms::state::Service>("rooms::state"),
 				state_cache: args.depend::<rooms::state_cache::Service>("rooms::state_cache"),
 				user: args.depend::<rooms::user::Service>("rooms::user"),
 				users: args.depend::<users::Service>("users"),
@@ -325,7 +323,7 @@ impl Service {
 
 	/// Like send_federation_request() but with a very large timeout
 	#[inline]
-	pub async fn send_synapse_request<'i, T>(
+	pub async fn send_slow_federation_request<'i, T>(
 		&self,
 		dest: &ServerName,
 		request: T,
@@ -337,10 +335,7 @@ impl Service {
 			> + Debug
 			+ Send,
 	{
-		self.services
-			.federation
-			.execute_synapse(dest, request)
-			.await
+		self.services.federation.execute_slow(dest, request).await
 	}
 
 	/// Send an unauthenticated federation request with no X-Matrix header.

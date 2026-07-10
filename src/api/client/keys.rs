@@ -26,7 +26,7 @@ use ruma::{
 	serde::Raw,
 };
 use serde_json::json;
-use service::uiaa::Identity;
+use service::oauth::OAuthTicket;
 
 use crate::Ruma;
 
@@ -208,6 +208,7 @@ pub(crate) async fn upload_signing_keys_route(
 	if uiaa_needed_to_upload_keys(
 		services,
 		sender_user,
+		body.identity.is_appservice(),
 		body.self_signing_key.as_ref(),
 		body.user_signing_key.as_ref(),
 		body.master_key.as_ref(),
@@ -216,7 +217,12 @@ pub(crate) async fn upload_signing_keys_route(
 	{
 		let _ = services
 			.uiaa
-			.authenticate_password(&body.auth, Some(Identity::from_user_id(sender_user)))
+			.authenticate_password(
+				&body.auth,
+				sender_user,
+				body.identity.sender_device(),
+				Some(OAuthTicket::CrossSigningReset),
+			)
 			.await?;
 	}
 
@@ -243,10 +249,16 @@ pub(crate) async fn upload_signing_keys_route(
 async fn uiaa_needed_to_upload_keys(
 	services: crate::State,
 	user_id: &UserId,
+	is_appservice: bool,
 	self_signing_key: Option<&Raw<CrossSigningKey>>,
 	user_signing_key: Option<&Raw<CrossSigningKey>>,
 	master_signing_key: Option<&Raw<CrossSigningKey>>,
 ) -> bool {
+	if is_appservice {
+		// Appservices can skip UIAA for this endpoint
+		return false;
+	}
+
 	let (self_signing_key, user_signing_key, master_signing_key) = (
 		self_signing_key.map(Raw::deserialize).flat_ok(),
 		user_signing_key.map(Raw::deserialize).flat_ok(),
