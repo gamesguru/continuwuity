@@ -197,6 +197,10 @@ async fn build_ephemeral(
 				.await;
 
 			if let Ok(event) = event {
+				if event.content.user_ids.is_empty() {
+					return None;
+				}
+
 				return Some(
 					Raw::new(&event)
 						.expect("typing event should be valid")
