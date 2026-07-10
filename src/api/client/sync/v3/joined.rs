@@ -197,7 +197,10 @@ async fn build_ephemeral(
 				.await;
 
 			if let Ok(event) = event {
-				if event.content.user_ids.is_empty() {
+				// only suppress an empty typing list on a fresh (initial) sync; if the
+				// list changed since the last sync, an empty list means typing was
+				// explicitly stopped and clients need to observe that transition
+				if event.content.user_ids.is_empty() && last_sync_end_count.is_none() {
 					return None;
 				}
 
