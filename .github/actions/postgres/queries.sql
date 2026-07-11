@@ -70,9 +70,6 @@ run_regs AS (
         FROM baseline_runs b2
         WHERE b2.os IS NOT DISTINCT FROM r.os
           AND b2.arch IS NOT DISTINCT FROM r.arch
-          AND b2.profile IS NOT DISTINCT FROM r.profile
-          AND b2.room_version IS NOT DISTINCT FROM COALESCE(r.room_version, '11')
-          AND b2.features IS NOT DISTINCT FROM COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '')
         ORDER BY b2.run_date DESC, b2.id DESC
         LIMIT 1
     ) mb_run_id ON TRUE

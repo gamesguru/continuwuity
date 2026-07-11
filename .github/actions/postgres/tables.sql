@@ -81,11 +81,8 @@ CROSS JOIN LATERAL (
     SELECT id AS default_baseline_run_id FROM runs
     WHERE (branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream')
     OR version_string LIKE '%main%')
-    AND COALESCE(room_version, '11') IS NOT DISTINCT FROM COALESCE(r.room_version, '11')
     AND arch IS NOT DISTINCT FROM r.arch
     AND os IS NOT DISTINCT FROM r.os
-    AND profile IS NOT DISTINCT FROM r.profile
-    AND COALESCE(regexp_replace(btrim(features, ' ,'), '[,\s]+', ' ', 'g'), '') IS NOT DISTINCT FROM COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '')
     ORDER BY run_date DESC
     LIMIT 1
 ) dbr
