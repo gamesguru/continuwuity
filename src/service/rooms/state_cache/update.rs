@@ -4,7 +4,7 @@ use conduwuit::{Err, Event, Pdu, Result, implement, is_not_empty, utils::ReadyEx
 use database::{Json, serialize_key};
 use futures::StreamExt;
 use ruma::{
-	OwnedServerName, RoomId, UserId,
+	EventId, OwnedServerName, RoomId, UserId,
 	events::{
 		AnyStrippedStateEvent, GlobalAccountDataEventType, RoomAccountDataEventType,
 		StateEventType,
@@ -119,8 +119,15 @@ pub async fn update_membership(
 		},
 		| MembershipState::Invite => {
 			let last_state = self.services.state.summary_stripped(pdu, room_id).await;
-			self.mark_as_invited(user_id, room_id, pdu.sender(), Some(last_state), None)
-				.await?;
+			self.mark_as_invited(
+				user_id,
+				room_id,
+				pdu.sender(),
+				pdu.event_id(),
+				Some(last_state),
+				None,
+			)
+			.await?;
 		},
 		| MembershipState::Knock => {
 			let last_state = self.services.state.summary_stripped(pdu, room_id).await;
@@ -207,6 +214,7 @@ pub fn mark_as_joined(&self, user_id: &UserId, room_id: &RoomId) {
 	self.db.roomuserid_joined.insert(&roomuser_id, []);
 
 	self.db.userroomid_invitestate.remove(&userroom_id);
+	self.db.userroomid_inviteeventid.remove(&userroom_id);
 	self.db.roomuserid_invitecount.remove(&roomuser_id);
 	self.db.userroomid_invitesender.remove(&userroom_id);
 
@@ -245,6 +253,7 @@ pub async fn mark_as_left(&self, user_id: &UserId, room_id: &RoomId, leave_pdu: 
 	self.db.roomuserid_joined.remove(&roomuser_id);
 
 	self.db.userroomid_invitestate.remove(&userroom_id);
+	self.db.userroomid_inviteeventid.remove(&userroom_id);
 	self.db.roomuserid_invitecount.remove(&roomuser_id);
 	self.db.userroomid_invitesender.remove(&userroom_id);
 
@@ -290,6 +299,7 @@ pub fn mark_as_knocked(
 	self.db.roomuserid_joined.remove(&roomuser_id);
 
 	self.db.userroomid_invitestate.remove(&userroom_id);
+	self.db.userroomid_inviteeventid.remove(&userroom_id);
 	self.db.roomuserid_invitecount.remove(&roomuser_id);
 	self.db.userroomid_invitesender.remove(&userroom_id);
 
@@ -324,6 +334,7 @@ pub async fn mark_as_invited(
 	user_id: &UserId,
 	room_id: &RoomId,
 	sender_user: &UserId,
+	invite_event_id: &EventId,
 	last_state: Option<Vec<Raw<AnyStrippedStateEvent>>>,
 	invite_via: Option<Vec<OwnedServerName>>,
 ) -> Result<()> {
@@ -349,6 +360,9 @@ pub async fn mark_as_invited(
 	self.db
 		.userroomid_invitestate
 		.raw_put(&userroom_id, Json(last_state.unwrap_or_default()));
+	self.db
+		.userroomid_inviteeventid
+		.insert(&userroom_id, invite_event_id);
 	self.db
 		.roomuserid_invitecount
 		.raw_aput::<8, _, _>(&roomuser_id, self.services.globals.next_count().unwrap());
