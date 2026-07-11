@@ -198,7 +198,6 @@ pub(crate) async fn create_invite_route(
 				&recipient_user,
 				&body.room_id,
 				sender_user,
-				&event_id,
 				Some(invite_state),
 				body.via.clone(),
 			)

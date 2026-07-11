@@ -12,7 +12,7 @@ use conduwuit::{
 use database::{Deserialized, Ignore, Interfix, Map};
 use futures::{Stream, StreamExt, future::join5, pin_mut};
 use ruma::{
-	OwnedEventId, OwnedRoomId, OwnedUserId, RoomId, ServerName, UserId,
+	OwnedRoomId, OwnedUserId, RoomId, ServerName, UserId,
 	events::{AnyStrippedStateEvent, room::member::MembershipState},
 	serde::Raw,
 };
@@ -47,7 +47,6 @@ struct Data {
 	roomuserid_knockedcount: Arc<Map>,
 	roomuseroncejoinedids: Arc<Map>,
 	serverroomids: Arc<Map>,
-	userroomid_inviteeventid: Arc<Map>,
 	userroomid_invitestate: Arc<Map>,
 	userroomid_joined: Arc<Map>,
 	userroomid_leftstate: Arc<Map>,
@@ -84,7 +83,6 @@ impl crate::Service for Service {
 				roomuserid_knockedcount: args.db["roomuserid_knockedcount"].clone(),
 				roomuseroncejoinedids: args.db["roomuseroncejoinedids"].clone(),
 				serverroomids: args.db["serverroomids"].clone(),
-				userroomid_inviteeventid: args.db["userroomid_inviteeventid"].clone(),
 				userroomid_invitestate: args.db["userroomid_invitestate"].clone(),
 				userroomid_joined: args.db["userroomid_joined"].clone(),
 				userroomid_leftstate: args.db["userroomid_leftstate"].clone(),
@@ -531,17 +529,6 @@ pub async fn invite_sender(&self, user_id: &UserId, room_id: &RoomId) -> Result<
 	let key = (user_id, room_id);
 	self.db
 		.userroomid_invitesender
-		.qry(&key)
-		.await
-		.deserialized()
-}
-
-#[implement(Service)]
-#[tracing::instrument(skip(self), level = "trace")]
-pub async fn invite_event_id(&self, user_id: &UserId, room_id: &RoomId) -> Result<OwnedEventId> {
-	let key = (user_id, room_id);
-	self.db
-		.userroomid_inviteeventid
 		.qry(&key)
 		.await
 		.deserialized()

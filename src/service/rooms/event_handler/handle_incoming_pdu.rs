@@ -24,10 +24,17 @@ use crate::rooms::timeline::{RawPduId, pdu_fits};
 
 async fn should_rescind_invite(
 	services: &crate::rooms::event_handler::Services,
-	pdu_event: &PduEvent,
+	content: &mut BTreeMap<String, CanonicalJsonValue>,
 	sender: &UserId,
 	room_id: &RoomId,
-) -> Result<Option<OwnedUserId>> {
+) -> Result<Option<(OwnedUserId, PduEvent)>> {
+	// We insert a bogus event ID since we can't actually calculate the right one
+	content.insert("event_id".to_owned(), CanonicalJsonValue::String("$rescind".to_owned()));
+	let pdu_event = serde_json::from_value::<PduEvent>(
+		serde_json::to_value(&content).expect("CanonicalJsonObj is a valid JsonValue"),
+	)
+	.map_err(|e| err!("invalid PDU: {e}"))?;
+
 	if pdu_event.room_id().is_none_or(|r| r != room_id)
 		|| pdu_event.sender() != sender
 		|| pdu_event.event_type() != &TimelineEventType::RoomMember
@@ -53,40 +60,25 @@ async fn should_rescind_invite(
 	else {
 		return Ok(None); // No pending invite, so nothing to rescind
 	};
-	if !pending_invite_state.iter().any(|event| {
-		event
-			.get_field::<String>("type")
-			.is_ok_and(|event_type| event_type.is_some_and(|t| t == "m.room.member"))
-	}) {
-		return Ok(None);
+	for event in pending_invite_state {
+		if event
+			.get_field::<String>("type")?
+			.is_some_and(|t| t == "m.room.member")
+			&& event
+				.get_field::<OwnedUserId>("state_key")?
+				.is_some_and(|s| s == *target_user_id)
+			&& event
+				.get_field::<OwnedUserId>("sender")?
+				.is_some_and(|s| s == *sender)
+			&& event
+				.get_field::<RoomMemberEventContent>("content")?
+				.is_some_and(|c| c.membership == MembershipState::Invite)
+		{
+			return Ok(Some((target_user_id.to_owned(), pdu_event)));
+		}
 	}
 
-	let Ok(invite_sender) = services
-		.state_cache
-		.invite_sender(target_user_id, room_id)
-		.await
-	else {
-		return Ok(None);
-	};
-	if invite_sender != sender {
-		return Ok(None);
-	}
-
-	let Ok(invite_event_id) = services
-		.state_cache
-		.invite_event_id(target_user_id, room_id)
-		.await
-	else {
-		return Ok(None);
-	};
-	if !pdu_event
-		.auth_events()
-		.any(|event_id| event_id == invite_event_id)
-	{
-		return Ok(None);
-	}
-
-	Ok(Some(target_user_id.to_owned()))
+	Ok(None)
 }
 
 /// When receiving an event one needs to:
@@ -195,24 +187,8 @@ pub async fn handle_incoming_pdu<'a>(
 		// Is this a federated invite rescind?
 		// copied from https://github.com/element-hq/synapse/blob/7e4588a/synapse/handlers/federation_event.py#L255-L300
 		if is_room_member_event {
-			let create_event = self
-				.services
-				.state_accessor
-				.room_state_get(room_id, &StateEventType::RoomCreate, "")
-				.await?;
-			let (pdu, _) = self
-				.handle_outlier_pdu(
-					origin,
-					&create_event,
-					event_id,
-					room_id,
-					value.clone(),
-					false,
-				)
-				.await?;
-
-			if let Some(target_user_id) =
-				should_rescind_invite(&self.services, &pdu, sender, room_id).await?
+			if let Some((target_user_id, pdu)) =
+				should_rescind_invite(&self.services, &mut value.clone(), sender, room_id).await?
 			{
 				debug_info!(
 					"Invite to {room_id} appears to have been rescinded by {sender}, marking \
