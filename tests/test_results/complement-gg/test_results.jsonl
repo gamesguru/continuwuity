@@ -345,7 +345,7 @@
 {"Action":"fail","Test":"TestMSC4186SlidingSyncMembershipListSemantics/Kick_before_room_was_sent_on_connection_is_included"}
 {"Action":"fail","Test":"TestMSC4186SlidingSyncMembershipListSemantics/Voluntary_leave_after_room_was_sent_on_connection_is_included"}
 {"Action":"fail","Test":"TestMSC4186SlidingSyncMembershipListSemantics/Voluntary_leave_before_room_was_sent_on_connection_is_omitted"}
-{"Action":"pass","Test":"TestMSC4186SlidingSyncSubscriptions"}
+{"Action":"fail","Test":"TestMSC4186SlidingSyncSubscriptions"}
 {"Action":"fail","Test":"TestMSC4289PrivilegedRoomCreators"}
 {"Action":"pass","Test":"TestMSC4289PrivilegedRoomCreators/PL_event_is_missing_creator_in_users_map"}
 {"Action":"pass","Test":"TestMSC4289PrivilegedRoomCreators/admin_with_>PL100_cannot_kick_creator"}
