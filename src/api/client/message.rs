@@ -155,6 +155,10 @@ pub(crate) async fn get_message_events_route(
 		.collect()
 		.await;
 
+	// Capture the DB sequence boundary token BEFORE topological sort changes
+	// the order. This must be the outermost PduCount from the original query.
+	let next_token = events.last().map(at!(0));
+
 	if !events.is_empty() {
 		let mut event_to_count = std::collections::HashMap::new();
 		let events_to_sort: Vec<_> = events
@@ -181,11 +185,6 @@ pub(crate) async fn get_message_events_route(
 			events.reverse();
 		}
 	}
-
-	// Paginate from the final order we actually returned. If the cursor comes
-	// from the pre-sort DB slice, a page boundary that cuts through a DAG fork
-	// can skip events after topological reordering.
-	let next_token = events.last().map(at!(0));
 
 	let lazy_loading_context = lazy_loading::Context {
 		user_id: sender_user,
