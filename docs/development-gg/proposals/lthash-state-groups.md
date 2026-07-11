@@ -20,6 +20,7 @@ The `calculate_hash` function is used in exactly two places relevant to state:
 2. [state/mod.rs:355](file:///run/media/shane/shane4tb-ent/repos/continuwuity/src/service/rooms/state/mod.rs#L355) — `set_event_state`
 
 Both do:
+
 ```rust
 let state_hash = calculate_hash(state_ids_compressed.iter().map(|s| &s[..]));
 ```
@@ -43,12 +44,12 @@ LtHash gives you a fast incremental content hash, but every consumer above needs
 
 ## Where it could theoretically help
 
-| Use case | Current cost | With LtHash |
-|---|---|---|
-| Computing `state_hash` for dedup | O(n) SHA-256 | O(1) incremental |
-| Detecting "same state, skip" fast-path | O(n) hash + lookup | O(1) hash + lookup |
-| Reconstructing full state | O(depth × state_size) chain walk | **Same** — still need the actual set |
-| State resolution | O(forks × state_size) | **Same** — needs actual events |
+| Use case                               | Current cost                     | With LtHash                          |
+| -------------------------------------- | -------------------------------- | ------------------------------------ |
+| Computing `state_hash` for dedup       | O(n) SHA-256                     | O(1) incremental                     |
+| Detecting "same state, skip" fast-path | O(n) hash + lookup               | O(1) hash + lookup                   |
+| Reconstructing full state              | O(depth × state_size) chain walk | **Same** — still need the actual set |
+| State resolution                       | O(forks × state_size)            | **Same** — needs actual events       |
 
 ## What would actually help more
 
