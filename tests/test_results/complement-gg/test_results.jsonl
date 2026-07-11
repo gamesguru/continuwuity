@@ -179,7 +179,7 @@
 {"Action":"pass","Test":"TestFetchMessagesFromNonExistentRoom"}
 {"Action":"pass","Test":"TestFilter"}
 {"Action":"fail","Test":"TestFilterMessagesByRelType"}
-{"Action":"fail","Test":"TestForwardExtremitySurvivesOutlierChild"}
+{"Action":"pass","Test":"TestForwardExtremitySurvivesOutlierChild"}
 {"Action":"pass","Test":"TestGappedSyncLeaveSection"}
 {"Action":"pass","Test":"TestGetFilteredRoomMembers"}
 {"Action":"pass","Test":"TestGetFilteredRoomMembers/membership/join"}

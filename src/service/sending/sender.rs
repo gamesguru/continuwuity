@@ -1,5 +1,5 @@
 use std::{
-	collections::{BTreeMap, HashMap, HashSet},
+	collections::{BTreeMap, HashMap, HashSet, btree_map::Entry},
 	fmt::Debug,
 	sync::{
 		Arc,
@@ -42,8 +42,9 @@ use ruma::{
 	},
 	device_id,
 	events::{
-		AnySyncEphemeralRoomEvent, GlobalAccountDataEventType, push_rules::PushRulesEvent,
-		receipt::ReceiptType,
+		AnySyncEphemeralRoomEvent, GlobalAccountDataEventType,
+		push_rules::PushRulesEvent,
+		receipt::{ReceiptThread, ReceiptType},
 	},
 	push,
 	serde::Raw,
@@ -553,22 +554,25 @@ impl Service {
 		since: (u64, u64),
 		max_edu_count: &AtomicU64,
 	) -> Option<EduBuf> {
-		let mut num = 0;
+		let num = Arc::new(AtomicUsize::new(0));
 		let receipts: BTreeMap<OwnedRoomId, ReceiptMap> = self
 			.services
 			.state_cache
 			.server_rooms(server_name)
 			.map(ToOwned::to_owned)
-			.broad_filter_map(|room_id| async move {
-				let receipt_map = self
-					.select_edus_receipts_room(&room_id, since, max_edu_count, &mut num)
-					.await;
+			.broad_filter_map(|room_id| {
+				let num = Arc::clone(&num);
+				async move {
+					let receipt_map = self
+						.select_edus_receipts_room(&room_id, since, max_edu_count, &num)
+						.await;
 
-				receipt_map
-					.read
-					.is_empty()
-					.eq(&false)
-					.then_some((room_id, receipt_map))
+					receipt_map
+						.read
+						.is_empty()
+						.eq(&false)
+						.then_some((room_id, receipt_map))
+				}
 			})
 			.collect()
 			.await;
@@ -587,13 +591,17 @@ impl Service {
 	}
 
 	/// Look for read receipts in this room
-	#[tracing::instrument(name = "receipts", level = "trace", skip(self, since, max_edu_count))]
+	#[tracing::instrument(
+		name = "receipts",
+		level = "trace",
+		skip(self, since, max_edu_count, num)
+	)]
 	async fn select_edus_receipts_room(
 		&self,
 		room_id: &RoomId,
 		since: (u64, u64),
 		max_edu_count: &AtomicU64,
-		num: &mut usize,
+		num: &AtomicUsize,
 	) -> ReceiptMap {
 		let receipts = self
 			.services
@@ -601,7 +609,7 @@ impl Service {
 			.readreceipts_since(room_id, Some(since.0));
 
 		pin_mut!(receipts);
-		let mut read = BTreeMap::<OwnedUserId, ReceiptData>::new();
+		let mut collected = Vec::new();
 		while let Some((user_id, count, read_receipt)) = receipts.next().await {
 			if count > since.1 {
 				break;
@@ -612,43 +620,10 @@ impl Service {
 				continue;
 			}
 
-			let Ok(event) = serde_json::from_str(read_receipt.json().get()) else {
-				error!(%user_id, %count, ?read_receipt, "Invalid edu event in read_receipts.");
-				continue;
-			};
-
-			let AnySyncEphemeralRoomEvent::Receipt(r) = event else {
-				error!(%user_id, %count, ?event, "Invalid event type in read_receipts");
-				continue;
-			};
-
-			let (event_id, mut receipt) = r
-				.content
-				.0
-				.into_iter()
-				.next()
-				.expect("we only use one event per read receipt");
-
-			let receipt = receipt
-				.remove(&ReceiptType::Read)
-				.expect("our read receipts always set this")
-				.remove(&user_id)
-				.expect("our read receipts always have the user here");
-
-			let receipt_data = ReceiptData {
-				data: receipt,
-				event_ids: vec![event_id.clone()],
-			};
-
-			if read.insert(user_id, receipt_data).is_none() {
-				*num = num.saturating_add(1);
-				if *num >= SELECT_RECEIPT_LIMIT {
-					break;
-				}
-			}
+			collected.push((user_id, count, read_receipt.json().get().to_owned()));
 		}
 
-		ReceiptMap { read }
+		build_receipt_map(collected, since, SELECT_RECEIPT_LIMIT, num)
 	}
 
 	/// Look for presence
@@ -1055,5 +1030,233 @@ impl Service {
 		// .expect("Raw::from_value always works")
 
 		to_raw_value(&pdu_json).expect("CanonicalJson is valid serde_json::Value")
+	}
+}
+
+/// Merges collected read receipts for a room into the map sent in a federation
+/// EDU, keeping at most one `ReceiptData` per user.
+///
+/// A user can have both an unthreaded and a threaded receipt pending in the
+/// same window; the federation wire format (`ReceiptMap.read`) only carries
+/// one `ReceiptData` per user, so on a clash we prefer the unthreaded receipt
+/// (matching the local `/sync` merge in `rooms::read_receipt::pack_receipts`)
+/// rather than letting whichever receipt was collected last silently win.
+fn build_receipt_map(
+	receipts: Vec<(OwnedUserId, u64, String)>,
+	since: (u64, u64),
+	limit: usize,
+	num: &AtomicUsize,
+) -> ReceiptMap {
+	let mut read = BTreeMap::<OwnedUserId, ReceiptData>::new();
+
+	for (user_id, count, read_receipt_json) in receipts {
+		if count > since.1 {
+			break;
+		}
+
+		let Ok(event) = serde_json::from_str(&read_receipt_json) else {
+			error!(%user_id, %count, %read_receipt_json, "Invalid edu event in read_receipts.");
+			continue;
+		};
+
+		let AnySyncEphemeralRoomEvent::Receipt(r) = event else {
+			error!(%user_id, %count, ?event, "Invalid event type in read_receipts");
+			continue;
+		};
+
+		let (event_id, mut receipt) = r
+			.content
+			.0
+			.into_iter()
+			.next()
+			.expect("we only use one event per read receipt");
+
+		let receipt = receipt
+			.remove(&ReceiptType::Read)
+			.expect("our read receipts always set this")
+			.remove(&user_id)
+			.expect("our read receipts always have the user here");
+
+		let is_unthreaded = matches!(receipt.thread, ReceiptThread::Unthreaded);
+		let receipt_data = ReceiptData {
+			data: receipt,
+			event_ids: vec![event_id.clone()],
+		};
+
+		match read.entry(user_id) {
+			| Entry::Vacant(e) => {
+				e.insert(receipt_data);
+				if num.fetch_add(1, Ordering::Relaxed).saturating_add(1) >= limit {
+					break;
+				}
+			},
+			| Entry::Occupied(mut e) =>
+				if is_unthreaded {
+					e.insert(receipt_data);
+				},
+		}
+	}
+
+	ReceiptMap { read }
+}
+
+#[cfg(test)]
+mod tests {
+	use std::sync::atomic::AtomicUsize;
+
+	use ruma::user_id;
+
+	use super::*;
+
+	#[test]
+	fn test_build_receipt_map_under_limit() {
+		let mut receipts = Vec::new();
+		let user_id = user_id!("@alice:example.com").to_owned();
+		let json = serde_json::json!({
+			"type": "m.receipt",
+			"content": {
+				"$event1": {
+					"m.read": {
+						"@alice:example.com": {
+							"ts": 12345
+						}
+					}
+				}
+			}
+		});
+		receipts.push((user_id, 15, json.to_string()));
+
+		let since = (10, 20);
+		let num = AtomicUsize::new(0);
+		let map = build_receipt_map(receipts, since, 100, &num);
+
+		assert_eq!(map.read.len(), 1);
+		assert_eq!(num.load(Ordering::Relaxed), 1);
+	}
+
+	#[test]
+	fn test_build_receipt_map_over_limit() {
+		let mut receipts = Vec::new();
+		for i in 1..=5 {
+			let user_id_str = format!("@user{i}:example.com");
+			let user_id = <OwnedUserId as TryFrom<&str>>::try_from(user_id_str.as_str()).unwrap();
+			let json = serde_json::json!({
+				"type": "m.receipt",
+				"content": {
+					"$event1": {
+						"m.read": {
+							&user_id_str: {
+								"ts": 12345
+							}
+						}
+					}
+				}
+			});
+			receipts.push((user_id, 10 + u64::try_from(i).unwrap(), json.to_string()));
+		}
+
+		let since = (10, 20);
+		let num = AtomicUsize::new(0);
+		// Limit to 3!
+		let map = build_receipt_map(receipts, since, 3, &num);
+
+		assert_eq!(map.read.len(), 3);
+		assert_eq!(num.load(Ordering::Relaxed), 3);
+	}
+
+	#[test]
+	fn test_build_receipt_map_unthreaded_precedence() {
+		let mut receipts = Vec::new();
+		let user_id = user_id!("@alice:example.com").to_owned();
+
+		// 1. Threaded receipt
+		let json_threaded = serde_json::json!({
+			"type": "m.receipt",
+			"content": {
+				"$event1": {
+					"m.read": {
+						"@alice:example.com": {
+							"thread_id": "$thread1",
+							"ts": 10000
+						}
+					}
+				}
+			}
+		});
+		receipts.push((user_id.clone(), 11, json_threaded.to_string()));
+
+		// 2. Unthreaded receipt
+		let json_unthreaded = serde_json::json!({
+			"type": "m.receipt",
+			"content": {
+				"$event1": {
+					"m.read": {
+						"@alice:example.com": {
+							"ts": 12345
+						}
+					}
+				}
+			}
+		});
+		receipts.push((user_id.clone(), 12, json_unthreaded.to_string()));
+
+		let since = (10, 20);
+		let num = AtomicUsize::new(0);
+		let map = build_receipt_map(receipts, since, 100, &num);
+
+		assert_eq!(map.read.len(), 1);
+		assert_eq!(num.load(Ordering::Relaxed), 1);
+
+		let data = &map.read[&user_id];
+		assert!(matches!(data.data.thread, ReceiptThread::Unthreaded));
+		assert_eq!(data.data.ts.map(|t| t.0.into()), Some(12345_u64));
+	}
+
+	#[test]
+	fn test_build_receipt_map_threaded_does_not_overwrite() {
+		let mut receipts = Vec::new();
+		let user_id = user_id!("@alice:example.com").to_owned();
+
+		// 1. Unthreaded receipt
+		let json_unthreaded = serde_json::json!({
+			"type": "m.receipt",
+			"content": {
+				"$event1": {
+					"m.read": {
+						"@alice:example.com": {
+							"ts": 12345
+						}
+					}
+				}
+			}
+		});
+		receipts.push((user_id.clone(), 11, json_unthreaded.to_string()));
+
+		// 2. Threaded receipt
+		let json_threaded = serde_json::json!({
+			"type": "m.receipt",
+			"content": {
+				"$event1": {
+					"m.read": {
+						"@alice:example.com": {
+							"thread_id": "$thread1",
+							"ts": 10000
+						}
+					}
+				}
+			}
+		});
+		receipts.push((user_id.clone(), 12, json_threaded.to_string()));
+
+		let since = (10, 20);
+		let num = AtomicUsize::new(0);
+		let map = build_receipt_map(receipts, since, 100, &num);
+
+		assert_eq!(map.read.len(), 1);
+		assert_eq!(num.load(Ordering::Relaxed), 1);
+
+		let data = &map.read[&user_id];
+		assert!(matches!(data.data.thread, ReceiptThread::Unthreaded));
+		assert_eq!(data.data.ts.map(|t| t.0.into()), Some(12345_u64));
 	}
 }
