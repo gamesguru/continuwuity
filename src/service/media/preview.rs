@@ -20,6 +20,15 @@ use super::Service;
 #[cfg(feature = "url_preview")]
 use crate::media::mxc::Mxc;
 
+#[cfg(feature = "url_preview")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum MediaType {
+	Html,
+	Image,
+	Video,
+	Audio,
+}
+
 #[derive(Serialize, Default)]
 pub struct UrlPreviewData {
 	#[serde(skip_serializing_if = "Option::is_none", rename(serialize = "og:title"))]
@@ -46,6 +55,46 @@ pub struct UrlPreviewData {
 	pub audio: Option<String>,
 	#[serde(skip_serializing_if = "Option::is_none", rename(serialize = "matrix:audio:size"))]
 	pub audio_size: Option<usize>,
+}
+
+#[cfg(all(test, feature = "url_preview"))]
+pub(super) fn parse_preview_url(input: &str) -> Result<Url> {
+	let trimmed = input.trim().trim_matches(['(', ')', '\'', '"', ',', '.']);
+	let candidate = if trimmed.contains("://") {
+		trimmed.to_owned()
+	} else {
+		format!("https://{trimmed}")
+	};
+
+	Url::parse(&candidate).map_err(|e| err!(Request(Unknown("Invalid URL: {e}"))))
+}
+
+#[cfg(feature = "url_preview")]
+pub(super) fn classify_content_type(content_type: &str) -> Option<MediaType> {
+	let content_type = content_type
+		.split(';')
+		.next()
+		.unwrap_or("")
+		.trim()
+		.to_ascii_lowercase();
+
+	match content_type.as_str() {
+		| "text/html" | "application/xhtml+xml" => Some(MediaType::Html),
+		| ct if ct.starts_with("image/") => Some(MediaType::Image),
+		| ct if ct.starts_with("video/") => Some(MediaType::Video),
+		| ct if ct.starts_with("audio/") => Some(MediaType::Audio),
+		| _ => None,
+	}
+}
+
+#[cfg(feature = "url_preview")]
+pub(super) fn apply_opengraph_dimensions(
+	mut preview_data: UrlPreviewData,
+	obj: &webpage::OpengraphObject,
+) -> UrlPreviewData {
+	preview_data.image_width = obj.properties.get("width").and_then(|v| v.parse().ok());
+	preview_data.image_height = obj.properties.get("height").and_then(|v| v.parse().ok());
+	preview_data
 }
 
 impl Service {
@@ -107,13 +156,11 @@ impl Service {
 			.to_str()
 			.map_err(|e| err!(Request(Unknown("Unknown or invalid Content-Type header: {e}"))))?;
 
-		let data = match content_type {
-			| html if html.starts_with("text/html") => self.download_html(url.as_str()).await?,
-			| img if img.starts_with("image/") => self.download_image(url.as_str(), None).await?,
-			| video if video.starts_with("video/") =>
-				self.download_video(url.as_str(), None).await?,
-			| audio if audio.starts_with("audio/") =>
-				self.download_audio(url.as_str(), None).await?,
+		let data = match classify_content_type(content_type) {
+			| Some(MediaType::Html) => self.download_html(url.as_str()).await?,
+			| Some(MediaType::Image) => self.download_image(url.as_str(), None).await?,
+			| Some(MediaType::Video) => self.download_video(url.as_str(), None).await?,
+			| Some(MediaType::Audio) => self.download_audio(url.as_str(), None).await?,
 			| _ => return Err!(Request(Unknown("Unsupported Content-Type"))),
 		};
 
@@ -292,6 +339,7 @@ impl Service {
 		let mut preview_data = UrlPreviewData::default();
 
 		if let Some(obj) = html.opengraph.images.first() {
+			preview_data = apply_opengraph_dimensions(preview_data, obj);
 			preview_data = self.download_image(&obj.url, Some(preview_data)).await?;
 		}
 
