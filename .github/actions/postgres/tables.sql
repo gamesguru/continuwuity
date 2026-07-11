@@ -48,8 +48,30 @@ ON run_details (run_id, test_name);
 CREATE INDEX IF NOT EXISTS idx_run_details_run_id ON run_details (run_id);
 CREATE INDEX IF NOT EXISTS idx_runs_commit_hash ON runs (commit_hash);
 
--- Combine Regressions View: Compares directly against the most recent 'main' baseline
+-- Combine Regressions View: compares each individual run against the UNION of "best"
+-- statuses (pass > skip > fail) seen across every arch's most recent 'main' run for the
+-- same os. This stops one arch's baseline flake/lag from hiding a real fix or regression
+-- that's genuinely new on another arch, while still letting a per-arch run be flagged as
+-- a regression if it fails a test that passed somewhere on main.
 CREATE OR REPLACE VIEW v_run_regressions AS
+WITH baseline_selection AS (
+    -- latest run per (arch, os) on main, so each arch contributes its own most recent result
+    SELECT DISTINCT ON (arch, os) id, os
+    FROM runs
+    WHERE (branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream')
+        OR version_string LIKE '%main%')
+    ORDER BY arch, os, run_date DESC
+),
+baseline_status AS (
+    SELECT
+        bsel.os,
+        rd.test_name,
+        bool_or(rd.status = 'pass') AS any_pass,
+        bool_or(rd.status = 'skip') AS any_skip
+    FROM baseline_selection bsel
+    JOIN run_details rd ON rd.run_id = bsel.id
+    GROUP BY bsel.os, rd.test_name
+)
 SELECT
     r.id,
     r.version_string,
@@ -67,35 +89,35 @@ SELECT
     r.n_pass,
     r.n_fail,
     r.n_skip,
-    (SELECT COUNT(*) FROM run_details WHERE run_id = dbr.default_baseline_run_id) as baseline_total,
+    baseline_totals.baseline_total,
     counts.run_total,
-    (counts.run_total - (SELECT COUNT(*) FROM run_details WHERE run_id = dbr.default_baseline_run_id)) as diff_total,
-    -- Calculate deltas vs Default Baseline
+    (counts.run_total - baseline_totals.baseline_total) as diff_total,
+    -- Calculate deltas vs the unioned baseline
     counts.new_pass,
     counts.new_skip,
     counts.new_fail,
     counts.new_failures_list,
     counts.new_passes_list
 FROM runs r
-CROSS JOIN LATERAL (
-    SELECT id AS default_baseline_run_id FROM runs
-    WHERE (branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream')
-    OR version_string LIKE '%main%')
-    AND arch IS NOT DISTINCT FROM r.arch
-    AND os IS NOT DISTINCT FROM r.os
-    ORDER BY run_date DESC
-    LIMIT 1
-) dbr
+LEFT JOIN LATERAL (
+    SELECT COUNT(*) AS baseline_total
+    FROM baseline_status bs
+    WHERE bs.os IS NOT DISTINCT FROM r.os
+) baseline_totals ON TRUE
 LEFT JOIN LATERAL (
     SELECT
         COUNT(*) as run_total,
-        COUNT(*) FILTER (WHERE rd.status = 'pass' AND mb.status IS NOT NULL AND mb.status != 'pass') as new_pass,
-        COUNT(*) FILTER (WHERE rd.status = 'skip' AND mb.status IS NOT NULL AND mb.status != 'skip') as new_skip,
-        COUNT(*) FILTER (WHERE rd.status = 'fail' AND mb.status IS NOT NULL AND mb.status != 'fail') as new_fail,
-        STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'fail' AND mb.status IS NOT NULL AND mb.status != 'fail') as new_failures_list,
-        STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'pass' AND mb.status IS NOT NULL AND mb.status != 'pass') as new_passes_list
+        COUNT(*) FILTER (WHERE rd.status = 'pass' AND eb.status IS NOT NULL AND eb.status != 'pass') as new_pass,
+        COUNT(*) FILTER (WHERE rd.status = 'skip' AND eb.status IS NOT NULL AND eb.status != 'skip') as new_skip,
+        COUNT(*) FILTER (WHERE rd.status = 'fail' AND eb.status IS NOT NULL AND eb.status != 'fail') as new_fail,
+        STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'fail' AND eb.status IS NOT NULL AND eb.status != 'fail') as new_failures_list,
+        STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'pass' AND eb.status IS NOT NULL AND eb.status != 'pass') as new_passes_list
     FROM run_details rd
-    LEFT JOIN run_details mb ON mb.test_name = rd.test_name AND mb.run_id = dbr.default_baseline_run_id
+    LEFT JOIN LATERAL (
+        SELECT CASE WHEN bs.any_pass THEN 'pass' WHEN bs.any_skip THEN 'skip' ELSE 'fail' END AS status
+        FROM baseline_status bs
+        WHERE bs.os IS NOT DISTINCT FROM r.os AND bs.test_name = rd.test_name
+    ) eb ON TRUE
     WHERE rd.run_id = r.id
 ) counts ON TRUE
 WHERE r.n_pass > 0 AND counts.run_total > 0;
