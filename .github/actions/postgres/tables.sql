@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS runs (
     n_pass integer DEFAULT 0,
     n_skip integer DEFAULT 0,
     n_fail integer DEFAULT 0,
-    room_version text
+    room_version text,
+    github_run_id bigint
 );
 
 -- Unique index to prevent duplicate machine reports

@@ -76,6 +76,7 @@ SELECT
     regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g') AS features,
     r.os,
     r.arch,
+    r.github_run_id,
     {columns_tail}
 FROM
     recent_runs r

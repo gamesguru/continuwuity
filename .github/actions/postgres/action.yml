@@ -64,6 +64,7 @@ runs:
         PASS=$(echo "$RUN_META" | jq -r '.pass // 0')
         FAIL=$(echo "$RUN_META" | jq -r '.fail // 0')
         SKIP=$(echo "$RUN_META" | jq -r '.skip // 0')
+        GH_RUN_ID=$(echo "$RUN_META" | jq -r '.github_run_id // "NULL"')
         RUN_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
         if [ -z "$COMMIT" ] || [ ! -f "$RESULTS_FILE" ]; then
@@ -74,8 +75,8 @@ runs:
         echo "-> Direct ingest for $COMMIT ($ARCH/$OS/v$ROOM_VERSION)..."
         (
           cat <<SQL
-        INSERT INTO runs (run_date, commit_hash, branch, arch, os, profile, n_pass, n_skip, n_fail, room_version, features, version_string)
-        VALUES ('${RUN_DATE}'::timestamptz, '${COMMIT}', '${BRANCH}', '${ARCH}', '${OS}', '${PROFILE}', ${PASS}, ${SKIP}, ${FAIL}, '${ROOM_VERSION}', '${FEATURES}', '${VERSION}')
+        INSERT INTO runs (run_date, commit_hash, branch, arch, os, profile, n_pass, n_skip, n_fail, room_version, features, version_string, github_run_id)
+        VALUES ('${RUN_DATE}'::timestamptz, '${COMMIT}', '${BRANCH}', '${ARCH}', '${OS}', '${PROFILE}', ${PASS}, ${SKIP}, ${FAIL}, '${ROOM_VERSION}', '${FEATURES}', '${VERSION}', ${GH_RUN_ID})
         ON CONFLICT (commit_hash, run_date, arch, os, profile, room_version) DO NOTHING;
         SQL
 
