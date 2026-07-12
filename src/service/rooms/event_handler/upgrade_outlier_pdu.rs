@@ -240,27 +240,9 @@ where
 					let event_id = state.get(&shortstatekey)?;
 					self.services.timeline.get_pdu(event_id).await.ok()
 				},
-				| StateAtEvent::Compressed(compressed) => {
-					let shortstatekey = self
-						.services
-						.short
-						.get_shortstatekey(&state_ty, &state_key)
-						.await
-						.ok()?;
-					let event_bytes = compressed
-						.iter()
-						.find(|bytes| bytes.starts_with(&shortstatekey.to_be_bytes()))?;
-					let mut id_bytes = [0_u8; 8];
-					id_bytes.copy_from_slice(&event_bytes[8..16]);
-					let shorteventid = u64::from_be_bytes(id_bytes);
-					let event_id = self
-						.services
-						.short
-						.get_eventid_from_short::<OwnedEventId>(shorteventid)
-						.await
-						.ok()?;
-					self.services.timeline.get_pdu(&event_id).await.ok()
-				},
+				| StateAtEvent::Compressed(compressed) =>
+					self.find_pdu_in_compressed_state(&state_ty, &state_key, compressed)
+						.await,
 				| StateAtEvent::FastForward(shortstatehash) => {
 					let shorteventid = self
 						.services

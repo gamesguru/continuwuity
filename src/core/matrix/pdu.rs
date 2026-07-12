@@ -181,6 +181,12 @@ impl rezzy::RawEvent for Pdu {
 	/// `Pdu::origin_server_ts` (`UInt`) → milliseconds since epoch
 	#[inline]
 	fn raw_origin_server_ts(&self) -> u64 { self.origin_server_ts.into() }
+
+	#[inline]
+	fn raw_rejected(&self) -> bool { self.rejected }
+
+	#[inline]
+	fn raw_soft_fail(&self) -> bool { false }
 }
 
 /// Direct [`DagNode`](rezzy::DagNode) implementation on `Pdu`, enabling
