@@ -56,14 +56,9 @@ use super::{Destination, EduBuf, EduVec, Msg, SendingEvent, Service, data::Queue
 
 #[derive(Debug)]
 enum TransactionStatus {
-	Running {
-		pending_flush: bool,
-	},
+	Running,
 	Failed(u32, Instant), // number of times failed, time of last failure
-	Retrying {
-		tries: u32,
-		pending_flush: bool,
-	},
+	Retrying(u32),        // number of times failed
 }
 
 type SendingError = (Destination, Error);
@@ -123,15 +118,22 @@ impl Service {
 			.expect("Missing channel for sender worker");
 
 		while !receiver.is_closed() {
-			tokio::select! {
-				Some(response) = futures.next() => {
-					self.handle_response(response, futures, statuses).await;
-				},
-				request = receiver.recv_async() => match request {
-					Ok(request) => self.handle_request(request, futures, statuses).await,
-					Err(_) => return,
-				},
+			let has_space = futures.len() < 128;
+
+			if has_space {
+				tokio::select! {
+					Some(response) = futures.next() => {
+						self.handle_response(response, futures, statuses).await;
+					},
+					request = receiver.recv_async() => match request {
+						Ok(request) => self.handle_request(request, futures, statuses).await,
+						Err(_) => return,
+					},
+				}
+			} else if let Some(response) = futures.next().await {
+				self.handle_response(response, futures, statuses).await;
 			}
+			tokio::task::yield_now().await;
 		}
 	}
 
@@ -144,27 +146,69 @@ impl Service {
 	) {
 		match response {
 			| Ok(dest) => self.handle_response_ok(&dest, futures, statuses).await,
-			| Err((dest, e)) => Self::handle_response_err(dest, statuses, &e),
+			| Err((dest, e)) => self.handle_response_err(dest, statuses, &e),
 		}
 	}
 
-	fn handle_response_err(dest: Destination, statuses: &mut CurTransactionStatus, e: &Error) {
+	fn handle_response_err(
+		&self,
+		dest: Destination,
+		statuses: &mut CurTransactionStatus,
+		e: &Error,
+	) {
 		debug!(dest = ?dest, "{e:?}");
 		if e.status_code().is_client_error() {
 			statuses.remove(&dest);
 			return;
 		}
 
-		statuses.entry(dest).and_modify(|e| {
+		let mut tries: u32 = 1;
+		statuses.entry(dest.clone()).and_modify(|e| {
 			*e = match e {
-				| TransactionStatus::Running { .. } =>
-					TransactionStatus::Failed(1, Instant::now()),
-				| &mut TransactionStatus::Retrying { tries, .. } =>
-					TransactionStatus::Failed(tries.saturating_add(1), Instant::now()),
+				| TransactionStatus::Running => TransactionStatus::Failed(1, Instant::now()),
+				| &mut TransactionStatus::Retrying(ref n) => {
+					tries = n.saturating_add(1);
+					TransactionStatus::Failed(tries, Instant::now())
+				},
 				| TransactionStatus::Failed(..) => {
 					panic!("Request that was not even running failed?!")
 				},
 			}
+		});
+
+		// Schedule a delayed retry so EDU-only destinations (e.g. to-device
+		// messages) are retried after backoff even when no new PDUs arrive.
+		let max = self.server.config.sender_retry_backoff_limit;
+		let delay_secs = 2_u64
+			.saturating_mul(
+				1_u64
+					.checked_shl(tries.saturating_sub(1))
+					.unwrap_or(u64::MAX),
+			)
+			.min(max);
+
+		self.reschedule_flush(dest, Duration::from_secs(delay_secs));
+	}
+
+	/// Schedule a Flush for `dest` after `delay`.
+	/// This keeps EDU-only destinations alive through backoff periods.
+	fn reschedule_flush(&self, dest: Destination, delay: Duration) {
+		let sender = self
+			.channels
+			.get(self.shard_id(&dest))
+			.expect("channel")
+			.0
+			.clone();
+
+		self.server.runtime().spawn(async move {
+			tokio::time::sleep(delay).await;
+			sender
+				.send(Msg {
+					dest,
+					event: SendingEvent::Flush,
+					queue_id: Vec::new(),
+				})
+				.ok();
 		});
 	}
 
@@ -178,14 +222,6 @@ impl Service {
 		let _cork = self.db.db.cork();
 		self.db.delete_all_active_requests_for(dest).await;
 
-		let pending_flush = matches!(
-			statuses.get(dest),
-			Some(
-				&TransactionStatus::Running { pending_flush: true }
-					| &TransactionStatus::Retrying { pending_flush: true, .. },
-			)
-		);
-
 		// Find events that have been added since starting the last request
 		let new_events = self
 			.db
@@ -196,45 +232,10 @@ impl Service {
 
 		// Insert any pdus we found
 		if !new_events.is_empty() {
-			statuses.insert(dest.clone(), TransactionStatus::Running { pending_flush: false });
 			self.db.mark_as_active(new_events.iter());
 
-			let mut new_events_vec: Vec<SendingEvent> =
-				new_events.into_iter().map(at!(1)).collect();
-
-			if pending_flush {
-				if let Destination::Federation(server_name) = dest {
-					if let Ok((select_edus, last_count)) = self.select_edus(server_name).await {
-						debug_assert!(select_edus.len() <= EDU_LIMIT, "exceeded edus limit");
-						let select_edus = select_edus.into_iter().map(SendingEvent::Edu);
-						new_events_vec.extend(select_edus);
-						self.db.set_latest_educount(server_name, last_count);
-					}
-				}
-			}
-
+			let new_events_vec = new_events.into_iter().map(at!(1)).collect();
 			futures.push(self.send_events(dest.clone(), new_events_vec));
-		} else if pending_flush {
-			if let Destination::Federation(server_name) = dest {
-				if let Ok((select_edus, last_count)) = self.select_edus(server_name).await {
-					if !select_edus.is_empty() {
-						statuses.insert(dest.clone(), TransactionStatus::Running {
-							pending_flush: false,
-						});
-						debug_assert!(select_edus.len() <= EDU_LIMIT, "exceeded edus limit");
-						let select_edus_vec: Vec<SendingEvent> =
-							select_edus.into_iter().map(SendingEvent::Edu).collect();
-						self.db.set_latest_educount(server_name, last_count);
-						futures.push(self.send_events(dest.clone(), select_edus_vec));
-					} else {
-						statuses.remove(dest);
-					}
-				} else {
-					statuses.remove(dest);
-				}
-			} else {
-				statuses.remove(dest);
-			}
 		} else {
 			statuses.remove(dest);
 		}
@@ -321,8 +322,7 @@ impl Service {
 
 		for (dest, events) in txns {
 			if self.server.config.startup_netburst && !events.is_empty() {
-				statuses
-					.insert(dest.clone(), TransactionStatus::Running { pending_flush: false });
+				statuses.insert(dest.clone(), TransactionStatus::Running);
 				futures.push(self.send_events(dest.clone(), events));
 			}
 		}
@@ -397,7 +397,7 @@ impl Service {
 			.and_modify(|e| match e {
 				TransactionStatus::Failed(tries, time) => {
 					// Fail if a request has failed recently (exponential backoff)
-					let min = self.server.config.sender_timeout;
+					let min = 2;
 					let max = self.server.config.sender_retry_backoff_limit;
 					if continue_exponential_backoff_secs(min, max, time.elapsed(), *tries)
 						&& !matches!(dest, Destination::Appservice(_))
@@ -405,16 +405,14 @@ impl Service {
 						allow = false;
 					} else {
 						retry = true;
-						*e = TransactionStatus::Retrying { tries: *tries, pending_flush: false };
+						*e = TransactionStatus::Retrying(*tries);
 					}
 				},
-				TransactionStatus::Running { pending_flush }
-				| TransactionStatus::Retrying { pending_flush, .. } => {
-					*pending_flush = true;
+				TransactionStatus::Running | TransactionStatus::Retrying(_) => {
 					allow = false; // already running
 				},
 			})
-			.or_insert(TransactionStatus::Running { pending_flush: false });
+			.or_insert(TransactionStatus::Running);
 
 		Ok((allow, retry))
 	}
