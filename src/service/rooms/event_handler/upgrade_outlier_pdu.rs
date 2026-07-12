@@ -24,6 +24,7 @@ pub(super) async fn upgrade_outlier_to_timeline_pdu<Pdu>(
 	create_event: &Pdu,
 	origin: &ServerName,
 	room_id: &RoomId,
+	is_timeline_event: bool,
 ) -> Result<Option<RawPduId>>
 where
 	Pdu: Event + Send + Sync,
@@ -132,56 +133,60 @@ where
 		return Ok(Some(pduid));
 	}
 
-	debug!(
-		event_id = %incoming_pdu.event_id,
-		"Gathering auth events"
-	);
-	let auth_events = self
-		.services
-		.state
-		.get_auth_events(
-			room_id,
-			incoming_pdu.kind(),
-			incoming_pdu.sender(),
-			incoming_pdu.state_key(),
-			incoming_pdu.content(),
+	let mut soft_fail = if is_timeline_event {
+		debug!(
+			event_id = %incoming_pdu.event_id,
+			"Gathering auth events"
+		);
+		let auth_events = self
+			.services
+			.state
+			.get_auth_events(
+				room_id,
+				incoming_pdu.kind(),
+				incoming_pdu.sender(),
+				incoming_pdu.state_key(),
+				incoming_pdu.content(),
+				&room_version,
+			)
+			.await?;
+
+		let state_fetch = |k: &StateEventType, s: &str| {
+			let key = k.with_state_key(s);
+			ready(auth_events.get(&key).map(ToOwned::to_owned))
+		};
+
+		debug!(
+			event_id = %incoming_pdu.event_id,
+			"Running auth check with claimed state auth"
+		);
+		let auth_check = state_res::event_auth::auth_check(
 			&room_version,
+			&incoming_pdu,
+			None, // third-party invite
+			state_fetch,
+			create_event.as_pdu(),
 		)
-		.await?;
+		.await
+		.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
 
-	let state_fetch = |k: &StateEventType, s: &str| {
-		let key = k.with_state_key(s);
-		ready(auth_events.get(&key).map(ToOwned::to_owned))
-	};
-
-	debug!(
-		event_id = %incoming_pdu.event_id,
-		"Running auth check with claimed state auth"
-	);
-	let auth_check = state_res::event_auth::auth_check(
-		&room_version,
-		&incoming_pdu,
-		None, // third-party invite
-		state_fetch,
-		create_event.as_pdu(),
-	)
-	.await
-	.map_err(|e| err!(Request(Forbidden("Auth check failed: {e:?}"))))?;
-
-	// Soft fail check before doing state res
-	debug!(
-		event_id = %incoming_pdu.event_id,
-		"Performing soft-fail check"
-	);
-	let mut soft_fail = match (auth_check, incoming_pdu.redacts_id(&room_version_id)) {
-		| (false, _) => true,
-		| (true, None) => false,
-		| (true, Some(redact_id)) =>
-			!self
-				.services
-				.state_accessor
-				.user_can_redact(&redact_id, incoming_pdu.sender(), room_id, true)
-				.await?,
+		// Soft fail check before doing state res
+		debug!(
+			event_id = %incoming_pdu.event_id,
+			"Performing soft-fail check"
+		);
+		match (auth_check, incoming_pdu.redacts_id(&room_version_id)) {
+			| (false, _) => true,
+			| (true, None) => false,
+			| (true, Some(redact_id)) =>
+				!self
+					.services
+					.state_accessor
+					.user_can_redact(&redact_id, incoming_pdu.sender(), room_id, true)
+					.await?,
+		}
+	} else {
+		false
 	};
 
 	// Now we calculate the set of extremities this room has after the incoming
