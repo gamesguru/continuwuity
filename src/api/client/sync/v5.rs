@@ -317,6 +317,17 @@ where
 			| Some(false) => all_joined_rooms.clone().collect(),
 		};
 
+		let mut active_rooms_counts = Vec::with_capacity(active_rooms.len());
+		for room_id in active_rooms {
+			let count = match services.rooms.timeline.last_timeline_count(room_id).await {
+				| Ok(PduCount::Normal(c)) => c,
+				| _ => 0,
+			};
+			active_rooms_counts.push((room_id, count));
+		}
+		active_rooms_counts.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+		let active_rooms: Vec<_> = active_rooms_counts.into_iter().map(|(r, _)| r).collect();
+
 		let active_rooms = match list.filters.as_ref().map(|f| &f.not_room_types) {
 			| None => active_rooms,
 			| Some(filter) if filter.is_empty() => active_rooms,

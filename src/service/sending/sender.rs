@@ -1071,11 +1071,12 @@ fn build_receipt_map(
 			.next()
 			.expect("we only use one event per read receipt");
 
-		let receipt = receipt
-			.remove(&ReceiptType::Read)
-			.expect("our read receipts always set this")
-			.remove(&user_id)
-			.expect("our read receipts always have the user here");
+		let Some(mut users) = receipt.remove(&ReceiptType::Read) else {
+			continue;
+		};
+		let Some(receipt) = users.remove(&user_id) else {
+			continue;
+		};
 
 		let is_unthreaded = matches!(receipt.thread, ReceiptThread::Unthreaded);
 		let receipt_data = ReceiptData {
