@@ -863,7 +863,7 @@ async fn handle_edu_direct_to_device(
 	// Check if this is a new transaction id
 	if services
 		.transactions
-		.get_client_txn(sender, None, message_id)
+		.get_client_txn(sender, None, None, message_id)
 		.await
 		.is_ok()
 	{
@@ -890,7 +890,7 @@ async fn handle_edu_direct_to_device(
 	// Save transaction id with empty data
 	services
 		.transactions
-		.add_client_txnid(sender, None, message_id, &[]);
+		.add_client_txnid(sender, None, None, message_id, &[]);
 }
 
 async fn handle_edu_direct_to_device_user<Event: Send + Sync>(
