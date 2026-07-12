@@ -237,6 +237,16 @@ impl Service {
 			let new_events_vec = new_events.into_iter().map(at!(1)).collect();
 			futures.push(self.send_events(dest.clone(), new_events_vec));
 		} else {
+			if let Destination::Federation(server_name) = dest {
+				if let Ok(since_upper) = self.services.globals.current_count() {
+					let since = self.db.get_latest_educount(server_name).await;
+					if since < since_upper {
+						statuses.remove(dest);
+						self.reschedule_flush(dest.clone(), Duration::from_millis(0));
+						return;
+					}
+				}
+			}
 			statuses.remove(dest);
 		}
 	}
