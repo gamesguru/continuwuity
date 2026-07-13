@@ -489,6 +489,7 @@ pub(crate) async fn build_sync_events(
 	// because build_device_list_updates only runs for joined rooms and would
 	// never see the user's own leave event.
 	if last_sync_end_count.is_some() {
+		let mut left_candidates: HashSet<OwnedUserId> = HashSet::new();
 		for room_id in left_rooms.keys() {
 			let members: Vec<OwnedUserId> = services
 				.rooms
@@ -498,18 +499,21 @@ pub(crate) async fn build_sync_events(
 				.collect()
 				.await;
 
-			for member in members {
-				if member == syncing_user {
-					continue;
-				}
-
-				if !device_list_updates.left.contains(&member)
-					&& !shares_a_room(services, syncing_user, &member, None).await
-				{
-					device_list_updates.left.push(member);
-				}
-			}
+			left_candidates.extend(
+				members
+					.into_iter()
+					.filter(|member| member != syncing_user && !device_list_updates.left.contains(member)),
+			);
 		}
+
+		let newly_left: Vec<OwnedUserId> = futures::stream::iter(left_candidates)
+			.broad_filter_map(|member| async move {
+				(!shares_a_room(services, syncing_user, &member, None).await).then_some(member)
+			})
+			.collect()
+			.await;
+
+		device_list_updates.left.extend(newly_left);
 	}
 
 	let mut presence_updates = presence_updates.unwrap_or_default();
