@@ -107,7 +107,7 @@ echo "→ Streaming last $LIMIT run summaries..."
         SELECT
           (j->>'run_date')::timestamptz, (j->>'commit_hash'), (j->>'upstream_commit'), (j->>'branch'),
           (j->>'author_name'), (j->>'actor'), (j->>'provider'), NULLIF(j->>'arch', ''), NULLIF(j->>'os', ''),
-          (j->>'version_string'), COALESCE(regexp_replace(btrim(j->>'features', ' ,'), '[,\s]+', ' ', 'g'), ''), (j->>'profile'), (j->>'binary_sha256'),
+          (j->>'version_string'), COALESCE(btrim(regexp_replace(j->>'features', '[,\s]+', ' ', 'g'), ' ,'), ''), (j->>'profile'), (j->>'binary_sha256'),
           (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int, (j->>'room_version')
         FROM b ON CONFLICT (commit_hash, arch, os, profile, room_version, features) DO NOTHING;"
 	echo "COMMIT;"
