@@ -33,22 +33,6 @@ echo "→ Streaming last $LIMIT run summaries..."
         FROM b ON CONFLICT (commit_hash, run_date, arch, os, profile, room_version, features) DO NOTHING;"
 ) | psql_remote
 
-# Find which runs already have details (to skip re-ingesting)
-echo "→ Checking which runs already have details..."
-EXISTING_KEYS=$(
-	ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$SSH_TARGET" "psql -U git c10y -t -A" <<'SQL'
-SELECT r.commit_hash || '|' || COALESCE(r.arch,'') || '|' || COALESCE(r.os,'') || '|' || COALESCE(r.profile,'') || '|' || COALESCE(r.room_version,'') || '|' || COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '')
-FROM runs r
-WHERE r.id >= (SELECT GREATEST(MAX(id) - 200, 0) FROM runs)
-  AND EXISTS (SELECT 1 FROM run_details rd WHERE rd.run_id = r.id LIMIT 1);
-SQL
-)
-
-declare -A HAS_DETAILS=()
-while IFS= read -r key; do
-	[[ -n "$key" ]] && HAS_DETAILS["$key"]=1
-done <<<"$EXISTING_KEYS"
-
 # Pre-cache git tree for fast existence checks
 ALL_FILES=$(git ls-tree -r FETCH_HEAD:runs_data --name-only || true)
 
@@ -58,6 +42,30 @@ trap 'rm -f "$TMPMANIFEST"' EXIT
 git show "FETCH_HEAD:runs.jsonl" | tail -n "$LIMIT" |
 	jq -r '[.commit_hash, (.arch // ""), (.os // ""), (.profile // ""), (.room_version // ""), ((.features // "") | gsub("[,\\s]+"; " ") | gsub("^ | $"; ""))] | @tsv' \
 		>"$TMPMANIFEST"
+
+# Find which of these exact $LIMIT runs already have details (to skip re-ingesting).
+# Scoped to the commit hashes we're actually loading, not an id-range guess — id order
+# doesn't track runs.jsonl's chronological order (e.g. after a full historical rebuild).
+echo "→ Checking which of the loaded runs already have details..."
+EXISTING_KEYS=$(
+	(
+		echo "CREATE TEMP TABLE m (commit_hash text);"
+		printf '%s\n' "\copy m FROM STDIN csv quote e'\x01' delimiter e'\x02';"
+		cut -f1 "$TMPMANIFEST" | sort -u
+		echo "\."
+		cat <<'SQL'
+SELECT r.commit_hash || '|' || COALESCE(r.arch,'') || '|' || COALESCE(r.os,'') || '|' || COALESCE(r.profile,'') || '|' || COALESCE(r.room_version,'') || '|' || COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '')
+FROM runs r
+JOIN m ON m.commit_hash = r.commit_hash
+WHERE EXISTS (SELECT 1 FROM run_details rd WHERE rd.run_id = r.id LIMIT 1);
+SQL
+	) | ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$SSH_TARGET" "psql -U git c10y -t -A"
+)
+
+declare -A HAS_DETAILS=()
+while IFS= read -r key; do
+	[[ -n "$key" ]] && HAS_DETAILS["$key"]=1
+done <<<"$EXISTING_KEYS"
 
 NEED=0
 SKIP=0
