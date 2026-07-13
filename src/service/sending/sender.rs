@@ -5,7 +5,7 @@ use std::{
 		Arc,
 		atomic::{AtomicU64, AtomicUsize, Ordering},
 	},
-	time::{Duration, Instant},
+	time::{Duration, Instant, SystemTime},
 };
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -32,6 +32,7 @@ use ruma::{
 	RoomId, RoomVersionId, ServerName, UInt,
 	api::{
 		appservice::event::push_events::v1::EphemeralData,
+		client::error::{ErrorKind, RetryAfter},
 		federation::transactions::{
 			edu::{
 				DeviceListUpdateContent, Edu, PresenceContent, PresenceUpdate, ReceiptContent,
@@ -183,16 +184,22 @@ impl Service {
 
 		// Schedule a delayed retry so EDU-only destinations (e.g. to-device
 		// messages) are retried after backoff even when no new PDUs arrive.
+		// If the remote gave us an explicit M_LIMIT_EXCEEDED retry_after, honor it
+		// instead of our own exponential backoff.
 		let max = self.server.config.sender_retry_backoff_limit;
-		let delay_secs = 2_u64
-			.saturating_mul(
-				1_u64
-					.checked_shl(tries.saturating_sub(1))
-					.unwrap_or(u64::MAX),
+		let delay = retry_after_delay(e).unwrap_or_else(|| {
+			Duration::from_secs(
+				2_u64
+					.saturating_mul(
+						1_u64
+							.checked_shl(tries.saturating_sub(1))
+							.unwrap_or(u64::MAX),
+					)
+					.min(max),
 			)
-			.min(max);
+		});
 
-		self.reschedule_flush(dest, Duration::from_secs(delay_secs));
+		self.reschedule_flush(dest, delay);
 	}
 
 	/// Schedule a Flush for `dest` after `delay`.
@@ -1067,6 +1074,25 @@ impl Service {
 		// .expect("Raw::from_value always works")
 
 		to_raw_value(&pdu_json).expect("CanonicalJson is valid serde_json::Value")
+	}
+}
+
+/// Extracts the server-provided retry delay from an M_LIMIT_EXCEEDED
+/// response, if present, so we back off at least as long as the remote asked
+/// rather than only our own exponential schedule.
+fn retry_after_delay(e: &Error) -> Option<Duration> {
+	let Error::Federation(_, fed_err) = e else {
+		return None;
+	};
+
+	let ErrorKind::LimitExceeded { retry_after: Some(retry_after) } = fed_err.error_kind()?
+	else {
+		return None;
+	};
+
+	match retry_after {
+		| RetryAfter::Delay(d) => Some(*d),
+		| RetryAfter::DateTime(t) => t.duration_since(SystemTime::now()).ok(),
 	}
 }
 

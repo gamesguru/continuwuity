@@ -339,7 +339,11 @@ where
 			.widen_then(10, async |room_id| {
 				let count = match services.rooms.timeline.last_timeline_count(room_id).await {
 					| Ok(PduCount::Normal(c)) => c,
-					| _ => 0,
+					| Ok(_) => 0,
+					| Err(err) => {
+						warn!("Failed to fetch timeline count for {room_id}: {err}");
+						0
+					},
 				};
 				(room_id, count)
 			})
