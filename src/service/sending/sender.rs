@@ -56,6 +56,7 @@ enum TransactionStatus {
 
 #[derive(Clone, Debug, serde::Serialize)]
 struct StateHashInfo {
+	algorithm: String,
 	before: String,
 	after: String,
 }
@@ -94,7 +95,7 @@ impl ruma::api::OutgoingRequest for Msc4500SendTransactionRequest {
 		if let Some(obj) = json.as_object_mut() {
 			if !self.state_hashes.is_empty() {
 				let state_hashes_val = serde_json::to_value(self.state_hashes).unwrap();
-				obj.insert("state_hashes".to_owned(), state_hashes_val);
+				obj.insert("tk.nutra.msc4500.state_hashes".to_owned(), state_hashes_val);
 			}
 		}
 
@@ -175,6 +176,7 @@ async fn compute_state_hash_for_pdu(
 	}
 
 	Some(StateHashInfo {
+		algorithm: "lthash16".to_owned(),
 		before: before_digest,
 		after: after_digest,
 	})

@@ -127,6 +127,12 @@ i.e. the same resolved state the server would use to authorize the PDU. The
 event; otherwise `after` equals `before`. If a server does not know about a PDU
 in the given `prev_events`, they shall omit it entirely from the dictionary.
 
+- `algorithm`: The hash algorithm family used for this entry. Currently the
+  only defined value is `"lthash16"`. Receivers that encounter an unrecognized
+  `algorithm` value MUST silently skip validation for that PDU entry rather
+  than emitting a mismatch alarm, matching the behaviour of partial-state
+  deferral. This field enables forward compatibility if a future revision
+  introduces a different XOF or lane width.
 - `before`: The 32-byte digest of the room state evaluated exactly at the given
   PDU's `prev_events`, excluding and preceding the given event.
 - `after`: The 32-byte digest of the room state after the current PDU is
@@ -136,6 +142,12 @@ in the given `prev_events`, they shall omit it entirely from the dictionary.
 - `n_after`: An unsigned integer representing the exact number of elements in
   the room's resolved state map at the `after` DAG point (identical to
   `n_before` for non-state events).
+
+A server that cannot compute the resolved state at a PDU's position — due to
+operating under Partial State (MSC3706), missing ancestor events, or stored
+accumulators it declines to backfill — MUST omit that PDU's entry rather than
+emit a guess. An absent `state_hashes` dictionary and an empty one are
+equivalent; both indicate the sender made no assertions.
 
 ```json
 {
@@ -153,6 +165,7 @@ in the given `prev_events`, they shall omit it entirely from the dictionary.
     ],
     "state_hashes": {
         "$sample_pduid_abc123def456": {
+            "algorithm": "lthash16",
             "before": "a85dfe1d480705482f37d582ffa27611117b577f8734532a5a6379bc666b2104",
             "after": "a85dfe1d480705482f37d582ffa27611117b577f8734532a5a6379bc666b2104",
             "n_before": 2,
@@ -195,13 +208,18 @@ backwards-compatible.
     "pdus": {
         "$sample_pduid_abc123def456": {
             "state_hash_mismatch": {
-                "expected_after": "b85dfe1d480705482f37d582ffa27611117b577f8734532a5a6379bc666b2104",
-                "received_after": "a85dfe1d480705482f37d582ffa27611117b577f8734532a5a6379bc666b2104"
+                "algorithm": "lthash16",
+                "digest": "b85dfe1d480705482f37d582ffa27611117b577f8734532a5a6379bc666b2104"
             }
         }
     }
 }
 ```
+
+The `digest` field is the receiver's locally-computed `after` digest at that
+event, encoded as 64 lowercase hex characters. The sender can use this to
+determine the exact state divergence without a separate `/state_accumulator`
+round-trip.
 
 Mismatch handling SHOULD be deduplicated per room (i.e. the first detection
 triggers logging/bisection, but subsequent mismatching transactions within a
@@ -228,6 +246,11 @@ implementation detail.
 
 `GET /_matrix/federation/v1/state_accumulator/{roomId}?event_id={eventId}`
 
+> **Unstable implementations** MUST serve this endpoint at
+> `/_matrix/federation/unstable/tk.nutra.msc4500/state_accumulator/{roomId}`
+> until this proposal is accepted into the specification. The stable `v1` path
+> above is the normative name to be registered upon acceptance.
+
 Returns the raw lattice for the room state immediately **after** `eventId` is
 applied (the `after` accumulator of that PDU).
 
@@ -249,8 +272,12 @@ with, and MUST be discarded.
 
 **Errors:** `404 M_NOT_FOUND` if the server does not hold resolved PDU state at
 that event (unknown event, outlier, purged history, bug). `403 M_FORBIDDEN` if
-the requesting server is not a participant in the room or is denied by
-`m.room.server_acl` — identical semantics to other federation endpoints.
+the requesting server is not a current participant in the room, is denied by
+`m.room.server_acl`, or is querying a historical point outside its own
+membership epochs — mirroring the access control semantics of
+`GET /_matrix/federation/v1/state_ids/{roomId}`. A server cannot have
+locally-computed accumulators for epochs it was not present in, so this
+restriction has no cost for the honest use case.
 
 **Rate limiting:** Servers SHOULD rate-limit per peer per room. Bisection
 requires `O(log ΔD)` sequential network calls, so a short burst allowance (e.g.
@@ -285,16 +312,28 @@ against the sender's full accumulator lattice.
 The delta lattice tells you _that_ you've diverged and lets you **bisect** to
 _where_. Because both servers can produce digests at historical DAG points, the
 receiver can query accumulators at $O(\log \Delta D)$ depth (topological
-bisection—similar to `git bisect`—over the known `prev_events` graph or auth
+bisection — similar to `git bisect` — over the known `prev_events` graph or auth
 chain) to find the earliest event where the digests diverged. For historical
 PDUs where a server has no stored accumulator (and deems retroactive computation
 prohibitive), it responds `404 M_NOT_FOUND`; the bisecting requester then treats
 the oldest event for which both sides _can_ produce accumulators as a lower
 bound on the divergence point and proceeds from there.
 
+**Important caveat — the search domain is a partial order, not a line.** The
+`/state_accumulator` endpoint defines a *queryable primitive* (accumulator at a
+named event); the traversal strategy over the DAG is deliberately left to the
+implementation. The $O(\log \Delta D)$ figure describes the linear-history case
+only. In forked histories, the earliest-divergence result may be a **frontier of
+events** rather than a single vertex — each branch may have contributed
+independent drift — so implementations should expect a set of candidate events
+rather than a unique divergence point when bisecting rooms with concurrent
+branches. This is analogous to `git bisect`'s handling of merge commits. The
+binary-lifting caveat already noted above (recorded lineage is a storage-layer
+simplification) applies equally here.
+
 It is important to note that the delta lattice cannot name events you have never
-seen—a lattice sum isn't invertible to its summands (the property that makes it
-collision-resistant). Once the exact divergence point is isolated via bisection,
+seen — a lattice sum isn't invertible to its summands (the property that makes it
+collision-resistant). Once the divergence frontier is isolated via bisection,
 enumeration and healing are delegated to MSCXXXX [Gossip-based federation room
 reconciliation] and its `/room_diff` and `/room_events` endpoints.
 
@@ -533,7 +572,12 @@ addition/subtraction, and standard `BLAKE2b-256` collapse digest.
 
 ### Empty state
 
-The starting lattice $S_0$ is 2048 bytes of all zeros.
+The starting lattice $S_0$ is 2048 bytes of all zeros. This collapse digest is a
+**reserved sentinel**: every room shares it before its create event, and the
+`before` digest of a room's create event is by definition this constant.
+Receivers MUST NOT treat digest equality at the empty state as meaningful
+confirmation of anything — two servers emitting this value simply have not yet
+accumulated any state entries, which is trivially true and carries no signal.
 
 - Lattice $S_0$ prefix (first 16 bytes): `00000000000000000000000000000000`
 - Collapse digest:
@@ -591,6 +635,23 @@ event ID `$event_3`. This is performed by subtracting the expansion for
 - Collapse digest:
   `8b611750bb056a38f9e3f9fcc74ae1f0771f12ade0daecc6963e302d15f8e67f`
 
+## Implementation and rollout notes
+
+> **Non-normative.** This section provides operational context only; the
+> normative rules above are unchanged.
+
+During the observation phase, the primary value of the `state_hashes` payload
+is passive monitoring: servers log mismatches without triggering automated
+remediation, accumulating data on how often divergence occurs across the
+federation. Automated bisection and healing pipelines can be enabled
+incrementally once operators have confidence in the false-alarm rate for their
+peers.
+
+Servers that have not yet persisted historical LtHash lattices may serve the
+`/state_accumulator` endpoint only for recent events (within their lattice
+retention window) and return `404 M_NOT_FOUND` for older points. This is fully
+conformant; a bisecting peer simply advances its lower bound.
+
 ## Unstable prefix
 
 For experimental implementations, the features should be referred to using the
@@ -600,15 +661,19 @@ following unstable identifiers:
 - The reconciliation endpoint:
   `GET /_matrix/federation/unstable/tk.nutra.msc4500/state_accumulator/{room_id}`
 
-The response body keeps the plain `state_hash_mismatch` member name; only the
-request-side transaction key is unstable-prefixed.
+The response body — including the `state_hash_mismatch` mismatch key returned
+inside per-PDU result objects — keeps plain (non-prefixed) member names. Only
+the *request-side* transaction dictionary key is unstable-prefixed during the
+experimental phase.
 
 ## Backwards compatibility
 
 This proposal is fully backwards-compatible:
 
 - Unknown transaction keys (`state_hashes`) are silently ignored by existing
-  servers, per current federation behavior.
+  servers, per current federation behavior. Likewise, the
+  `tk.nutra.msc4500.state_hashes` unstable key is ignored by servers that do
+  not implement this MSC.
 - The unstable reconciliation endpoint returns a `404 Not Found` on
   non-implementing servers, which callers treat as an "unsupported" signal.
 - No room version consensus rules are modified.

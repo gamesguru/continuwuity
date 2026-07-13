@@ -59,6 +59,7 @@ type Pdu = (OwnedRoomId, OwnedEventId, CanonicalJsonObject);
 
 #[derive(serde::Deserialize)]
 struct StateHashInfo {
+	algorithm: Option<String>,
 	after: String,
 }
 
@@ -365,7 +366,7 @@ async fn inject_state_hash_mismatches(
 ) {
 	let Some(json) = &body.json_body else { return };
 	let Some(obj) = json.as_object() else { return };
-	let Some(hashes) = obj.get("state_hashes") else { return };
+	let Some(hashes) = obj.get("tk.nutra.msc4500.state_hashes") else { return };
 
 	let Ok(state_hashes) =
 		serde_json::from_value::<BTreeMap<OwnedEventId, StateHashInfo>>(hashes.clone().into())
@@ -380,6 +381,17 @@ async fn inject_state_hash_mismatches(
 	};
 
 	for (event_id, hash_info) in state_hashes {
+		// Skip validation for unrecognized algorithms to support future agility
+		if let Some(ref algo) = hash_info.algorithm {
+			if algo != "lthash16" {
+				info!(
+					target: "state_hashes",
+					event_id = ?event_id,
+					"skipping state hash validation for unrecognized algorithm"
+				);
+				continue;
+			}
+		}
 		let Some(pdu_res) = pdus_obj
 			.get_mut(event_id.as_str())
 			.and_then(|p| p.as_object_mut())

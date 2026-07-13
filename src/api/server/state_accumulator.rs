@@ -25,23 +25,21 @@ pub(crate) struct StateAccumulatorResponse {
 pub(crate) async fn get_state_accumulator_route(
 	State(services): State<crate::State>,
 	TypedHeader(Authorization(x_matrix)): TypedHeader<Authorization<XMatrix>>,
-	axum::extract::OriginalUri(original_uri): axum::extract::OriginalUri,
 	axum::extract::Path(room_id_str): axum::extract::Path<String>,
 	axum::extract::Query(query): axum::extract::Query<StateAccumulatorQuery>,
+	uri: http::Uri,
 ) -> Result<impl axum::response::IntoResponse> {
 	use futures::StreamExt;
+
+	let signature_uri = uri
+		.path_and_query()
+		.map_or("/", http::uri::PathAndQuery::as_str)
+		.to_owned();
 
 	let room_id = OwnedRoomId::try_from(room_id_str)
 		.map_err(|_| err!(Request(InvalidParam("Invalid room ID."))))?;
 
-	verify_federation_request(
-		&services,
-		&x_matrix,
-		original_uri
-			.path_and_query()
-			.map_or("/", http::uri::PathAndQuery::as_str),
-	)
-	.await?;
+	verify_federation_request(&services, &x_matrix, &signature_uri).await?;
 
 	AccessCheck {
 		services: &services,
