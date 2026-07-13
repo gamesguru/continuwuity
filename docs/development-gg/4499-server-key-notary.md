@@ -4,59 +4,57 @@ This document outlines the additions and clarifications to the MSC4499 specifica
 
 ## 1. Deterministic Pruning and Vanished Keys
 
-The permanent-binding requirement ensures a retained history of keys. However, keys that were once observed in `verify_keys` and then vanished from subsequent responses without appearing in `old_verify_keys` have no `expired_ts`.
+The permanent-binding requirement ensures a retained history of keys. Some bindings, however, are only ever observed in `verify_keys` and later disappear without being repeated in `old_verify_keys`.
 
-To maintain a deterministic sorting order for pruning under the 3,000-key ceiling, every binding is assigned a synthetic ordering timestamp: `effective_expired_ts`.
+To make pruning deterministic under the 3,000-key ceiling, every binding is assigned an ordering timestamp:
 - If a key is published in `old_verify_keys`, `effective_expired_ts = expired_ts`.
-- Otherwise (for vanished keys), `effective_expired_ts` is the local timestamp of the last observation in which the key appeared active.
+- Otherwise, `effective_expired_ts` is the local timestamp of the last observation in which the key appeared active.
 
-Because observation times differ across servers, this makes the sort key partially local, slightly weakening the cross-server convergence claim, but ensuring the local database can deterministically sort vanished keys.
+Pruning is then performed by ascending `effective_expired_ts`, with a bytewise lexicographic comparison of the full `algorithm:key_id` string as the tie-break. When timestamps are equal, the lexicographically larger identifier is evicted first.
 
-## 2. Key ID Tie-Break Collation
+Because observation times differ across servers, this makes the sort key partially local and therefore weakens any claim of perfect cross-server convergence. It does, however, keep each local store deterministic.
 
-When multiple retired keys have the same `effective_expired_ts`, they are pruned based on their `algorithm:key_id`. To ensure determinism, the tie-break relies on a bytewise lexicographic comparison of the full `algorithm:key_id` string as UTF-8. The sort order is ascending by timestamp, and descending by `key_id`, so that lexicographically *smaller* identifiers are retained first (i.e. the largest identifiers are evicted first).
-
-## 3. Eviction Pressure and Permanent-Binding Guarantee
+## 2. Eviction Pressure and Permanent-Binding Guarantee
 
 *To be added to Security Considerations:*
 
-Eviction under the 3,000-key ceiling converts a permanent binding back into a TOFU-pending binding. The ceiling bounds collision-blindness protection to the 3,000 most-recently-retired keys. An origin willing to burn its own history can push a target binding out of that window by publishing waves of synthetic retired keys with fresh `expired_ts` values, after which peers will re-TOFU the evicted binding. This bounds the permanent-binding guarantee to the retention window.
+Eviction under the 3,000-key ceiling converts a permanent binding back into a TOFU-pending binding. The ceiling therefore bounds collision-blindness protection to the 3,000 most recently retained retired keys. An origin willing to burn its own history can push a target binding out of that window by publishing waves of synthetic retired keys with fresh `expired_ts` values, after which peers will re-TOFU the evicted binding. The permanent-binding guarantee is thus limited by the retention window.
 
-## 4. Ceiling on `old_verify_keys`
+## 3. Ceiling on `old_verify_keys`
 
-A single response may contain an arbitrarily large `old_verify_keys` dictionary. To align the wire limit with the storage cap and prevent excessive processing and allocation vectors, a response containing more than 3,000 `old_verify_keys` entries MUST be rejected as malformed.
+A single response may contain an arbitrarily large `old_verify_keys` dictionary. To align the wire limit with the storage cap and prevent excessive processing or allocation, a response containing more than 3,000 `old_verify_keys` entries MUST be rejected as malformed.
 
-## 5. `minimum_valid_until_ts` Actor and Override Authority
+## 4. `minimum_valid_until_ts` Actor and Override Authority
 
 If a notary query requests a `minimum_valid_until_ts` and the origin serves conflicting key material for the same key ID, the **notary** server MUST reject the new key as a collision. This ensures the freshness-driven re-fetch does not become a collision side-channel that overrides First Seen Wins.
 
 For the client of the notary: a notary response returned in satisfaction of `minimum_valid_until_ts` is still a provisional observation subject to the ordinary rules; freshness confers no override authority.
 
-## 6. Provisional-Binding Freeze
+## 5. Provisional-Binding Freeze
 
 *To be added to Security Considerations:*
 
 An expired or retired provisional binding MUST NOT be overridden by a later direct fetch. This means that a notary-poisoned binding that expires before direct confirmation is frozen forever, and is recoverable only via manual eviction API. This is a deliberate trade-off, preferring the auditability of history over automated healing.
 
-## 7. Immediate Fetch Attempt Amplification
+## 6. Immediate Fetch Attempt Amplification
 
 An inbound federation request whose authentication requires a key fetch for a backoff-listed server SHOULD permit at most one probe per backoff interval per remote server, triggered by inbound demand. All other demand within the interval MUST fail fast against the negative cache.
 
-## 8. Notary Ceiling Scope vs Forensic Index
+## 7. Notary Ceiling Scope vs Forensic Index
 
 The 3,000-key ceiling governs the notary's *served* binding set (what it returns to peers). In contrast, the forensic index is an implementation-private log outside the ceiling that stores rejected material and collisions (not served bindings).
 
-## 9. Duplicate JSON Key Rejection
+## 8. Duplicate JSON Key Rejection
 
 The rejection of payloads with duplicate JSON keys applies to the entire response document (any object at any depth). This enforces strict Canonical JSON rules (RFC 8259 permits duplicate members with undefined semantics, which is why parsers silently deduplicate, leading to potential bypasses).
 
-## 10. Implementation and Rollout Notes
+## 9. Implementation and Rollout Notes
 
 *Non-normative.*
 
-During the observation phase, the primary value of the payload is passive monitoring: servers log mismatches without triggering automated remediation, accumulating data on how often divergence occurs across the federation. Automated pipelines can be enabled incrementally once operators have confidence.
+During the observation phase, implementations may log mismatches without triggering automated remediation, accumulating data on how often divergence occurs across the federation. The normative rules above are unchanged.
 
-## 11. The MSC45XX Equivocation Record
+## 10. The MSC45XX Equivocation Record
 
 The Equivocation Record is defined adjacent to the Notary endpoint's (`E4`: `/_matrix/key/v2/query`) `409 M_CONFLICT` behavior. The `notary_equivocations` array rides on both the `409` body and, optionally, ordinary query responses when the notary holds relevant records.
 

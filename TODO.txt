@@ -1,0 +1,37 @@
+• Mostly yes, but not perfectly aligned with the current 4499 draft.
+
+  What looks implemented correctly in 75.patch:
+
+  - raw duplicate-JSON-key detection before deserialization
+  - cross-map collision rejection between verify_keys and old_verify_keys
+  - verify_keys active-key ceiling of 50
+  - First Seen Wins enforcement machinery
+  - negative caching / backoff / coalescing
+  - expired_ts future-sanity filtering with 5-minute skew
+  - historical-event validity checks against origin_server_ts
+  - quota eviction logic, eventually moved to 3,000
+  - notary returns patched/filtered keys rather than blindly forwarding garbage
+
+  What still looks off against the latest draft:
+
+  - Deterministic pruning is incomplete.
+    The patch evicts by oldest expired_ts, but I did not see the explicit tie-break by key_id. So same-input/same-output determinism is not fully nailed down.
+
+  - The 3,000 rule is partly modeled as payload validation, not just retained-cache behavior.
+    There is code rejecting old_verify_keys > 3000 on ingestion. That is stronger and slightly different from “retain at most 3,000 cached key IDs per remote server.”
+
+  - The convergence wording is not really implemented as such.
+    I do not see an explicit “re-evaluate full locally known candidate set with the same pruning rule when new history is learned” concept spelled out in the implementation. There is merge/spillover behavior, but not the clean spec shape.
+
+  - Rollout behavior is implementation-specific.
+    The patch has an enforce_fsw flag, which matches the rollout idea, but that means behavior may differ depending on config, whereas the draft now presents the strict rule as normative and the rollout as transitional guidance.
+
+  - I would want to inspect the notary-vs-direct provisional freeze path more carefully before saying it is exact.
+    The test results embedded in the patch suggest it was being driven toward parity, but patch archaeology is not the same as a clean final review of the target repo.
+
+  So the honest answer is:
+
+  - Implemented in spirit: yes, strongly.
+  - Implemented exactly as the latest draft now reads: not quite.
+
+  If you want the short verdict: 75.patch is clearly a serious MSC4499 implementation effort and covers most of the important contract, but it is probably one review pass behind the final spec wording you now have. The biggest specific gap I see is the missing explicit deterministic tie-break in pruning.
