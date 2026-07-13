@@ -9,6 +9,10 @@ set -euo pipefail
 # Both modes share the same run_details/ever_passed upsert logic below, so there is exactly
 # one place that knows how a run gets written -- avoids the two write paths drifting (e.g.
 # computing run_date independently) and silently duplicating "runs" rows.
+#
+# import_history.sh also sources this file (for psql_remote/PSQL_SINK/ingest_details) to
+# reuse the same ingest logic for its full-rebuild path, just pointed at a direct local
+# connection instead of the SSH-tunneled one used here.
 
 TARGET_BRANCH=${TARGET_BRANCH:-"_metadata/badges"}
 export DB_TARGET=${DATABASE_URL:-"c10y"}
@@ -17,6 +21,11 @@ SSH_TARGET=${SSH_TARGET:-"git@nutra.tk"}
 psql_remote() {
 	ssh -C -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$SSH_TARGET" "psql -U git c10y"
 }
+
+# Command (function or binary name) that ingest_details() pipes assembled SQL into.
+# Defaults to the SSH-tunneled remote psql; import_history.sh overrides this to a direct
+# local connection before sourcing this file.
+PSQL_SINK=${PSQL_SINK:-psql_remote}
 
 # Reads NDJSON on stdin (each line already tagged with commit/arch/os/profile/room_version/
 # features), streams it into a temp table, then upserts run_details + ever_passed for exactly
@@ -27,9 +36,15 @@ ingest_details() {
 		printf '%s\n' "\copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';"
 		cat
 		echo "\."
-		cat "$(dirname "$0")/ingest_details.sql"
-	) | psql_remote
+		cat "$(dirname "${BASH_SOURCE[0]}")/ingest_details.sql"
+	) | "$PSQL_SINK"
 }
+
+# Everything below only runs when this file is executed directly, not when sourced
+# (import_history.sh sources it just for the ingest_details() function above).
+if [[ "${BASH_SOURCE[0]}" != "${0}" ]]; then
+	return 0
+fi
 
 if [[ "${1:-}" == "--direct" ]]; then
 	RESULTS_FILE=$2
@@ -54,15 +69,14 @@ if [[ "${1:-}" == "--direct" ]]; then
 	fi
 
 	echo "→ Direct ingest for $COMMIT ($ARCH/$OS/v$ROOM_VERSION)..."
-	(
-		echo "INSERT INTO runs (run_date, commit_hash, branch, arch, os, profile, n_pass, n_skip, n_fail, room_version, features, version_string)
+	echo "INSERT INTO runs (run_date, commit_hash, branch, arch, os, profile, n_pass, n_skip, n_fail, room_version, features, version_string)
         SELECT '${RUN_DATE}'::timestamptz, '${COMMIT}', '${BRANCH}', '${ARCH}', '${OS}', '${PROFILE}', ${PASS}, ${SKIP}, ${FAIL}, '${ROOM_VERSION}',
           COALESCE(regexp_replace(btrim('${FEATURES}', ' ,'), '[,\s]+', ' ', 'g'), ''), '${VERSION}'
-        ON CONFLICT (commit_hash, run_date, arch, os, profile, room_version, features) DO NOTHING;"
+        ON CONFLICT (commit_hash, arch, os, profile, room_version, features) DO NOTHING;" | psql_remote
 
-		jq -c --arg c "$COMMIT" --arg a "$ARCH" --arg o "$OS" --arg p "$PROFILE" --arg rv "$ROOM_VERSION" --arg f "$FEATURES" \
-			'. + {commit: $c, arch: $a, os: $o, profile: $p, room_version: $rv, features: ($f | gsub("[,\\s]+"; " ") | gsub("^ | $"; ""))}' "$RESULTS_FILE"
-	) | ingest_details
+	jq -c --arg c "$COMMIT" --arg a "$ARCH" --arg o "$OS" --arg p "$PROFILE" --arg rv "$ROOM_VERSION" --arg f "$FEATURES" \
+		'. + {commit: $c, arch: $a, os: $o, profile: $p, room_version: $rv, features: ($f | gsub("[,\\s]+"; " ") | gsub("^ | $"; ""))}' "$RESULTS_FILE" |
+		ingest_details
 	echo "✓ Direct ingest complete."
 	exit 0
 fi
@@ -85,7 +99,7 @@ echo "→ Streaming last $LIMIT run summaries..."
           (j->>'author_name'), (j->>'actor'), (j->>'provider'), NULLIF(j->>'arch', ''), NULLIF(j->>'os', ''),
           (j->>'version_string'), COALESCE(regexp_replace(btrim(j->>'features', ' ,'), '[,\s]+', ' ', 'g'), ''), (j->>'profile'), (j->>'binary_sha256'),
           (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int, (j->>'room_version')
-        FROM b ON CONFLICT (commit_hash, run_date, arch, os, profile, room_version, features) DO NOTHING;"
+        FROM b ON CONFLICT (commit_hash, arch, os, profile, room_version, features) DO NOTHING;"
 ) | psql_remote
 
 # Pre-cache git tree for fast existence checks

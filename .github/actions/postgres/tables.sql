@@ -1,6 +1,5 @@
 -- tables.sql
 -- Relational schema for Continuwuity CI runs.
-
 -- Drop views to allow schema updates
 DROP VIEW IF EXISTS v_run_regressions CASCADE;
 
@@ -29,8 +28,8 @@ CREATE TABLE IF NOT EXISTS runs (
 -- Unique index to prevent duplicate machine reports.
 -- Keep this in sync with ON CONFLICT targets in ingest scripts.
 DROP INDEX IF EXISTS idx_runs_unique_machine_run;
-CREATE UNIQUE INDEX idx_runs_unique_machine_run
-ON runs (commit_hash, run_date, arch, os, profile, room_version, features) NULLS NOT DISTINCT;
+
+CREATE UNIQUE INDEX idx_runs_unique_machine_run ON runs (commit_hash, arch, os, profile, room_version, features) NULLS NOT DISTINCT;
 
 -- Create run_details table
 CREATE TABLE IF NOT EXISTS run_details (
@@ -41,11 +40,23 @@ CREATE TABLE IF NOT EXISTS run_details (
 );
 
 -- Ensure we don't log the same test twice for the same run
-CREATE UNIQUE INDEX IF NOT EXISTS idx_run_details_unique_test
-ON run_details (run_id, test_name);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_run_details_unique_test ON run_details (run_id, test_name);
+
+-- Remember the latest passing date per test/room_version across all ingests.
+CREATE TABLE IF NOT EXISTS ever_passed (
+    test_name text NOT NULL,
+    rv text NOT NULL,
+    last_passed text NOT NULL,
+    last_commit text,
+    last_branch text,
+    branches text[] NOT NULL DEFAULT '{}'::text[]
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ever_passed_unique_test_rv ON ever_passed (test_name, rv);
 
 -- Performance indexes
 CREATE INDEX IF NOT EXISTS idx_run_details_run_id ON run_details (run_id);
+
 CREATE INDEX IF NOT EXISTS idx_runs_commit_hash ON runs (commit_hash);
 
 -- Combine Regressions View: compares each individual run against the UNION of "best"
@@ -56,11 +67,19 @@ CREATE INDEX IF NOT EXISTS idx_runs_commit_hash ON runs (commit_hash);
 CREATE OR REPLACE VIEW v_run_regressions AS
 WITH baseline_selection AS (
     -- latest run per (arch, os) on main, so each arch contributes its own most recent result
-    SELECT DISTINCT ON (arch, os) id, os
-    FROM runs
+    SELECT DISTINCT ON (arch,
+        os)
+        id,
+        os
+    FROM
+        runs
     WHERE (branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream')
         OR version_string LIKE '%main%')
-    ORDER BY arch, os, run_date DESC, id DESC
+ORDER BY
+    arch,
+    os,
+    run_date DESC,
+    id DESC
 ),
 baseline_status AS (
     SELECT
@@ -68,9 +87,12 @@ baseline_status AS (
         rd.test_name,
         bool_or(rd.status = 'pass') AS any_pass,
         bool_or(rd.status = 'skip') AS any_skip
-    FROM baseline_selection bsel
-    JOIN run_details rd ON rd.run_id = bsel.id
-    GROUP BY bsel.os, rd.test_name
+    FROM
+        baseline_selection bsel
+        JOIN run_details rd ON rd.run_id = bsel.id
+    GROUP BY
+        bsel.os,
+        rd.test_name
 )
 SELECT
     r.id,
@@ -91,36 +113,61 @@ SELECT
     r.n_skip,
     baseline_totals.baseline_total,
     counts.run_total,
-    (counts.run_total - baseline_totals.baseline_total) as diff_total,
+    (counts.run_total - baseline_totals.baseline_total) AS diff_total,
     -- Calculate deltas vs the unioned baseline
     counts.new_pass,
     counts.new_skip,
     counts.new_fail,
     counts.new_failures_list,
     counts.new_passes_list
-FROM runs r
-LEFT JOIN LATERAL (
-    SELECT COUNT(*) AS baseline_total
-    FROM baseline_status bs
-    WHERE bs.os IS NOT DISTINCT FROM r.os
-) baseline_totals ON TRUE
-LEFT JOIN LATERAL (
-    SELECT
-        COUNT(*) as run_total,
-        COUNT(*) FILTER (WHERE rd.status = 'pass' AND eb.status IS NOT NULL AND eb.status != 'pass') as new_pass,
-        COUNT(*) FILTER (WHERE rd.status = 'skip' AND eb.status IS NOT NULL AND eb.status != 'skip') as new_skip,
-        COUNT(*) FILTER (WHERE rd.status = 'fail' AND eb.status IS NOT NULL AND eb.status != 'fail') as new_fail,
-        STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'fail' AND eb.status IS NOT NULL AND eb.status != 'fail') as new_failures_list,
-        STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'pass' AND eb.status IS NOT NULL AND eb.status != 'pass') as new_passes_list
-    FROM run_details rd
+FROM
+    runs r
     LEFT JOIN LATERAL (
-        SELECT CASE WHEN bs.any_pass THEN 'pass' WHEN bs.any_skip THEN 'skip' ELSE 'fail' END AS status
-        FROM baseline_status bs
-        WHERE bs.os IS NOT DISTINCT FROM r.os AND bs.test_name = rd.test_name
-    ) eb ON TRUE
-    WHERE rd.run_id = r.id
-) counts ON TRUE
-WHERE r.n_pass > 0 AND counts.run_total > 0;
+        SELECT
+            COUNT(*) AS baseline_total
+        FROM
+            baseline_status bs
+        WHERE
+            bs.os IS NOT DISTINCT FROM r.os) baseline_totals ON TRUE
+    LEFT JOIN LATERAL (
+        SELECT
+            COUNT(*) AS run_total,
+            COUNT(*) FILTER (WHERE rd.status = 'pass'
+                    AND eb.status IS NOT NULL
+                    AND eb.status != 'pass') AS new_pass,
+                COUNT(*) FILTER (WHERE rd.status = 'skip'
+                    AND eb.status IS NOT NULL
+                    AND eb.status != 'skip') AS new_skip,
+                COUNT(*) FILTER (WHERE rd.status = 'fail'
+                    AND eb.status IS NOT NULL
+                    AND eb.status != 'fail') AS new_fail,
+                STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'fail'
+                    AND eb.status IS NOT NULL
+                    AND eb.status != 'fail') AS new_failures_list,
+                STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name) FILTER (WHERE rd.status = 'pass'
+                    AND eb.status IS NOT NULL
+                    AND eb.status != 'pass') AS new_passes_list
+            FROM
+                run_details rd
+        LEFT JOIN LATERAL (
+            SELECT
+                CASE WHEN bs.any_pass THEN
+                    'pass'
+                WHEN bs.any_skip THEN
+                    'skip'
+                ELSE
+                    'fail'
+                END AS status
+            FROM
+                baseline_status bs
+            WHERE
+                bs.os IS NOT DISTINCT FROM r.os
+                AND bs.test_name = rd.test_name) eb ON TRUE
+        WHERE
+            rd.run_id = r.id) counts ON TRUE
+WHERE
+    r.n_pass > 0
+    AND counts.run_total > 0;
 
 -- Ensure read-only users can query the view and raw tables even after they get recreated by CI
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO public;
