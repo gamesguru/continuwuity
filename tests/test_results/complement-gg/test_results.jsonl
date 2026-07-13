@@ -3,7 +3,6 @@
 {"Action":"pass","Test":"TestAddAccountData"}
 {"Action":"pass","Test":"TestAddAccountData/Can_add_global_account_data"}
 {"Action":"pass","Test":"TestAddAccountData/Can_add_room_account_data"}
-{"Action":"fail","Test":"TestAdminYoloCommandsUnderStress"}
 {"Action":"pass","Test":"TestArchivedRoomsHistory"}
 {"Action":"pass","Test":"TestArchivedRoomsHistory/timeline_has_events"}
 {"Action":"pass","Test":"TestArchivedRoomsHistory/timeline_has_events/incremental_sync"}
@@ -87,7 +86,6 @@
 {"Action":"pass","Test":"TestContentMediaV1"}
 {"Action":"fail","Test":"TestCorruptedAuthChain"}
 {"Action":"pass","Test":"TestCumulativeJoinLeaveJoinSync"}
-{"Action":"fail","Test":"TestDAGPathologyAndFederationResilience"}
 {"Action":"pass","Test":"TestDeactivateAccount"}
 {"Action":"pass","Test":"TestDeactivateAccount/After_deactivating_account,_can't_log_in_with_password"}
 {"Action":"pass","Test":"TestDeactivateAccount/Can't_deactivate_account_with_wrong_password"}
@@ -369,7 +367,7 @@
 {"Action":"fail","Test":"TestMSC4186SlidingSyncSetPresence/omitted_set_presence_defaults_to_online"}
 {"Action":"fail","Test":"TestMSC4186SlidingSyncSetPresence/set_presence_offline_updates_presence"}
 {"Action":"fail","Test":"TestMSC4186SlidingSyncSetPresence/set_presence_unavailable_updates_presence"}
-{"Action":"fail","Test":"TestMSC4186SlidingSyncSubscriptions"}
+{"Action":"pass","Test":"TestMSC4186SlidingSyncSubscriptions"}
 {"Action":"fail","Test":"TestMSC4186SlidingSyncUnknownPos"}
 {"Action":"fail","Test":"TestMSC4289PrivilegedRoomCreators"}
 {"Action":"pass","Test":"TestMSC4289PrivilegedRoomCreators/PL_event_is_missing_creator_in_users_map"}
@@ -806,7 +804,7 @@
 {"Action":"pass","Test":"TestToDeviceMessages"}
 {"Action":"fail","Test":"TestToDeviceMessagesOverFederation"}
 {"Action":"pass","Test":"TestToDeviceMessagesOverFederation/good_connectivity"}
-{"Action":"fail","Test":"TestToDeviceMessagesOverFederation/interrupted_connectivity"}
+{"Action":"pass","Test":"TestToDeviceMessagesOverFederation/interrupted_connectivity"}
 {"Action":"fail","Test":"TestToDeviceMessagesOverFederation/stopped_server"}
 {"Action":"fail","Test":"TestTxnIdWithRefreshToken"}
 {"Action":"fail","Test":"TestTxnIdempotency"}
