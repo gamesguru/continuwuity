@@ -156,6 +156,7 @@ impl Service {
 		statuses: &mut CurTransactionStatus,
 		e: &Error,
 	) {
+		self.in_flight_educount.lock().unwrap().remove(&dest);
 		debug!(dest = ?dest, "{e:?}");
 		let status = e.status_code();
 		if status.is_client_error() && !matches!(status.as_u16(), 401 | 403 | 404 | 429) {
@@ -227,6 +228,12 @@ impl Service {
 		let _cork = self.db.db.cork();
 		self.db.delete_all_active_requests_for(dest).await;
 
+		if let Destination::Federation(server_name) = dest {
+			if let Some(last_count) = self.in_flight_educount.lock().unwrap().remove(dest) {
+				self.db.set_latest_educount(server_name, last_count);
+			}
+		}
+
 		// Find events that have been added since starting the last request
 		let new_events = self
 			.db
@@ -295,7 +302,14 @@ impl Service {
 			select! {
 				() = sleep_until(deadline) => return,
 				response = futures.next() => match response {
-					Some(Ok(dest)) => self.db.delete_all_active_requests_for(&dest).await,
+					Some(Ok(dest)) => {
+						self.db.delete_all_active_requests_for(&dest).await;
+						if let Destination::Federation(server_name) = &dest {
+							if let Some(last_count) = self.in_flight_educount.lock().unwrap().remove(&dest) {
+								self.db.set_latest_educount(server_name, last_count);
+							}
+						}
+					},
 					Some(_) => continue,
 					None => return,
 				},
@@ -375,6 +389,16 @@ impl Service {
 				.ready_for_each(|(_, e)| events.push(e))
 				.await;
 
+			// Add EDU's into the retried transaction too!
+			if let Destination::Federation(server_name) = dest {
+				if let Ok((select_edus, last_count)) = self.select_edus(server_name).await {
+					debug_assert!(select_edus.len() <= EDU_LIMIT, "exceeded edus limit");
+					let select_edus = select_edus.into_iter().map(SendingEvent::Edu);
+					events.extend(select_edus);
+					self.in_flight_educount.lock().unwrap().insert(dest.clone(), last_count);
+				}
+			}
+
 			return Ok(Some(events));
 		}
 
@@ -391,20 +415,10 @@ impl Service {
 		if let Destination::Federation(server_name) = dest {
 			if let Ok((select_edus, last_count)) = self.select_edus(server_name).await {
 				debug_assert!(select_edus.len() <= EDU_LIMIT, "exceeded edus limit");
+				let select_edus = select_edus.into_iter().map(SendingEvent::Edu);
 
-				let select_edus: Vec<_> = select_edus
-					.into_iter()
-					.map(|edu| {
-						let count = self.services.globals.next_count().unwrap();
-						let mut key = dest.get_prefix();
-						key.extend_from_slice(&count.to_be_bytes());
-						(key, SendingEvent::Edu(edu))
-					})
-					.collect();
-
-				self.db.mark_as_active(select_edus.iter());
-				events.extend(select_edus.into_iter().map(|(_, e)| e));
-				self.db.set_latest_educount(server_name, last_count);
+				events.extend(select_edus);
+				self.in_flight_educount.lock().unwrap().insert(dest.clone(), last_count);
 			}
 		}
 
