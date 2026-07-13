@@ -32,11 +32,14 @@ PSQL_SINK=${PSQL_SINK:-psql_remote}
 # the run rows those lines belong to.
 ingest_details() {
 	(
+		echo "BEGIN;"
+		echo "SET LOCAL synchronous_commit = OFF;"
 		echo "CREATE TEMP TABLE t (j jsonb);"
 		printf '%s\n' "\copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';"
 		cat
 		echo "\."
 		cat "$(dirname "${BASH_SOURCE[0]}")/ingest_details.sql"
+		echo "COMMIT;"
 	) | "$PSQL_SINK"
 }
 
@@ -69,10 +72,15 @@ if [[ "${1:-}" == "--direct" ]]; then
 	fi
 
 	echo "→ Direct ingest for $COMMIT ($ARCH/$OS/v$ROOM_VERSION)..."
-	echo "INSERT INTO runs (run_date, commit_hash, branch, arch, os, profile, n_pass, n_skip, n_fail, room_version, features, version_string)
+	(
+		echo "BEGIN;"
+		echo "SET LOCAL synchronous_commit = OFF;"
+		echo "INSERT INTO runs (run_date, commit_hash, branch, arch, os, profile, n_pass, n_skip, n_fail, room_version, features, version_string)
         SELECT '${RUN_DATE}'::timestamptz, '${COMMIT}', '${BRANCH}', '${ARCH}', '${OS}', '${PROFILE}', ${PASS}, ${SKIP}, ${FAIL}, '${ROOM_VERSION}',
           COALESCE(regexp_replace(btrim('${FEATURES}', ' ,'), '[,\s]+', ' ', 'g'), ''), '${VERSION}'
-        ON CONFLICT (commit_hash, arch, os, profile, room_version, features) DO NOTHING;" | psql_remote
+        ON CONFLICT (commit_hash, arch, os, profile, room_version, features) DO NOTHING;"
+		echo "COMMIT;"
+	) | psql_remote
 
 	jq -c --arg c "$COMMIT" --arg a "$ARCH" --arg o "$OS" --arg p "$PROFILE" --arg rv "$ROOM_VERSION" --arg f "$FEATURES" \
 		'. + {commit: $c, arch: $a, os: $o, profile: $p, room_version: $rv, features: ($f | gsub("[,\\s]+"; " ") | gsub("^ | $"; ""))}' "$RESULTS_FILE" |
@@ -89,6 +97,8 @@ git fetch origin "$TARGET_BRANCH" --depth 1 --filter=blob:none >/dev/null 2>&1
 # Ingest Recent Summaries (fast — ON CONFLICT DO NOTHING skips existing)
 echo "→ Streaming last $LIMIT run summaries..."
 (
+	echo "BEGIN;"
+	echo "SET LOCAL synchronous_commit = OFF;"
 	echo "CREATE TEMP TABLE b (j jsonb);"
 	printf '%s\n' "\copy b FROM STDIN csv quote e'\x01' delimiter e'\x02';"
 	git show "FETCH_HEAD:runs.jsonl" | tail -n "$LIMIT"
@@ -100,6 +110,7 @@ echo "→ Streaming last $LIMIT run summaries..."
           (j->>'version_string'), COALESCE(regexp_replace(btrim(j->>'features', ' ,'), '[,\s]+', ' ', 'g'), ''), (j->>'profile'), (j->>'binary_sha256'),
           (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int, (j->>'room_version')
         FROM b ON CONFLICT (commit_hash, arch, os, profile, room_version, features) DO NOTHING;"
+	echo "COMMIT;"
 ) | psql_remote
 
 # Pre-cache git tree for fast existence checks

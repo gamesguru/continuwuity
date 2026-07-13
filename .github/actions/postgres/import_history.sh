@@ -40,6 +40,8 @@ echo "✓ Starting bulk historical JSON import into '$DB_TARGET'..."
 # 1. Bulk Ingest Run Summaries
 echo "→ Ingesting run summaries..."
 psql "$DB_TARGET" <<EOF
+BEGIN;
+SET LOCAL synchronous_commit = OFF;
 CREATE TEMP TABLE b (j jsonb);
 \copy b FROM '$LEDGER_DIR/runs.jsonl' csv quote e'\x01' delimiter e'\x02';
 
@@ -51,6 +53,7 @@ SELECT
     (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int, COALESCE(NULLIF(j->>'room_version', ''), '11')
 FROM b
 ON CONFLICT (commit_hash, arch, os, profile, room_version, features) DO NOTHING;
+COMMIT;
 EOF
 
 # 2. Bulk Ingest Test Details (Injecting metadata from filenames)
