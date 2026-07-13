@@ -40,7 +40,6 @@ pub struct Service {
 	server: Arc<Server>,
 	services: Services,
 	channels: Vec<(loole::Sender<Msg>, loole::Receiver<Msg>)>,
-	pub(super) in_flight_educount: std::sync::Mutex<std::collections::HashMap<Destination, u64>>,
 }
 
 struct Services {
@@ -104,7 +103,6 @@ impl crate::Service for Service {
 				federation: args.depend::<federation::Service>("federation"),
 			},
 			channels: (0..num_senders).map(|_| loole::unbounded()).collect(),
-			in_flight_educount: std::sync::Mutex::new(std::collections::HashMap::new()),
 		}))
 	}
 

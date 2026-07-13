@@ -156,7 +156,6 @@ impl Service {
 		statuses: &mut CurTransactionStatus,
 		e: &Error,
 	) {
-		self.in_flight_educount.lock().unwrap().remove(&dest);
 		debug!(dest = ?dest, "{e:?}");
 		let status = e.status_code();
 		if status.is_client_error() && !matches!(status.as_u16(), 401 | 403 | 404 | 429) {
@@ -228,12 +227,6 @@ impl Service {
 		let _cork = self.db.db.cork();
 		self.db.delete_all_active_requests_for(dest).await;
 
-		if let Destination::Federation(server_name) = dest {
-			if let Some(last_count) = self.in_flight_educount.lock().unwrap().remove(dest) {
-				self.db.set_latest_educount(server_name, last_count);
-			}
-		}
-
 		// Find events that have been added since starting the last request
 		let new_events = self
 			.db
@@ -247,7 +240,7 @@ impl Service {
 			self.db.mark_as_active(new_events.iter());
 
 			let new_events_vec = new_events.into_iter().map(at!(1)).collect();
-			futures.push(self.send_events(dest.clone(), new_events_vec));
+			futures.push(self.send_events(dest.clone(), new_events_vec, None));
 		} else {
 			if let Destination::Federation(server_name) = dest {
 				if let Ok(since_upper) = self.services.globals.current_count() {
@@ -272,9 +265,9 @@ impl Service {
 		statuses: &mut CurTransactionStatus,
 	) {
 		let iv = vec![(msg.queue_id, msg.event)];
-		if let Ok(Some(events)) = self.select_events(&msg.dest, iv, statuses).await {
+		if let Ok(Some((events, edu_count))) = self.select_events(&msg.dest, iv, statuses).await {
 			if !events.is_empty() {
-				futures.push(self.send_events(msg.dest, events));
+				futures.push(self.send_events(msg.dest, events, edu_count));
 			} else {
 				statuses.remove(&msg.dest);
 			}
@@ -302,14 +295,7 @@ impl Service {
 			select! {
 				() = sleep_until(deadline) => return,
 				response = futures.next() => match response {
-					Some(Ok(dest)) => {
-						self.db.delete_all_active_requests_for(&dest).await;
-						if let Destination::Federation(server_name) = &dest {
-							if let Some(last_count) = self.in_flight_educount.lock().unwrap().remove(&dest) {
-								self.db.set_latest_educount(server_name, last_count);
-							}
-						}
-					},
+					Some(Ok(dest)) => self.db.delete_all_active_requests_for(&dest).await,
 					Some(_) => continue,
 					None => return,
 				},
@@ -352,7 +338,7 @@ impl Service {
 		for (dest, events) in txns {
 			if self.server.config.startup_netburst && !events.is_empty() {
 				statuses.insert(dest.clone(), TransactionStatus::Running);
-				futures.push(self.send_events(dest.clone(), events));
+				futures.push(self.send_events(dest.clone(), events, None));
 			}
 		}
 	}
@@ -371,7 +357,7 @@ impl Service {
 		dest: &Destination,
 		new_events: Vec<QueueItem>, // Events we want to send: event and full key
 		statuses: &mut CurTransactionStatus,
-	) -> Result<Option<Vec<SendingEvent>>> {
+	) -> Result<Option<(Vec<SendingEvent>, Option<u64>)>> {
 		let (allow, retry) = self.select_events_current(dest, statuses)?;
 
 		// Nothing can be done for this remote, bail out.
@@ -389,17 +375,9 @@ impl Service {
 				.ready_for_each(|(_, e)| events.push(e))
 				.await;
 
-			// Add EDU's into the retried transaction too!
-			if let Destination::Federation(server_name) = dest {
-				if let Ok((select_edus, last_count)) = self.select_edus(server_name).await {
-					debug_assert!(select_edus.len() <= EDU_LIMIT, "exceeded edus limit");
-					let select_edus = select_edus.into_iter().map(SendingEvent::Edu);
-					events.extend(select_edus);
-					self.in_flight_educount.lock().unwrap().insert(dest.clone(), last_count);
-				}
+			if !events.is_empty() {
+				return Ok(Some((events, None)));
 			}
-
-			return Ok(Some(events));
 		}
 
 		// Compose the next transaction
@@ -411,6 +389,7 @@ impl Service {
 			}
 		}
 
+		let mut edu_count = None;
 		// Add EDU's into the transaction
 		if let Destination::Federation(server_name) = dest {
 			if let Ok((select_edus, last_count)) = self.select_edus(server_name).await {
@@ -418,11 +397,11 @@ impl Service {
 				let select_edus = select_edus.into_iter().map(SendingEvent::Edu);
 
 				events.extend(select_edus);
-				self.in_flight_educount.lock().unwrap().insert(dest.clone(), last_count);
+				edu_count = Some(last_count);
 			}
 		}
 
-		Ok(Some(events))
+		Ok(Some((events, edu_count)))
 	}
 
 	fn select_events_current(
@@ -748,11 +727,20 @@ impl Service {
 		Some(buf)
 	}
 
-	fn send_events(&self, dest: Destination, events: Vec<SendingEvent>) -> SendingFuture<'_> {
-		debug_assert!(!events.is_empty(), "sending empty transaction");
+	fn send_events(
+		&self,
+		dest: Destination,
+		events: Vec<SendingEvent>,
+		edu_count: Option<u64>,
+	) -> SendingFuture<'_> {
+		debug_assert!(
+			!events.is_empty() || matches!(dest, Destination::Federation(_)),
+			"sending empty transaction"
+		);
 		match dest {
-			| Destination::Federation(server) =>
-				self.send_events_dest_federation(server, events).boxed(),
+			| Destination::Federation(server) => self
+				.send_events_dest_federation(server, events, edu_count)
+				.boxed(),
 			| Destination::Appservice(id) => self.send_events_dest_appservice(id, events).boxed(),
 			| Destination::Push(user_id, pushkey) =>
 				self.send_events_dest_push(user_id, pushkey, events).boxed(),
@@ -919,6 +907,7 @@ impl Service {
 		&self,
 		server: OwnedServerName,
 		events: Vec<SendingEvent>,
+		edu_count: Option<u64>,
 	) -> SendingResult {
 		let pdus: Vec<_> = events
 			.iter()
@@ -943,6 +932,9 @@ impl Service {
 			.collect();
 
 		if pdus.is_empty() && edus.is_empty() {
+			if let Some(count) = edu_count {
+				self.db.set_latest_educount(&server, count);
+			}
 			return Ok(Destination::Federation(server));
 		}
 
@@ -1030,7 +1022,12 @@ impl Service {
 				self.stats.outgoing_errors.fetch_add(1, Ordering::Relaxed);
 				Err((Destination::Federation(server), error))
 			},
-			| Ok(_) => Ok(Destination::Federation(server)),
+			| Ok(_) => {
+				if let Some(count) = edu_count {
+					self.db.set_latest_educount(&server, count);
+				}
+				Ok(Destination::Federation(server))
+			},
 		}
 	}
 
