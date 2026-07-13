@@ -2137,7 +2137,7 @@
 
 # MSC3030: timestamp to event
 #
-#msc3030_enabled = true
+#msc3030_enabled = false
 
 #[global.smtp]
 

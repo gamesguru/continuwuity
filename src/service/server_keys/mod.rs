@@ -361,9 +361,14 @@ pub async fn add_signing_keys(
 			"MSC4499: Evicting {to_evict} oldest keys for {origin} to respect 3,000-key quota"
 		);
 
-		// Collect keys to evict: oldest first (lowest expired_ts)
+		// Collect keys to evict: oldest first (lowest expired_ts).
+		// For ties, break by key_id descending (so smaller identifiers are retained).
 		let mut ovks: Vec<_> = historical_keys.old_verify_keys.iter().collect();
-		ovks.sort_by_key(|(_, ok)| ok.expired_ts);
+		ovks.sort_by(|(id_a, ok_a), (id_b, ok_b)| {
+			ok_a.expired_ts
+				.cmp(&ok_b.expired_ts)
+				.then_with(|| id_b.cmp(id_a))
+		});
 
 		let to_evict_ids: Vec<_> = ovks
 			.iter()
