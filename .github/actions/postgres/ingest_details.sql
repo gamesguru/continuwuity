@@ -7,9 +7,11 @@ SELECT
     pg_advisory_lock(42);
 
 -- Map the distinct run configurations in the temp table to actual run IDs
-CREATE TEMP TABLE newly_ingested_runs AS SELECT DISTINCT
+CREATE TEMP TABLE newly_ingested_runs AS
+SELECT DISTINCT
     r.id AS run_id
-FROM ( SELECT DISTINCT
+FROM (
+    SELECT DISTINCT
         (j ->> 'commit') AS commit_hash,
         (NULLIF ((j ->> 'arch'), '')) AS arch,
         (NULLIF ((j ->> 'os'), '')) AS os,
@@ -17,15 +19,14 @@ FROM ( SELECT DISTINCT
         (NULLIF ((j ->> 'room_version'), '')) AS room_version,
         (NULLIF ((j ->> 'features'), '')) AS features
     FROM
-        t) nt
-    JOIN runs r ON r.commit_hash = nt.commit_hash
-        AND r.arch IS NOT DISTINCT FROM nt.arch
-        AND r.os IS NOT DISTINCT FROM nt.os
-        AND r.profile IS NOT DISTINCT FROM nt.profile
-        AND r.room_version IS NOT DISTINCT FROM nt.room_version
-        AND COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '') IS NOT DISTINCT FROM COALESCE(regexp_replace(btrim(nt.features, ' ,'), '[,\s]+', ' ', 'g'), '');
-
-CREATE UNIQUE INDEX idx_newly_ingested_runs ON newly_ingested_runs (run_id);
+        t
+) nt
+JOIN runs r ON r.commit_hash = nt.commit_hash
+    AND r.arch IS NOT DISTINCT FROM nt.arch
+    AND r.os IS NOT DISTINCT FROM nt.os
+    AND r.profile IS NOT DISTINCT FROM nt.profile
+    AND r.room_version IS NOT DISTINCT FROM nt.room_version
+    AND COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '') IS NOT DISTINCT FROM COALESCE(regexp_replace(btrim(nt.features, ' ,'), '[,\s]+', ' ', 'g'), '');
 
 INSERT INTO run_details (run_id, test_name, status)
 SELECT DISTINCT ON (r.id, (t.j ->> 'Test')
@@ -47,10 +48,7 @@ AND r.id IN (
         run_id
     FROM
         newly_ingested_runs)
-ON CONFLICT (run_id,
-    test_name)
-    DO UPDATE SET
-        status = EXCLUDED.status;
+ON CONFLICT (run_id, test_name) DO NOTHING;
 
 -- Incremental ever_passed: scoped to only the newly ingested runs
 INSERT INTO ever_passed (test_name, rv, last_passed, last_commit, last_branch, branches)

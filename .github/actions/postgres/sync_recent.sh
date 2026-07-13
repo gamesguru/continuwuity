@@ -26,9 +26,6 @@ psql_remote() {
 # Defaults to the SSH-tunneled remote psql; import_history.sh overrides this to a direct
 # local connection before sourcing this file.
 PSQL_SINK=${PSQL_SINK:-psql_remote}
-# Bulk sync defaults to summary-only so the last 100 run upserts stay fast.
-# Set SYNC_RECENT_DETAILS=1 to also ingest run_details + ever_passed.
-SYNC_RECENT_DETAILS=${SYNC_RECENT_DETAILS:-0}
 
 # Reads NDJSON on stdin (each line already tagged with commit/arch/os/profile/room_version/
 # features), streams it into a temp table, then upserts run_details + ever_passed for exactly
@@ -105,11 +102,6 @@ echo "→ Streaming last $LIMIT run summaries..."
         FROM b ON CONFLICT (commit_hash, arch, os, profile, room_version, features) DO NOTHING;"
 ) | psql_remote
 
-if [[ "$SYNC_RECENT_DETAILS" != "1" ]]; then
-	echo "→ Summary-only sync complete; skipping detail ingest."
-	exit 0
-fi
-
 # Pre-cache git tree for fast existence checks
 ALL_FILES=$(git ls-tree -r FETCH_HEAD:runs_data --name-only || true)
 
@@ -120,42 +112,11 @@ git show "FETCH_HEAD:runs.jsonl" | tail -n "$LIMIT" |
 	jq -r '[.commit_hash, (.arch // ""), (.os // ""), (.profile // ""), (.room_version // ""), ((.features // "") | gsub("[,\\s]+"; " ") | gsub("^ | $"; ""))] | @tsv' \
 		>"$TMPMANIFEST"
 
-# Find which of these exact $LIMIT runs already have details (to skip re-ingesting).
-# Scoped to the commit hashes we're actually loading, not an id-range guess — id order
-# doesn't track runs.jsonl's chronological order (e.g. after a full historical rebuild).
-echo "→ Checking which of the loaded runs already have details..."
-EXISTING_KEYS=$(
-	(
-		echo "CREATE TEMP TABLE m (commit_hash text);"
-		printf '%s\n' "\copy m FROM STDIN csv quote e'\x01' delimiter e'\x02';"
-		cut -f1 "$TMPMANIFEST" | sort -u
-		echo "\."
-		cat <<'SQL'
-SELECT r.commit_hash || '|' || COALESCE(r.arch,'') || '|' || COALESCE(r.os,'') || '|' || COALESCE(r.profile,'') || '|' || COALESCE(r.room_version,'') || '|' || COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '')
-FROM runs r
-JOIN m ON m.commit_hash = r.commit_hash
-WHERE EXISTS (SELECT 1 FROM run_details rd WHERE rd.run_id = r.id LIMIT 1);
-SQL
-	) | ssh -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$SSH_TARGET" "psql -U git c10y -t -A"
-)
-
-declare -A HAS_DETAILS=()
-while IFS= read -r key; do
-	[[ -n "$key" ]] && HAS_DETAILS["$key"]=1
-done <<<"$EXISTING_KEYS"
-
 NEED=0
-SKIP=0
 declare -a PENDING_FILES=()
 declare -a PENDING_META=()
 
 while IFS=$'\t' read -r COMMIT ARCH OS PROFILE ROOM_VERSION FEATURES; do
-	KEY="${COMMIT}|${ARCH}|${OS}|${PROFILE}|${ROOM_VERSION}|${FEATURES}"
-	if [[ -n "${HAS_DETAILS[$KEY]+x}" ]]; then
-		((SKIP++)) || true
-		continue
-	fi
-
 	SAFE_ARCH=${ARCH//[!a-zA-Z0-9._-]/_}
 	SAFE_OS=${OS//[!a-zA-Z0-9._-]/_}
 	SAFE_PROFILE=${PROFILE//[!a-zA-Z0-9._-]/_}
@@ -169,7 +130,7 @@ while IFS=$'\t' read -r COMMIT ARCH OS PROFILE ROOM_VERSION FEATURES; do
 	fi
 done <"$TMPMANIFEST"
 
-echo "→ Skipped $SKIP already-ingested runs, $NEED need details."
+echo "→ $NEED runs have detail files to ingest."
 
 if [[ $NEED -eq 0 ]]; then
 	echo "✓ All runs already have details. Nothing to do."
