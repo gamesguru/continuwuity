@@ -157,7 +157,8 @@ impl Service {
 		e: &Error,
 	) {
 		debug!(dest = ?dest, "{e:?}");
-		if e.status_code().is_client_error() {
+		let status = e.status_code();
+		if status.is_client_error() && !matches!(status.as_u16(), 401 | 403 | 404 | 429) {
 			statuses.remove(&dest);
 			return;
 		}
