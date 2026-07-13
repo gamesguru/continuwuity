@@ -390,9 +390,19 @@ impl Service {
 		if let Destination::Federation(server_name) = dest {
 			if let Ok((select_edus, last_count)) = self.select_edus(server_name).await {
 				debug_assert!(select_edus.len() <= EDU_LIMIT, "exceeded edus limit");
-				let select_edus = select_edus.into_iter().map(SendingEvent::Edu);
 
-				events.extend(select_edus);
+				let select_edus: Vec<_> = select_edus
+					.into_iter()
+					.map(|edu| {
+						let count = self.services.globals.next_count().unwrap();
+						let mut key = dest.get_prefix();
+						key.extend_from_slice(&count.to_be_bytes());
+						(key, SendingEvent::Edu(edu))
+					})
+					.collect();
+
+				self.db.mark_as_active(select_edus.iter());
+				events.extend(select_edus.into_iter().map(|(_, e)| e));
 				self.db.set_latest_educount(server_name, last_count);
 			}
 		}
