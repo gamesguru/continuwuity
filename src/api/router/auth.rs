@@ -31,6 +31,7 @@ use service::{
 	Services,
 	server_keys::{PubKeyMap, PubKeys},
 };
+use tracing::info;
 
 use super::request::Request;
 use crate::service::appservice::RegistrationInfo;
@@ -372,24 +373,49 @@ async fn auth_server(
 }
 
 fn auth_server_checks(services: &Services, x_matrix: &XMatrix) -> Result<()> {
-	if !services.config.allow_federation {
+	auth_server_checks_impl(
+		services.config.allow_federation,
+		services.globals.server_name(),
+		services
+			.moderation
+			.is_remote_server_forbidden(&x_matrix.origin),
+		&x_matrix.origin,
+		x_matrix.destination.as_deref(),
+	)
+}
+
+fn auth_server_checks_impl(
+	allow_federation: bool,
+	server_name: &ruma::ServerName,
+	is_forbidden: bool,
+	x_matrix_origin: &ruma::ServerName,
+	x_matrix_destination: Option<&ruma::ServerName>,
+) -> Result<()> {
+	if !allow_federation {
 		return Err!(Config("allow_federation", "Federation is disabled."));
 	}
 
-	let destination = services.globals.server_name();
-	if x_matrix.destination.as_deref() != Some(destination) {
-		tracing::error!(
-			"Invalid destination! x_matrix.destination={:?} destination={:?}",
-			x_matrix.destination,
-			destination
+	if let Some(dest) = x_matrix_destination {
+		if dest != server_name {
+			return Err!(Request(Forbidden(warn!(
+				"Invalid destination. Expected: {}, Got: {}",
+				server_name, dest
+			))));
+		}
+	} else {
+		// Matrix 1.4 introduced the `destination` field. Older servers may not send it.
+		// We allow it to be missing for backwards compatibility.
+		info!(
+			"Missing destination in X-Matrix header from {}. Allowing for backwards \
+			 compatibility.",
+			x_matrix_origin
 		);
-		return Err!(Request(Forbidden("Invalid destination.")));
 	}
 
-	let origin = &x_matrix.origin;
-	if services.moderation.is_remote_server_forbidden(origin) {
+	if is_forbidden {
 		return Err!(Request(Forbidden(debug_warn!(
-			"Federation requests from {origin} denied."
+			"Federation requests from {} denied.",
+			x_matrix_origin
 		))));
 	}
 
@@ -439,5 +465,40 @@ async fn find_token(services: &Services, token: Option<&str>) -> Result<Token> {
 		| Err(e) if !e.is_not_found() => Err(e),
 		| Ok((token, _)) => Ok(token),
 		| _ => Ok(Token::Invalid),
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use ruma::server_name;
+
+	use super::*;
+
+	#[test]
+	fn test_auth_server_checks_impl_missing_destination() {
+		let server_name = server_name!("local.com");
+		let origin = server_name!("remote.com");
+		let result = auth_server_checks_impl(true, server_name, false, origin, None);
+		assert!(
+			result.is_ok(),
+			"Missing destination should be allowed for backwards compatibility"
+		);
+	}
+
+	#[test]
+	fn test_auth_server_checks_impl_valid_destination() {
+		let server_name = server_name!("local.com");
+		let origin = server_name!("remote.com");
+		let result = auth_server_checks_impl(true, server_name, false, origin, Some(server_name));
+		assert!(result.is_ok(), "Valid destination should be allowed");
+	}
+
+	#[test]
+	fn test_auth_server_checks_impl_invalid_destination() {
+		let server_name = server_name!("local.com");
+		let origin = server_name!("remote.com");
+		let wrong_dest = server_name!("wrong.com");
+		let result = auth_server_checks_impl(true, server_name, false, origin, Some(wrong_dest));
+		assert!(result.is_err(), "Invalid destination should be rejected");
 	}
 }
