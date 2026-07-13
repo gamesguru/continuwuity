@@ -317,17 +317,7 @@ where
 			| Some(false) => all_joined_rooms.clone().collect(),
 		};
 
-		let mut active_rooms_counts = Vec::with_capacity(active_rooms.len());
-		for room_id in active_rooms {
-			let count = match services.rooms.timeline.last_timeline_count(room_id).await {
-				| Ok(PduCount::Normal(c)) => c,
-				| _ => 0,
-			};
-			active_rooms_counts.push((room_id, count));
-		}
-		active_rooms_counts.sort_unstable_by(|a, b| b.1.cmp(&a.1));
-		let active_rooms: Vec<_> = active_rooms_counts.into_iter().map(|(r, _)| r).collect();
-
+		// Filter by room type FIRST to minimize DB lookups
 		let active_rooms = match list.filters.as_ref().map(|f| &f.not_room_types) {
 			| None => active_rooms,
 			| Some(filter) if filter.is_empty() => active_rooms,
@@ -341,6 +331,24 @@ where
 				.collect()
 				.await,
 		};
+
+		// Fetch timeline counts concurrently (bounded to 10)
+		let mut active_rooms_counts: Vec<_> = active_rooms
+			.into_iter()
+			.stream()
+			.widen_then(10, async |room_id| {
+				let count = match services.rooms.timeline.last_timeline_count(room_id).await {
+					| Ok(PduCount::Normal(c)) => c,
+					| _ => 0,
+				};
+				(room_id, count)
+			})
+			.collect()
+			.await;
+
+		// Stable sort with room_id tiebreaker to prevent jitter
+		active_rooms_counts.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
+		let active_rooms: Vec<_> = active_rooms_counts.into_iter().map(|(r, _)| r).collect();
 
 		let mut new_known_rooms: BTreeSet<OwnedRoomId> = BTreeSet::new();
 

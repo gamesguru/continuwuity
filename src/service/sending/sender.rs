@@ -163,18 +163,22 @@ impl Service {
 		}
 
 		let mut tries: u32 = 1;
-		statuses.entry(dest.clone()).and_modify(|e| {
-			*e = match e {
-				| TransactionStatus::Running => TransactionStatus::Failed(1, Instant::now()),
-				| &mut TransactionStatus::Retrying(ref n) => {
-					tries = n.saturating_add(1);
-					TransactionStatus::Failed(tries, Instant::now())
-				},
-				| TransactionStatus::Failed(..) => {
-					panic!("Request that was not even running failed?!")
-				},
-			}
-		});
+		statuses
+			.entry(dest.clone())
+			.and_modify(|e| {
+				*e = match e {
+					| TransactionStatus::Running => TransactionStatus::Failed(1, Instant::now()),
+					| &mut TransactionStatus::Retrying(ref n) => {
+						tries = n.saturating_add(1);
+						TransactionStatus::Failed(tries, Instant::now())
+					},
+					| TransactionStatus::Failed(t, _) => {
+						tries = t.saturating_add(1);
+						TransactionStatus::Failed(tries, Instant::now())
+					},
+				}
+			})
+			.or_insert_with(|| TransactionStatus::Failed(1, Instant::now()));
 
 		// Schedule a delayed retry so EDU-only destinations (e.g. to-device
 		// messages) are retried after backoff even when no new PDUs arrive.
@@ -619,6 +623,9 @@ impl Service {
 		pin_mut!(receipts);
 		let mut collected = Vec::new();
 		while let Some((user_id, count, read_receipt)) = receipts.next().await {
+			if num.load(Ordering::Relaxed) >= SELECT_RECEIPT_LIMIT {
+				break;
+			}
 			if count > since.1 {
 				break;
 			}

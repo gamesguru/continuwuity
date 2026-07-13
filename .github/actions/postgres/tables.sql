@@ -60,7 +60,7 @@ WITH baseline_selection AS (
     FROM runs
     WHERE (branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream')
         OR version_string LIKE '%main%')
-    ORDER BY arch, os, run_date DESC
+    ORDER BY arch, os, run_date DESC, id DESC
 ),
 baseline_status AS (
     SELECT
