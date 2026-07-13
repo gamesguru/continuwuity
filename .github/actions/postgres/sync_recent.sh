@@ -26,6 +26,9 @@ psql_remote() {
 # Defaults to the SSH-tunneled remote psql; import_history.sh overrides this to a direct
 # local connection before sourcing this file.
 PSQL_SINK=${PSQL_SINK:-psql_remote}
+# Bulk sync defaults to summary-only so the last 100 run upserts stay fast.
+# Set SYNC_RECENT_DETAILS=1 to also ingest run_details + ever_passed.
+SYNC_RECENT_DETAILS=${SYNC_RECENT_DETAILS:-0}
 
 # Reads NDJSON on stdin (each line already tagged with commit/arch/os/profile/room_version/
 # features), streams it into a temp table, then upserts run_details + ever_passed for exactly
@@ -101,6 +104,11 @@ echo "→ Streaming last $LIMIT run summaries..."
           (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int, (j->>'room_version')
         FROM b ON CONFLICT (commit_hash, arch, os, profile, room_version, features) DO NOTHING;"
 ) | psql_remote
+
+if [[ "$SYNC_RECENT_DETAILS" != "1" ]]; then
+	echo "→ Summary-only sync complete; skipping detail ingest."
+	exit 0
+fi
 
 # Pre-cache git tree for fast existence checks
 ALL_FILES=$(git ls-tree -r FETCH_HEAD:runs_data --name-only || true)
