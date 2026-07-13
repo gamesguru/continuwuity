@@ -507,7 +507,8 @@ mod tests {
 	fn test_auth_server_checks_impl_federation_disabled() {
 		let server_name = server_name!("local.com");
 		let origin = server_name!("remote.com");
-		let result = auth_server_checks_impl(false, server_name, false, origin, Some(server_name));
+		let result =
+			auth_server_checks_impl(false, server_name, false, origin, Some(server_name));
 		assert!(result.is_err(), "Disabled federation should be rejected");
 	}
 

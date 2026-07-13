@@ -499,11 +499,9 @@ pub(crate) async fn build_sync_events(
 				.collect()
 				.await;
 
-			left_candidates.extend(
-				members
-					.into_iter()
-					.filter(|member| member != syncing_user && !device_list_updates.left.contains(member)),
-			);
+			left_candidates.extend(members.into_iter().filter(|member| {
+				member != syncing_user && !device_list_updates.left.contains(member)
+			}));
 		}
 
 		let newly_left: Vec<OwnedUserId> = futures::stream::iter(left_candidates)
