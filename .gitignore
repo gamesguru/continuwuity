@@ -115,6 +115,7 @@ doc_build/
 *.swp
 test_logs.jsonl
 test_results.jsonl
+__pycache__/
 
 # submodules and unwanted tracks and such
 matrix-spec-txt/

@@ -372,10 +372,11 @@ jobs:
           OS="${{ matrix.os }}"
           PROFILE="${{ matrix.profile }}"
           ROOM_VERSION="${{ matrix.room_version }}"
+          FEATURES="${{ env.FEATURES }}"
 
           # Fetch the newly failing and passing tests for this specific run
-          NEW_FAILURES=$(./bin/db-shell -A -t -c "SELECT new_failures_list FROM v_run_regressions WHERE commit_hash LIKE '${SHA}%' AND arch = '${ARCH}' AND os = '${OS}' AND profile = '${PROFILE}' AND room_version IS NOT DISTINCT FROM '${ROOM_VERSION}' LIMIT 1;" | sed 's/\\n/\n/g')
-          NEW_PASSES=$(./bin/db-shell -A -t -c "SELECT new_passes_list FROM v_run_regressions WHERE commit_hash LIKE '${SHA}%' AND arch = '${ARCH}' AND os = '${OS}' AND profile = '${PROFILE}' AND room_version IS NOT DISTINCT FROM '${ROOM_VERSION}' LIMIT 1;" | sed 's/\\n/\n/g')
+          NEW_FAILURES=$(./bin/db-shell -A -t -c "SELECT new_failures_list FROM v_run_regressions WHERE commit_hash LIKE '${SHA}%' AND arch = '${ARCH}' AND os = '${OS}' AND profile = '${PROFILE}' AND room_version IS NOT DISTINCT FROM '${ROOM_VERSION}' AND COALESCE(regexp_replace(btrim(features, ' ,'), '[,\s]+', ' ', 'g'), '') IS NOT DISTINCT FROM COALESCE(regexp_replace(btrim('${FEATURES}', ' ,'), '[,\s]+', ' ', 'g'), '') LIMIT 1;" | sed 's/\\n/\n/g')
+          NEW_PASSES=$(./bin/db-shell -A -t -c "SELECT new_passes_list FROM v_run_regressions WHERE commit_hash LIKE '${SHA}%' AND arch = '${ARCH}' AND os = '${OS}' AND profile = '${PROFILE}' AND room_version IS NOT DISTINCT FROM '${ROOM_VERSION}' AND COALESCE(regexp_replace(btrim(features, ' ,'), '[,\s]+', ' ', 'g'), '') IS NOT DISTINCT FROM COALESCE(regexp_replace(btrim('${FEATURES}', ' ,'), '[,\s]+', ' ', 'g'), '') LIMIT 1;" | sed 's/\\n/\n/g')
 
           echo "new_failures<<EOF" | tee -a "$GITHUB_OUTPUT"
           echo "$NEW_FAILURES" | tee -a "$GITHUB_OUTPUT"

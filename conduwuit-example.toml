@@ -2135,6 +2135,10 @@
 #
 #msc4222_enabled = false
 
+# MSC3030: timestamp to event
+#
+#msc3030_enabled = true
+
 #[global.smtp]
 
 # A `smtp://`` URI which will be used to connect to a mail server.

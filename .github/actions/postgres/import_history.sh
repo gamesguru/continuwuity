@@ -43,7 +43,7 @@ SELECT
     (j->>'version_string'), (j->>'features'), (j->>'profile'), (j->>'binary_sha256'),
     (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int, COALESCE(NULLIF(j->>'room_version', ''), '11')
 FROM b
-ON CONFLICT (commit_hash, run_date, arch, os, profile, room_version) DO NOTHING;
+ON CONFLICT (commit_hash, run_date, arch, os, profile, room_version, features) DO NOTHING;
 EOF
 
 # 2. Bulk Ingest Test Details (Injecting metadata from filenames)

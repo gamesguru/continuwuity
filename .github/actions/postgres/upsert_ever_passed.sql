@@ -1,6 +1,6 @@
 -- Incremental ever_passed UPSERT scoped to the current run.
 -- Placeholders are replaced by sed at runtime:
---   {commit}, {arch}, {os}, {profile}, {room_version}
+--   {commit}, {arch}, {os}, {profile}, {room_version}, {features}
 INSERT INTO ever_passed (test_name, rv, last_passed, last_commit, last_branch, branches)
 SELECT
     rd.test_name,
@@ -17,6 +17,7 @@ WHERE rd.status = 'pass'
   AND r.os IS NOT DISTINCT FROM (NULLIF('{os}', ''))
   AND r.profile IS NOT DISTINCT FROM (NULLIF('{profile}', ''))
   AND r.room_version IS NOT DISTINCT FROM (NULLIF('{room_version}', ''))
+  AND COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '') IS NOT DISTINCT FROM COALESCE(regexp_replace(btrim('{features}', ' ,'), '[,\s]+', ' ', 'g'), '')
 ON CONFLICT (test_name, rv) DO UPDATE SET
     last_passed = GREATEST(ever_passed.last_passed, EXCLUDED.last_passed),
     last_commit = CASE
