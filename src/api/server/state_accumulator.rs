@@ -25,6 +25,7 @@ pub(crate) struct StateAccumulatorResponse {
 pub(crate) async fn get_state_accumulator_route(
 	State(services): State<crate::State>,
 	TypedHeader(Authorization(x_matrix)): TypedHeader<Authorization<XMatrix>>,
+	axum::extract::OriginalUri(original_uri): axum::extract::OriginalUri,
 	axum::extract::Path(room_id_str): axum::extract::Path<String>,
 	axum::extract::Query(query): axum::extract::Query<StateAccumulatorQuery>,
 ) -> Result<impl axum::response::IntoResponse> {
@@ -33,7 +34,14 @@ pub(crate) async fn get_state_accumulator_route(
 	let room_id = OwnedRoomId::try_from(room_id_str)
 		.map_err(|_| err!(Request(InvalidParam("Invalid room ID."))))?;
 
-	verify_federation_request(&services, &room_id, &query, &x_matrix).await?;
+	verify_federation_request(
+		&services,
+		&x_matrix,
+		original_uri
+			.path_and_query()
+			.map_or("/", http::uri::PathAndQuery::as_str),
+	)
+	.await?;
 
 	AccessCheck {
 		services: &services,
@@ -98,9 +106,8 @@ pub(crate) async fn get_state_accumulator_route(
 
 async fn verify_federation_request(
 	services: &crate::State,
-	room_id: &OwnedRoomId,
-	query: &StateAccumulatorQuery,
 	x_matrix: &XMatrix,
+	signature_uri: &str,
 ) -> Result<()> {
 	type Member = (String, ruma::CanonicalJsonValue);
 	type Object = ruma::CanonicalJsonObject;
@@ -135,13 +142,7 @@ async fn verify_federation_request(
 		("method".into(), Value::String(http::Method::GET.as_str().into())),
 		("origin".into(), Value::String(x_matrix.origin.as_str().into())),
 		("signatures".into(), Value::Object(signatures.into())),
-		(
-			"uri".into(),
-			Value::String(format!(
-				"/_matrix/federation/unstable/tk.nutra.msc4500/state_accumulator/{}?event_id={}",
-				room_id, query.event_id
-			)),
-		),
+		("uri".into(), Value::String(signature_uri.to_owned())),
 	]
 	.into();
 
