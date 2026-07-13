@@ -2,10 +2,14 @@
 set -euo pipefail
 
 # sync_recent.sh
-# Performs an incremental, efficient sync of the last N runs into PostgreSQL.
-# Only streams run detail files that are not yet in the database.
+# Single ingest path for CI run data -> PostgreSQL. Two modes:
+#   sync_recent.sh [LIMIT]                  bulk: catch up the last LIMIT runs from the orphan branch
+#   sync_recent.sh --direct FILE META_JSON  direct: ingest one local run immediately, no git fetch
+#
+# Both modes share the same run_details/ever_passed upsert logic below, so there is exactly
+# one place that knows how a run gets written -- avoids the two write paths drifting (e.g.
+# computing run_date independently) and silently duplicating "runs" rows.
 
-LIMIT=${1:-100}
 TARGET_BRANCH=${TARGET_BRANCH:-"_metadata/badges"}
 export DB_TARGET=${DATABASE_URL:-"c10y"}
 SSH_TARGET=${SSH_TARGET:-"git@nutra.tk"}
@@ -13,6 +17,57 @@ SSH_TARGET=${SSH_TARGET:-"git@nutra.tk"}
 psql_remote() {
 	ssh -C -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$SSH_TARGET" "psql -U git c10y"
 }
+
+# Reads NDJSON on stdin (each line already tagged with commit/arch/os/profile/room_version/
+# features), streams it into a temp table, then upserts run_details + ever_passed for exactly
+# the run rows those lines belong to.
+ingest_details() {
+	(
+		echo "CREATE TEMP TABLE t (j jsonb);"
+		printf '%s\n' "\copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';"
+		cat
+		echo "\."
+		cat "$(dirname "$0")/ingest_details.sql"
+	) | psql_remote
+}
+
+if [[ "${1:-}" == "--direct" ]]; then
+	RESULTS_FILE=$2
+	RUN_META=$3
+
+	COMMIT=$(jq -r '.commit_hash' <<<"$RUN_META")
+	BRANCH=$(jq -r '.branch // ""' <<<"$RUN_META")
+	ARCH=$(jq -r '.arch // ""' <<<"$RUN_META")
+	OS=$(jq -r '.os // ""' <<<"$RUN_META")
+	PROFILE=$(jq -r '.profile // ""' <<<"$RUN_META")
+	ROOM_VERSION=$(jq -r '.room_version // ""' <<<"$RUN_META")
+	VERSION=$(jq -r '.version_string // ""' <<<"$RUN_META")
+	FEATURES=$(jq -r '.features // ""' <<<"$RUN_META")
+	PASS=$(jq -r '.pass // 0' <<<"$RUN_META")
+	FAIL=$(jq -r '.fail // 0' <<<"$RUN_META")
+	SKIP=$(jq -r '.skip // 0' <<<"$RUN_META")
+	RUN_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+	if [[ -z "$COMMIT" || ! -f "$RESULTS_FILE" ]]; then
+		echo "⚠ Direct ingest skipped: missing commit_hash or results_file"
+		exit 1
+	fi
+
+	echo "→ Direct ingest for $COMMIT ($ARCH/$OS/v$ROOM_VERSION)..."
+	(
+		echo "INSERT INTO runs (run_date, commit_hash, branch, arch, os, profile, n_pass, n_skip, n_fail, room_version, features, version_string)
+        SELECT '${RUN_DATE}'::timestamptz, '${COMMIT}', '${BRANCH}', '${ARCH}', '${OS}', '${PROFILE}', ${PASS}, ${SKIP}, ${FAIL}, '${ROOM_VERSION}',
+          COALESCE(regexp_replace(btrim('${FEATURES}', ' ,'), '[,\s]+', ' ', 'g'), ''), '${VERSION}'
+        ON CONFLICT (commit_hash, run_date, arch, os, profile, room_version, features) DO NOTHING;"
+
+		jq -c --arg c "$COMMIT" --arg a "$ARCH" --arg o "$OS" --arg p "$PROFILE" --arg rv "$ROOM_VERSION" --arg f "$FEATURES" \
+			'. + {commit: $c, arch: $a, os: $o, profile: $p, room_version: $rv, features: ($f | gsub("[,\\s]+"; " ") | gsub("^ | $"; ""))}' "$RESULTS_FILE"
+	) | ingest_details
+	echo "✓ Direct ingest complete."
+	exit 0
+fi
+
+LIMIT=${1:-100}
 
 echo "→ Fetching latest metadata from origin/$TARGET_BRANCH..."
 git fetch origin "$TARGET_BRANCH" --depth 1 --filter=blob:none >/dev/null 2>&1
@@ -102,86 +157,12 @@ fi
 # Stream only the NEW run detail files
 echo "→ Streaming $NEED new run detail files..."
 (
-	# Advisory lock prevents deadlocks from parallel CI jobs
-	echo "SELECT pg_advisory_lock(42);"
-
-	echo "CREATE TEMP TABLE t (j jsonb);"
-	printf '%s\n' "\copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';"
-
 	for i in "${!PENDING_FILES[@]}"; do
 		IFS=$'\t' read -r COMMIT ARCH OS PROFILE ROOM_VERSION FEATURES <<<"${PENDING_META[$i]}"
 		git show "FETCH_HEAD:${PENDING_FILES[$i]}" |
 			jq -c --arg c "$COMMIT" --arg a "$ARCH" --arg o "$OS" --arg p "$PROFILE" --arg rv "$ROOM_VERSION" --arg f "$FEATURES" \
 				'. + {commit: $c, arch: $a, os: $o, profile: $p, room_version: $rv, features: $f}'
 	done
-
-	echo "\."
-	cat <<'SQL'
-	-- Map the distinct run configurations in the temp table to actual run IDs
-	CREATE TEMP TABLE newly_ingested_runs AS
-	SELECT DISTINCT r.id AS run_id
-	FROM (
-		SELECT DISTINCT
-			(j->>'commit') AS commit_hash,
-			(NULLIF((j->>'arch'), '')) AS arch,
-			(NULLIF((j->>'os'), '')) AS os,
-			(NULLIF((j->>'profile'), '')) AS profile,
-			(NULLIF((j->>'room_version'), '')) AS room_version,
-			(NULLIF((j->>'features'), '')) AS features
-		FROM t
-	) nt
-	JOIN runs r ON r.commit_hash = nt.commit_hash
-		AND r.arch IS NOT DISTINCT FROM nt.arch
-		AND r.os IS NOT DISTINCT FROM nt.os
-		AND r.profile IS NOT DISTINCT FROM nt.profile
-		AND r.room_version IS NOT DISTINCT FROM nt.room_version
-		AND COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '') IS NOT DISTINCT FROM COALESCE(regexp_replace(btrim(nt.features, ' ,'), '[,\s]+', ' ', 'g'), '');
-
-	CREATE UNIQUE INDEX idx_newly_ingested_runs ON newly_ingested_runs (run_id);
-
-	INSERT INTO run_details (run_id, test_name, status)
-	SELECT DISTINCT ON (r.id, (t.j->>'Test')) r.id, (t.j->>'Test'), (t.j->>'Action')
-	FROM t
-	JOIN runs r ON r.commit_hash = (t.j->>'commit')
-		AND r.arch IS NOT DISTINCT FROM (NULLIF((t.j->>'arch'), ''))
-		AND r.os IS NOT DISTINCT FROM (NULLIF((t.j->>'os'), ''))
-		AND r.profile IS NOT DISTINCT FROM (NULLIF((t.j->>'profile'), ''))
-		AND r.room_version IS NOT DISTINCT FROM (NULLIF((t.j->>'room_version'), ''))
-		AND COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '') IS NOT DISTINCT FROM COALESCE(NULLIF((t.j->>'features'), ''), '')
-	WHERE (t.j->>'Action') IN ('pass', 'fail', 'skip')
-		AND r.id IN (SELECT run_id FROM newly_ingested_runs)
-	ON CONFLICT (run_id, test_name) DO UPDATE SET status = EXCLUDED.status;
-
-	-- Incremental ever_passed: scoped to only the newly ingested runs
-	INSERT INTO ever_passed (test_name, rv, last_passed, last_commit, last_branch, branches)
-	SELECT
-			rd.test_name,
-			COALESCE(r.room_version, '11'),
-			MAX(r.run_date)::date::text,
-			(ARRAY_AGG(r.commit_hash ORDER BY r.run_date DESC))[1],
-			(ARRAY_AGG(r.branch ORDER BY r.run_date DESC))[1],
-			ARRAY_AGG(DISTINCT r.branch) FILTER (WHERE r.branch IS NOT NULL)
-	FROM run_details rd
-	JOIN runs r ON rd.run_id = r.id
-	WHERE rd.status = 'pass'
-		AND r.id IN (SELECT run_id FROM newly_ingested_runs)
-	GROUP BY rd.test_name, COALESCE(r.room_version, '11')
-	ON CONFLICT (test_name, rv) DO UPDATE SET
-			last_passed = GREATEST(ever_passed.last_passed, EXCLUDED.last_passed),
-			last_commit = CASE
-					WHEN EXCLUDED.last_passed > COALESCE(ever_passed.last_passed, '')
-					THEN EXCLUDED.last_commit ELSE ever_passed.last_commit END,
-			last_branch = CASE
-					WHEN EXCLUDED.last_passed > COALESCE(ever_passed.last_passed, '')
-					THEN EXCLUDED.last_branch ELSE ever_passed.last_branch END,
-			branches = (
-					SELECT ARRAY_AGG(DISTINCT b ORDER BY b)
-					FROM UNNEST(ever_passed.branches || EXCLUDED.branches) AS b
-					WHERE b IS NOT NULL
-			);
-
-	SELECT pg_advisory_unlock(42);
-SQL
-) | psql_remote
+) | ingest_details
 
 echo "✓ Incremental sync of last $LIMIT runs complete."
