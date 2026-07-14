@@ -12,6 +12,11 @@ import subprocess
 import sys
 import time
 
+
+def sql_quote(value):
+    """Escape a value for safe embedding inside a single-quoted SQL string literal."""
+    return value.replace("'", "''")
+
 args_str = " ".join(sys.argv[1:])
 
 # Get the local machine's timezone offset (e.g. "-04:00") to send to Postgres over SSH
@@ -79,26 +84,25 @@ if super_mode:
 else:
     super_columns = ""
 
-# baseline/like_str/limit are real *values*, so they're bound as psql variables below and
-# referenced in the template as :'baseline_val' / :'like_val' / :'limit_val' -- psql performs
-# the SQL-literal escaping when substituting a :'var', so no raw text from argv ever reaches
-# the query string. Only *which fixed SQL fragment* to use is chosen here, never the value.
+# baseline/like_str are real *values* from argv, so they're escaped with sql_quote() and
+# embedded directly as SQL string literals below. Only *which fixed SQL fragment* to use is
+# chosen here, never raw unescaped text.
 if baseline:
+    baseline_val = sql_quote(baseline)
     baseline_run_filter = (
-        "(b.commit_hash LIKE :'baseline_val' || '%' "
-        "OR b.version_string LIKE '%' || :'baseline_val' || '%' "
-        "OR b.branch LIKE '%' || :'baseline_val' || '%' "
-        "OR b.id::text = :'baseline_val')"
+        f"(b.commit_hash LIKE '{baseline_val}%' "
+        f"OR b.version_string LIKE '%{baseline_val}%' "
+        f"OR b.branch LIKE '%{baseline_val}%' "
+        f"OR b.id::text = '{baseline_val}')"
     )
 else:
     # Default to recent main/upstream. No user input involved, plain literal is fine.
     baseline_run_filter = "(b.branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream') OR b.version_string LIKE '%main%')"
-    baseline = ""  # psql -v still needs a value bound even when unused by this branch
 
 if like_str == "all":
     like_filter = ""
 else:
-    like_filter = "AND version_string LIKE '%' || :'like_val' || '%'"
+    like_filter = f"AND version_string LIKE '%{sql_quote(like_str)}%'"
 
 # order becomes raw ORDER BY text (column identifiers/direction), which cannot be bound as a
 # parameter -- SQL has no placeholder for identifiers. Allowlist it instead of escaping it.
@@ -138,6 +142,7 @@ query = base_query_template.format(
     tz_sql=tz_sql,
     columns_tail=columns_tail,
     order=order,
+    limit=limit,
     like_filter=like_filter,
     super_columns=super_columns,
 )
@@ -148,20 +153,7 @@ env = os.environ.copy()
 env["PAGER"] = env.get("PAGER") or "less -X -F -S"
 
 try:
-    subprocess.run(
-        [
-            "./bin/db-shell",
-            "-v",
-            f"baseline_val={baseline}",
-            "-v",
-            f"like_val={like_str}",
-            "-v",
-            f"limit_val={limit}",
-            "-c",
-            query,
-        ],
-        env=env,
-    )
+    subprocess.run(["./bin/db-shell", "-c", query], env=env)
 except KeyboardInterrupt:
     raise SystemExit(130)
 finally:
