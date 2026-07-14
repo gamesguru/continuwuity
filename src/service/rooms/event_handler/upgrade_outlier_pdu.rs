@@ -48,9 +48,7 @@ impl super::Service {
 			"tried to upgrade a PDU with a create_event that is not a room create event"
 		);
 		assert_eq!(
-			incoming_pdu
-				.room_id_or_hash()
-				.expect("incoming PDU must have a room ID"),
+			incoming_pdu.room_id_or_hash(),
 			*room_id,
 			"room ID mismatch: PDU room ID differs from parameter"
 		);

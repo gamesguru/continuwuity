@@ -342,7 +342,7 @@ pub(crate) async fn visibility_filter(
 ) -> Option<PdusIterItem> {
 	let (_, pdu) = &item;
 
-	let room_id = pdu.room_id_or_hash()?;
+	let room_id = pdu.room_id_or_hash();
 
 	services
 		.rooms

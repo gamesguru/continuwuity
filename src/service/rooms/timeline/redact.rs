@@ -39,9 +39,7 @@ impl super::Service {
 			}
 		}
 
-		let room_id = pdu
-			.room_id_or_hash()
-			.ok_or_else(|| err!(Request(Forbidden("Event has no room_id"))))?;
+		let room_id = pdu.room_id_or_hash();
 
 		let room_version_id = self.services.state.get_room_version(&room_id).await?;
 

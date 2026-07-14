@@ -135,9 +135,7 @@ impl super::Service {
 			event_id = %incoming_pdu.event_id,
 			"Resolving state at event"
 		);
-		let room_id = incoming_pdu
-			.room_id_or_hash()
-			.expect("incoming PDU must have a room ID");
+		let room_id = incoming_pdu.room_id_or_hash();
 
 		// If the incoming event only has one prev event, we can just use the state at
 		// that event, but otherwise we have to resolve across each fork. If we're
@@ -213,9 +211,7 @@ impl super::Service {
 			event_id = %incoming_pdu.event_id,
 			"Gathering auth events"
 		);
-		let room_id = incoming_pdu
-			.room_id_or_hash()
-			.expect("incoming PDU must have a room ID");
+		let room_id = incoming_pdu.room_id_or_hash();
 		let auth_events = self
 			.services
 			.state
@@ -267,9 +263,7 @@ impl super::Service {
 			.policy_server_allows_event(
 				incoming_pdu,
 				pdu_json,
-				&incoming_pdu
-					.room_id_or_hash()
-					.expect("incoming PDU must have a room ID"),
+				&incoming_pdu.room_id_or_hash(),
 				room_version_rules,
 				true,
 			)

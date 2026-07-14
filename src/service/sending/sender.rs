@@ -804,9 +804,7 @@ impl Service {
 					|ev: PushRulesEvent| ev.content.global,
 				);
 
-			let Some(pdu_room_id) = pdu.room_id_or_hash() else {
-				continue;
-			};
+			let pdu_room_id = pdu.room_id_or_hash();
 
 			let unread: UInt = self
 				.services

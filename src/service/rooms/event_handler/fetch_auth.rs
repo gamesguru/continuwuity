@@ -28,9 +28,7 @@ impl super::Service {
 	where
 		Pdu: Event + Send + Sync,
 	{
-		let incoming_room_id = incoming_event
-			.room_id_or_hash()
-			.ok_or_else(|| err!(Request(Forbidden("Incoming event has no room_id"))))?;
+		let incoming_room_id = incoming_event.room_id_or_hash();
 
 		let event_auth: get_event_authorization::v1::Response = self
 			.services

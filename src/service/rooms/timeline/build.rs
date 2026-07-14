@@ -2,7 +2,7 @@ use std::{collections::HashSet, iter::once};
 
 use conduwuit::trace;
 use conduwuit_core::{
-	Err, Result, err,
+	Err, Result,
 	matrix::{event::Event, pdu::PartialPdu},
 	utils::{IterStream, ReadyExt},
 };
@@ -36,9 +36,7 @@ impl super::Service {
 			.create_hash_and_sign_event(partial_pdu, sender, room_id, state_lock)
 			.await?;
 
-		let room_id = pdu
-			.room_id_or_hash()
-			.ok_or_else(|| err!(Request(Forbidden("Event has no room_id"))))?;
+		let room_id = pdu.room_id_or_hash();
 		if self.services.admin.is_admin_room(&room_id).await {
 			self.check_pdu_for_admin_room(&pdu, sender).boxed().await?;
 		}
@@ -212,9 +210,7 @@ impl super::Service {
 				let server_user = &self.services.globals.server_user.to_string();
 
 				let content: RoomMemberEventContent = pdu.get_content()?;
-				let room_id = pdu
-					.room_id_or_hash()
-					.ok_or_else(|| err!(Request(Forbidden("Event has no room_id"))))?;
+				let room_id = pdu.room_id_or_hash();
 
 				match content.membership {
 					| MembershipState::Leave => {

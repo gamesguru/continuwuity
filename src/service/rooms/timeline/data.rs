@@ -121,7 +121,7 @@ impl Data {
 
 		// Enforce cross-room boundary: verify the PDU belongs to the expected room
 		if let Some(expected_room) = room_id {
-			if pdu.room_id_or_hash().as_deref() != Some(expected_room) {
+			if pdu.room_id_or_hash() != expected_room {
 				return Err!(Database("PDU {event_id} does not belong to room {expected_room}"));
 			}
 		}
@@ -155,7 +155,7 @@ impl Data {
 
 				// Enforce cross-room boundary
 				if let Some(expected_room) = room_id {
-					if pdu.room_id_or_hash().as_deref() != Some(expected_room) {
+					if pdu.room_id_or_hash() != expected_room {
 						return Err(conduwuit::err!(Database(
 							"Outlier PDU {event_id} does not belong to room {expected_room}"
 						)));
@@ -196,7 +196,7 @@ impl Data {
 		let pdu: PduEvent = self.pduid_pdu.get(pdu_id).await.deserialized()?;
 
 		if let Some(expected_room) = room_id {
-			if pdu.room_id_or_hash().as_deref() != Some(expected_room) {
+			if pdu.room_id_or_hash() != expected_room {
 				return Err!(Database("PDU does not belong to room {expected_room}"));
 			}
 		}
@@ -295,7 +295,7 @@ impl Data {
 		let pdu = serde_json::from_slice::<PduEvent>(pdu)?;
 
 		if let Some(expected_room) = room_id {
-			if pdu.room_id_or_hash().as_deref() != Some(expected_room) {
+			if pdu.room_id_or_hash() != expected_room {
 				return Err(conduwuit::err!(Database(
 					"PDU does not belong to expected room {expected_room}"
 				)));

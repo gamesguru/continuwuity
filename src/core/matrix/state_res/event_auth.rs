@@ -294,7 +294,7 @@ where
 	}
 	let expected_room_id = room_create_event.room_id_or_hash();
 
-	if incoming_event.room_id() != expected_room_id.as_deref() {
+	if incoming_event.room_id() != Some(expected_room_id.as_ref()) {
 		warn!(
 			expected = ?expected_room_id,
 			received = ?incoming_event.room_id(),
@@ -322,7 +322,7 @@ where
 	}
 
 	if let Some(ref pe) = power_levels_event {
-		if pe.room_id() != expected_room_id.as_deref() {
+		if pe.room_id() != Some(expected_room_id.as_ref()) {
 			warn!(
 				expected = ?expected_room_id,
 				received = ?pe.room_id(),
@@ -441,7 +441,7 @@ where
 		},
 	};
 
-	if sender_member_event.room_id() != expected_room_id.as_deref() {
+	if sender_member_event.room_id() != Some(expected_room_id.as_ref()) {
 		warn!(
 			"room_id of sender member event ({:?}) does not match that of the m.room.create \
 			 event ({:?})",

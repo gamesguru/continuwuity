@@ -114,15 +114,21 @@ impl Event for Pdu {
 	fn room_id(&self) -> Option<&RoomId> { self.room_id.as_deref() }
 
 	#[inline]
-	fn room_id_or_hash(&self) -> Option<OwnedRoomId> {
+	fn room_id_or_hash(&self) -> OwnedRoomId {
+		if *self.event_type() != TimelineEventType::RoomCreate {
+			return self
+				.room_id()
+				.expect("Event must have a room ID")
+				.to_owned();
+		}
 		if let Some(room_id) = &self.room_id {
-			return Some(room_id.clone());
-		}
-		if *self.event_type() == TimelineEventType::RoomCreate {
+			// v1-v11
+			room_id.clone()
+		} else {
+			// v12+
 			let constructed_hash = self.event_id.as_str().replace('$', "!");
-			return RoomId::parse(&constructed_hash).ok();
+			RoomId::parse(&constructed_hash).expect("event ID can be parsed")
 		}
-		None
 	}
 
 	#[inline]
@@ -179,15 +185,21 @@ impl Event for &Pdu {
 	fn room_id(&self) -> Option<&RoomId> { self.room_id.as_ref().map(AsRef::as_ref) }
 
 	#[inline]
-	fn room_id_or_hash(&self) -> Option<OwnedRoomId> {
+	fn room_id_or_hash(&self) -> OwnedRoomId {
+		if *self.event_type() != TimelineEventType::RoomCreate {
+			return self
+				.room_id()
+				.expect("Event must have a room ID")
+				.to_owned();
+		}
 		if let Some(room_id) = &self.room_id {
-			return Some(room_id.clone());
-		}
-		if *self.event_type() == TimelineEventType::RoomCreate {
+			// v1-v11
+			room_id.clone()
+		} else {
+			// v12+
 			let constructed_hash = self.event_id.as_str().replace('$', "!");
-			return RoomId::parse(&constructed_hash).ok();
+			RoomId::parse(&constructed_hash).expect("event ID can be parsed")
 		}
-		None
 	}
 
 	#[inline]

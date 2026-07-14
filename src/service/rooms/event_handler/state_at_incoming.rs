@@ -132,9 +132,7 @@ impl super::Service {
 		};
 
 		trace!("Calculating fork states...");
-		let room_id = incoming_pdu
-			.room_id_or_hash()
-			.expect("incoming PDU must have a room ID");
+		let room_id = incoming_pdu.room_id_or_hash();
 		let (fork_states, auth_chain_sets): (Vec<StateMap<_>>, Vec<HashSet<_>>) =
 			extremity_sstatehashes
 				.into_iter()

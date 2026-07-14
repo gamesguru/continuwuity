@@ -73,9 +73,7 @@ pub(crate) async fn get_backfill_route(
 		.pdus_rev(&body.room_id, Some(from.saturating_add(1)))
 		.try_take(limit)
 		.try_filter_map(|(_, pdu)| async move {
-			let Some(room_id) = pdu.room_id_or_hash() else {
-				return Ok(None);
-			};
+			let room_id = pdu.room_id_or_hash();
 			Ok(services
 				.rooms
 				.state_accessor

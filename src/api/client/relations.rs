@@ -218,7 +218,7 @@ async fn visibility_filter<Pdu: Event + Send + Sync>(
 ) -> Option<(PduCount, Pdu)> {
 	let (_, pdu) = &item;
 
-	let room_id = pdu.room_id_or_hash()?;
+	let room_id = pdu.room_id_or_hash();
 
 	services
 		.rooms

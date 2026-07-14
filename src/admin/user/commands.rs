@@ -862,9 +862,7 @@ impl crate::Context<'_> {
 		);
 
 		let redaction_event_id = {
-			let Some(room_id) = event.room_id_or_hash() else {
-				return Err!(Request(Forbidden("Event has no room_id")));
-			};
+			let room_id = event.room_id_or_hash();
 			let state_lock = self.services.rooms.state.mutex.lock(room_id.as_str()).await;
 
 			self.services

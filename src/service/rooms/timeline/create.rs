@@ -235,9 +235,7 @@ impl super::Service {
 		let create_pdu = match &pdu.kind {
 			| TimelineEventType::RoomCreate => None,
 			| _ => {
-				let room_id = room_id_or_hash.ok_or_else(|| {
-					err!(Request(Forbidden(warn!("Failed to determine room ID for event"))))
-				})?;
+				let room_id = room_id_or_hash;
 				Some(
 					self.services
 						.state_accessor
@@ -338,9 +336,7 @@ impl super::Service {
 		// MSC4291: ensure room_id is in our internal representation even if it's
 		// v12+.
 		if pdu.room_id.is_none() {
-			let internal_room_id = pdu
-				.room_id_or_hash()
-				.ok_or_else(|| err!(Request(Forbidden("Event has no room_id"))))?;
+			let internal_room_id = pdu.room_id_or_hash();
 			pdu.room_id = Some(internal_room_id);
 		}
 

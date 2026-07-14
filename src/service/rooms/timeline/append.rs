@@ -52,9 +52,7 @@ impl super::Service {
 		should_soft_fail: bool,
 		state_lock: &'a RoomMutexGuard,
 	) -> Result<Option<RawPduId>> {
-		let room_id = pdu
-			.room_id_or_hash()
-			.expect("timeline PDU must have a room ID");
+		let room_id = pdu.room_id_or_hash();
 
 		let sb = state_before.iter().map(|(ssk, eid)| (ssk, eid.as_ref()));
 		let state_ids_compressed: Arc<CompressedState> = self
@@ -150,9 +148,7 @@ impl super::Service {
 		forward_extremities: Vec<OwnedEventId>,
 		state_lock: &Guard<OwnedRoomId, ()>,
 	) -> Result<Vec<OwnedEventId>> {
-		let room_id = incoming_pdu
-			.room_id_or_hash()
-			.expect("incoming PDU must have a room ID");
+		let room_id = incoming_pdu.room_id_or_hash();
 		if incoming_pdu.state_key().is_some() {
 			debug!("Event is a state-event. Deriving new room state");
 			self.derive_new_state(incoming_pdu, room_version_rules, state_before, state_lock)
@@ -207,9 +203,7 @@ impl super::Service {
 		state_before: HashMap<u64, OwnedEventId>,
 		state_lock: &Guard<OwnedRoomId, ()>,
 	) -> Result {
-		let room_id = incoming_pdu
-			.room_id_or_hash()
-			.expect("incoming PDU must have a room ID");
+		let room_id = incoming_pdu.room_id_or_hash();
 		// We also add state after incoming event to the fork states
 		let mut state_at_incoming_event = state_before;
 		let shortstatekey = self

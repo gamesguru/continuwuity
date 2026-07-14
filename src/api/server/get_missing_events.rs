@@ -68,7 +68,7 @@ pub(crate) async fn get_missing_events_route(
 				continue;
 			},
 		};
-		if pdu.room_id_or_hash().as_deref() != Some(body.room_id.as_ref()) {
+		if pdu.room_id_or_hash() != body.room_id {
 			return Err!(Request(Unknown(
 				"Event {next_event_id} is not in room {}",
 				body.room_id
