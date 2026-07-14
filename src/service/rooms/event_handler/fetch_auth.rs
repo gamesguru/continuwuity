@@ -2,8 +2,7 @@ use std::collections::{HashMap, hash_map};
 
 use conduwuit::{Err, Event, EventTypeExt, PduEvent, Result, err, warn};
 use ruma::{
-	CanonicalJsonObject, OwnedEventId, ServerName,
-	api::federation::authorization::get_event_authorization,
+	OwnedEventId, ServerName, api::federation::authorization::get_event_authorization,
 	room_version_rules::RoomVersionRules,
 };
 use tokio::join;
@@ -89,10 +88,10 @@ impl super::Service {
 			};
 
 			// PDU check 4 is done when we've finished aggregating
-			if auth_event_room_id != incoming_event.room_id_or_hash() {
+			if auth_event_room_id != incoming_room_id {
 				return Err!(Request(Forbidden(
 					"Auth chain event {auth_event_id} is in {auth_event_room_id}, not {}.",
-					incoming_event.room_id_or_hash()
+					incoming_room_id
 				)));
 			}
 			let auth_pdu = PduEvent::from_id_val(&auth_event_id, auth_pdu_json).map_err(|e| {

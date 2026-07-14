@@ -145,10 +145,13 @@ impl super::Service {
 					"Event has rejected auth event: {auth_event_id}"
 				)));
 			}
-			if auth_event.room_id_or_hash() != room_id {
+			let auth_event_room_id = auth_event
+				.room_id_or_hash()
+				.expect("auth event must have a room ID");
+			if auth_event_room_id != *room_id {
 				debug_warn!(
 					%auth_event_id,
-					auth_event_room_id=%auth_event.room_id_or_hash(),
+					auth_event_room_id=%auth_event_room_id,
 					expected_room_id=%room_id,
 					"Rejecting incoming event which depends on an auth event in another room.",
 				);

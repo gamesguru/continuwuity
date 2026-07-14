@@ -132,13 +132,15 @@ impl super::Service {
 		};
 
 		trace!("Calculating fork states...");
-		let room_id = &incoming_pdu.room_id_or_hash();
+		let room_id = incoming_pdu
+			.room_id_or_hash()
+			.expect("incoming PDU must have a room ID");
 		let (fork_states, auth_chain_sets): (Vec<StateMap<_>>, Vec<HashSet<_>>) =
 			extremity_sstatehashes
 				.into_iter()
 				.try_stream()
 				.wide_and_then(|(sstatehash, prev_event)| {
-					self.state_at_incoming_fork(room_id, sstatehash, prev_event)
+					self.state_at_incoming_fork(&room_id, sstatehash, prev_event)
 				})
 				.try_collect()
 				.map_ok(Vec::into_iter)

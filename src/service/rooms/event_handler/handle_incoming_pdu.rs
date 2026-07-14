@@ -4,8 +4,8 @@ use std::{
 };
 
 use conduwuit::{
-	Err, Event, PduEvent, Result, debug, debug_error, debug_info, debug_warn, defer, err, error,
-	info, matrix::PartialPdu, result::DebugInspect, trace, utils::time::jitter, warn,
+	Err, Event, PduEvent, Result, debug, debug_error, debug_info, debug_warn, defer, err, info,
+	matrix::PartialPdu, trace, utils::time::jitter,
 };
 use futures::{
 	FutureExt, StreamExt,
@@ -20,7 +20,7 @@ use ruma::{
 };
 use tokio::sync::mpsc;
 
-use crate::rooms::timeline::{RawPduId, pdu_fits};
+use crate::rooms::timeline::RawPduId;
 
 async fn should_rescind_invite(
 	services: &crate::rooms::event_handler::Services,
@@ -121,6 +121,9 @@ impl super::Service {
 		if let Ok(pdu_id) = self.services.timeline.get_pdu_id(event_id).await {
 			debug!("Database hit for incoming PDU, skipping processing");
 			return Ok(Some(pdu_id));
+		}
+		if !crate::rooms::timeline::pdu_fits(&value) {
+			return Err!(Request(TooLarge("PDU is too large")));
 		}
 		trace!(
 			"processing incoming PDU from {origin} for room {room_id} with event id {event_id}"

@@ -52,7 +52,9 @@ impl super::Service {
 		should_soft_fail: bool,
 		state_lock: &'a RoomMutexGuard,
 	) -> Result<Option<RawPduId>> {
-		let room_id = pdu.room_id_or_hash();
+		let room_id = pdu
+			.room_id_or_hash()
+			.expect("timeline PDU must have a room ID");
 
 		let sb = state_before.iter().map(|(ssk, eid)| (ssk, eid.as_ref()));
 		let state_ids_compressed: Arc<CompressedState> = self
@@ -148,6 +150,9 @@ impl super::Service {
 		forward_extremities: Vec<OwnedEventId>,
 		state_lock: &Guard<OwnedRoomId, ()>,
 	) -> Result<Vec<OwnedEventId>> {
+		let room_id = incoming_pdu
+			.room_id_or_hash()
+			.expect("incoming PDU must have a room ID");
 		if incoming_pdu.state_key().is_some() {
 			debug!("Event is a state-event. Deriving new room state");
 			self.derive_new_state(incoming_pdu, room_version_rules, state_before, state_lock)
@@ -164,14 +169,17 @@ impl super::Service {
 				// Remove any that are referenced by this incoming event's prev_events
 				!incoming_pdu.prev_events().any(is_equal_to!(event_id))
 			})
-			.broad_filter_map(|event_id| async move {
-				// Only keep those extremities were not referenced yet
-				self.services
-					.pdu_metadata
-					.is_event_referenced(&incoming_pdu.room_id_or_hash(), &event_id)
-					.await
-					.eq(&false)
-					.then_some(event_id)
+			.broad_filter_map(|event_id| {
+				let room_id = room_id.clone();
+				async move {
+					// Only keep those extremities were not referenced yet
+					self.services
+						.pdu_metadata
+						.is_event_referenced(&room_id, &event_id)
+						.await
+						.eq(&false)
+						.then_some(event_id)
+				}
 			})
 			.collect::<Vec<_>>()
 			.await;
@@ -199,7 +207,9 @@ impl super::Service {
 		state_before: HashMap<u64, OwnedEventId>,
 		state_lock: &Guard<OwnedRoomId, ()>,
 	) -> Result {
-		let room_id = incoming_pdu.room_id_or_hash();
+		let room_id = incoming_pdu
+			.room_id_or_hash()
+			.expect("incoming PDU must have a room ID");
 		// We also add state after incoming event to the fork states
 		let mut state_at_incoming_event = state_before;
 		let shortstatekey = self
