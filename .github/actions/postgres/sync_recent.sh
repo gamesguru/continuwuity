@@ -22,6 +22,15 @@ psql_remote() {
 	ssh -C -o StrictHostKeyChecking=no -o ServerAliveInterval=30 "$SSH_TARGET" "psql -U git c10y"
 }
 
+# Escapes a value for safe use inside a single-quoted SQL string literal (doubles embedded
+# single quotes, per the SQL standard). Required anywhere external data -- e.g. a git branch
+# name, which is attacker-influenced on any push to the repo -- is interpolated into SQL text
+# piped over the SSH/stdin transport below, since that transport carries plain SQL text rather
+# than parameterized psql variables.
+sql_quote() {
+	printf '%s' "$1" | sed "s/'/''/g"
+}
+
 # Command (function or binary name) that ingest_details() pipes assembled SQL into.
 # Defaults to the SSH-tunneled remote psql; import_history.sh overrides this to a direct
 # local connection before sourcing this file.
@@ -66,6 +75,12 @@ if [[ "${1:-}" == "--direct" ]]; then
 	SKIP=$(jq -r '.skip // 0' <<<"$RUN_META")
 	RUN_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
+	# pass/fail/skip must be plain integers -- reject anything else rather than splice it
+	# into SQL unquoted (they come from workflow step outputs, but treat them as untrusted).
+	[[ "$PASS" =~ ^[0-9]+$ ]] || PASS=0
+	[[ "$FAIL" =~ ^[0-9]+$ ]] || FAIL=0
+	[[ "$SKIP" =~ ^[0-9]+$ ]] || SKIP=0
+
 	if [[ -z "$COMMIT" || ! -f "$RESULTS_FILE" ]]; then
 		echo "⚠ Direct ingest skipped: missing commit_hash or results_file"
 		exit 1
@@ -76,8 +91,8 @@ if [[ "${1:-}" == "--direct" ]]; then
 		echo "BEGIN;"
 		echo "SET LOCAL synchronous_commit = OFF;"
 		echo "INSERT INTO runs (run_date, commit_hash, branch, arch, os, profile, n_pass, n_skip, n_fail, room_version, features, version_string)
-        SELECT '${RUN_DATE}'::timestamptz, '${COMMIT}', '${BRANCH}', '${ARCH}', '${OS}', '${PROFILE}', ${PASS}, ${SKIP}, ${FAIL}, '${ROOM_VERSION}',
-          COALESCE(regexp_replace(btrim('${FEATURES}', ' ,'), '[,\s]+', ' ', 'g'), ''), '${VERSION}'
+        SELECT '$(sql_quote "$RUN_DATE")'::timestamptz, '$(sql_quote "$COMMIT")', '$(sql_quote "$BRANCH")', '$(sql_quote "$ARCH")', '$(sql_quote "$OS")', '$(sql_quote "$PROFILE")', ${PASS}, ${SKIP}, ${FAIL}, '$(sql_quote "$ROOM_VERSION")',
+          COALESCE(regexp_replace(btrim('$(sql_quote "$FEATURES")', ' ,'), '[,\s]+', ' ', 'g'), ''), '$(sql_quote "$VERSION")'
         ON CONFLICT (commit_hash, arch, os, profile, room_version, features) DO NOTHING;"
 		echo "COMMIT;"
 	) | psql_remote

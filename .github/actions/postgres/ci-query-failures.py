@@ -79,17 +79,55 @@ if super_mode:
 else:
     super_columns = ""
 
+# baseline/like_str/limit are real *values*, so they're bound as psql variables below and
+# referenced in the template as :'baseline_val' / :'like_val' / :'limit_val' -- psql performs
+# the SQL-literal escaping when substituting a :'var', so no raw text from argv ever reaches
+# the query string. Only *which fixed SQL fragment* to use is chosen here, never the value.
 if baseline:
-    # A specific commit/branch was requested as the baseline
-    baseline_run_filter = f"(b.commit_hash LIKE '{baseline}%' OR b.version_string LIKE '%{baseline}%' OR b.branch LIKE '%{baseline}%' OR b.id::text = '{baseline}')"
+    baseline_run_filter = (
+        "(b.commit_hash LIKE :'baseline_val' || '%' "
+        "OR b.version_string LIKE '%' || :'baseline_val' || '%' "
+        "OR b.branch LIKE '%' || :'baseline_val' || '%' "
+        "OR b.id::text = :'baseline_val')"
+    )
 else:
-    # Default to recent main/upstream
+    # Default to recent main/upstream. No user input involved, plain literal is fine.
     baseline_run_filter = "(b.branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream') OR b.version_string LIKE '%main%')"
+    baseline = ""  # psql -v still needs a value bound even when unused by this branch
 
 if like_str == "all":
     like_filter = ""
 else:
-    like_filter = f"AND version_string LIKE '%{like_str}%'"
+    like_filter = "AND version_string LIKE '%' || :'like_val' || '%'"
+
+# order becomes raw ORDER BY text (column identifiers/direction), which cannot be bound as a
+# parameter -- SQL has no placeholder for identifiers. Allowlist it instead of escaping it.
+_ORDER_COLUMNS = {
+    "run_date",
+    "commit_hash",
+    "branch",
+    "version_string",
+    "arch",
+    "os",
+    "profile",
+    "room_version",
+    "n_pass",
+    "n_skip",
+    "n_fail",
+    "id",
+}
+_ORDER_TOKEN_RE = re.compile(
+    r"^\s*(?:{cols})(?:\s+(?:ASC|DESC))?(?:\s*,\s*(?:{cols})(?:\s+(?:ASC|DESC))?)*\s*$".format(
+        cols="|".join(_ORDER_COLUMNS)
+    ),
+    re.IGNORECASE,
+)
+if not _ORDER_TOKEN_RE.match(order):
+    print(f"⚠ Ignoring invalid order clause {order!r}; falling back to default.")
+    order = "run_date DESC, n_pass DESC"
+
+if not re.fullmatch(r"[0-9]+", limit):
+    limit = "15"
 
 sql_file_path = os.path.join(os.path.dirname(__file__), "queries.sql")
 with open(sql_file_path, "r") as f:
@@ -100,7 +138,6 @@ query = base_query_template.format(
     tz_sql=tz_sql,
     columns_tail=columns_tail,
     order=order,
-    limit=limit,
     like_filter=like_filter,
     super_columns=super_columns,
 )
@@ -111,7 +148,20 @@ env = os.environ.copy()
 env["PAGER"] = env.get("PAGER") or "less -X -F -S"
 
 try:
-    subprocess.run(["./bin/db-shell", "-c", query], env=env)
+    subprocess.run(
+        [
+            "./bin/db-shell",
+            "-v",
+            f"baseline_val={baseline}",
+            "-v",
+            f"like_val={like_str}",
+            "-v",
+            f"limit_val={limit}",
+            "-c",
+            query,
+        ],
+        env=env,
+    )
 except KeyboardInterrupt:
     raise SystemExit(130)
 finally:

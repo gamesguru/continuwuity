@@ -66,7 +66,7 @@ recent_runs AS (
                 rd.run_id = r.id) {like_filter}
             ORDER BY
                 {order}
-            LIMIT {limit}
+            LIMIT :'limit_val'::int
 ),
 run_regs AS (
     SELECT
