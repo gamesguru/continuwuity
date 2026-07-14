@@ -82,33 +82,27 @@ async fn should_rescind_invite(
 }
 
 impl super::Service {
-	/// When receiving an event one needs to:
-	/// 0. Check the server is in the room
-	/// 1. Skip the PDU if we already know about it
-	/// 1.1. Remove unsigned field
-	/// 2. Check signatures, otherwise drop
-	/// 3. Check content hash, redact if doesn't match
-	/// 4. Fetch any missing auth events doing all checks listed here starting
-	///    at 1. These are not timeline events
-	/// 5. Reject "due to auth events" if can't get all the auth events or some
-	///    of the auth events are also rejected "due to auth events"
-	/// 6. Reject "due to auth events" if the event doesn't pass auth based on
-	///    the auth events
-	/// 7. Persist this event as an outlier
-	/// 8. If not timeline event: stop
-	/// 9. Fetch any missing prev events doing all checks listed here starting
-	///    at 1. These are timeline events
-	/// 10. Fetch missing state and auth chain events by calling `/state_ids` at
-	///     backwards extremities doing all the checks in this list starting at
-	///     1. These are not timeline events
-	/// 11. Check the auth of the event passes based on the state of the event
-	/// 12. Ensure that the state is derived from the previous current state
-	///     (i.e. we calculated by doing state res where one of the inputs was a
-	///     previously trusted set of state, don't just trust a set of state we
-	///     got from a remote)
-	/// 13. Use state resolution to find new room state
-	/// 14. Check if the event passes auth based on the "current state" of the
-	///     room, if not soft fail it
+	/// Handles an incoming PDU from federation.
+	///
+	/// First checks that we want to receive this PDU. If we already have it as
+	/// a timeline PDU, or we don't want to receive the PDU (e.g. origin ACL'd,
+	/// room disabled/unknown), abort.
+	///
+	/// The PDU is then handled as an outlier event, which performs [PDU checks]
+	/// 1 through 4. See: `handle_outlier_pdu`.
+	///
+	/// Once handled as an outlier, any missing prev events are fetched, and
+	/// then the PDU will be promoted/upgraded from an outlier to a timeline
+	/// event clients can see. See: `upgrade_outlier_to_timeline_pdu`. After
+	/// this finishes, the PDU is either accepted or left as an outlier.
+	///
+	/// If the PDU is successfully upgraded, the remaining extremity count of
+	/// the room is checked. If there are a potentially problematic number of
+	/// forward extremities, a squasher task is started with a debounce period,
+	/// which will eventually send a dummy event that ties up as many DAG forks
+	/// as possible.
+	///
+	/// [PDU checks]: https://spec.matrix.org/v1.19/server-server-api/#checks-performed-on-receipt-of-a-pdu
 	#[tracing::instrument(
 		name = "pdu",
 		skip_all,
@@ -120,18 +114,13 @@ impl super::Service {
 		room_id: &'a RoomId,
 		event_id: &'a EventId,
 		value: BTreeMap<String, CanonicalJsonValue>,
-		is_timeline_event: bool,
+		is_backfilled_event: bool,
 	) -> Result<Option<RawPduId>> {
-		// 1. Skip the PDU if we already have it as a timeline event
+		// Skip the PDU if we already have it as a timeline event. We still re-process
+		// outliers in this scenario.
 		if let Ok(pdu_id) = self.services.timeline.get_pdu_id(event_id).await {
+			debug!("Database hit for incoming PDU, skipping processing");
 			return Ok(Some(pdu_id));
-		}
-		if !pdu_fits(&mut value.clone()) {
-			warn!(
-				"dropping incoming PDU {event_id} in room {room_id} from {origin} because it \
-				 exceeds 65535 bytes or is otherwise too large."
-			);
-			return Err!(Request(TooLarge("PDU is too large")));
 		}
 		trace!(
 			"processing incoming PDU from {origin} for room {room_id} with event id {event_id}"
@@ -247,8 +236,10 @@ impl super::Service {
 			.handle_outlier_pdu(origin, create_event, event_id, room_id, value)
 			.await?;
 
-		// 8. if not timeline event: stop
-		if !is_timeline_event {
+		// If this event is being processed as part of backfill, we don't want to end up
+		// *appending* it during the upgrade process, so we return early.
+		if is_backfilled_event {
+			debug!("Not promoting incoming event as it is being backfilled");
 			return Ok(None);
 		}
 
@@ -261,11 +252,16 @@ impl super::Service {
 			.await?
 			.origin_server_ts();
 		if incoming_pdu.origin_server_ts() < first_ts_in_room {
+			debug_warn!(
+				"Not promoting incoming event as it is sent before we joined the room (but was \
+				 not backfilled)"
+			);
 			return Ok(None);
 		}
 
-		// 9. Fetch any missing prev events doing all checks listed here starting at 1.
-		//    These are timeline events
+		// Fetch any missing prev events doing all checks listed here starting at 1.
+		// These are timeline events.
+		// TODO: This part needs to be done in a background queue somewhere.
 
 		debug!("Fetching and persisting any missing prev events");
 		Box::pin(self.fetch_prevs(
@@ -276,13 +272,14 @@ impl super::Service {
 			first_ts_in_room,
 		))
 		.await
-		.debug_inspect_err(|e| {
-			error!("Failed to fetch and persist incoming event's prev_events: {e:?}");
+		.inspect_err(|e| {
+			debug_error!("Failed to fetch and persist incoming event's prev_events: {e:?}");
 		})?;
 
-		let is_dummy_event = incoming_pdu.event_type().to_string() == "org.matrix.dummy_event";
+		let is_dummy_event = incoming_pdu.event_type().to_string() == "org.matrix.dummy_event"
+			&& incoming_pdu.state_key().is_none();
 
-		// Done with prev events, now handling the incoming event
+		// Done with prev events, now we can handle promoting the PDU
 		let pdu_id = Box::pin(self.upgrade_outlier_to_timeline_pdu(
 			incoming_pdu,
 			val,

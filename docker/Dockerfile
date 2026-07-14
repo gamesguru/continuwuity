@@ -171,6 +171,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git/db \
     --mount=type=cache,target=/app/target,id=continuwuity-cargo-target-${TARGET_CPU}-${TARGETPLATFORM}-${RUST_PROFILE} \
     bash <<'EOF'
+    set -euo pipefail
     set -o allexport
     set -o xtrace
     . /etc/environment
@@ -191,7 +192,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
             jq -r ".target_directory"))
     mkdir /out/sbin
     PACKAGE=conduwuit
-    xx-cargo build --locked --profile ${RUST_PROFILE} \
+    CARGO_LOG=debug xx-cargo build --locked --profile ${RUST_PROFILE} \
         --no-default-features --features ${CARGO_FEATURES} \
         -p $PACKAGE;
     BINARIES=($(cargo metadata --no-deps --format-version 1 | \
@@ -207,6 +208,7 @@ EOF
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git/db \
     bash <<'EOF'
+    set -euo pipefail
     set -o xtrace
     mkdir /out/sbom
     typeset -A PACKAGES

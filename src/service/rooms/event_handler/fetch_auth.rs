@@ -1,6 +1,6 @@
 use std::collections::{HashMap, hash_map};
 
-use conduwuit::{Err, Event, EventTypeExt, PduEvent, Result, err};
+use conduwuit::{Err, Event, EventTypeExt, PduEvent, Result, err, warn};
 use ruma::{
 	CanonicalJsonObject, OwnedEventId, ServerName,
 	api::federation::authorization::get_event_authorization,
@@ -53,17 +53,52 @@ impl super::Service {
 		let mut auth_chain_map = HashMap::with_capacity(event_auth.auth_chain.len());
 
 		for auth_pdu_json in event_auth.auth_chain {
-			let (auth_event_room_id, auth_event_id, auth_pdu_json) =
-				self.parse_incoming_pdu(&auth_pdu_json).await?;
-			if auth_event_room_id != incoming_room_id {
+			let (auth_event_room_id, auth_event_id, auth_pdu_json) = match self
+				.parse_incoming_pdu(&auth_pdu_json, Some(room_version_rules))
+				.await
+			{
+				| Ok(parsed) => parsed,
+				| Err(e) => {
+					warn!(error=?e, "Dropping auth chain event as it could not be parsed");
+					continue;
+				},
+			};
+			if let Err(e) = Self::pdu_format_check_1(
+				&auth_pdu_json,
+				room_version_rules,
+				create_event.event_id(),
+			) {
+				// drop this PDU
+				warn!(%auth_event_id, error=?e, "Dropping auth chain event as it violates the room event format");
+				continue;
+			}
+			let auth_pdu_json = match self
+				.signature_hash_check_2_3(auth_pdu_json, room_version_rules)
+				.await
+			{
+				| Ok(pdu_json) => pdu_json,
+				| Err(e) => {
+					// drop this PDU
+					warn!(
+						%auth_event_id,
+						error=?e,
+						"Dropping auth chain event as it has an invalid signature"
+					);
+					continue;
+				},
+			};
+
+			// PDU check 4 is done when we've finished aggregating
+			if auth_event_room_id != incoming_event.room_id_or_hash() {
 				return Err!(Request(Forbidden(
-					"Auth event {auth_event_id} is in {auth_event_room_id}, not {}.",
-					incoming_room_id
+					"Auth chain event {auth_event_id} is in {auth_event_room_id}, not {}.",
+					incoming_event.room_id_or_hash()
 				)));
 			}
 			let auth_pdu = PduEvent::from_id_val(&auth_event_id, auth_pdu_json).map_err(|e| {
 				err!(Request(BadJson("Invalid PDU {auth_event_id} in auth chain: {e}")))
 			})?;
+
 			if auth_pdu.state_key().is_none() {
 				return Err!(Request(BadJson(
 					"Invalid PDU {auth_event_id} in auth_chain: not a state event"
@@ -101,17 +136,11 @@ impl super::Service {
 	where
 		Pdu: Event + Send + Sync,
 	{
-		// TODO(nex): build_local_dag's signature needs changing because all callsites
-		// seem to do this refmap hack.
 		let pdu_objects = auth_chain_map
 			.iter()
-			.map(|(event_id, pdu)| (event_id, pdu.to_canonical_object()))
+			.map(|(event_id, pdu)| (event_id.clone(), pdu.to_canonical_object()))
 			.collect::<HashMap<_, _>>();
-		let refmap: HashMap<OwnedEventId, &CanonicalJsonObject> = pdu_objects
-			.iter()
-			.map(|(id, data)| ((*id).to_owned(), data))
-			.collect();
-		let auth_chain_topo = build_local_dag(&refmap, DagBuilderTree::AuthEvents)
+		let auth_chain_topo = build_local_dag(&pdu_objects, DagBuilderTree::AuthEvents)
 			.await?
 			.into_iter()
 			.map(|event_id| (event_id.clone(), auth_chain_map.get(&event_id).unwrap().to_owned()))
@@ -130,6 +159,12 @@ impl super::Service {
 			if is_rejected || have_locally {
 				continue;
 			}
+
+			// IMPORTANT: We can't use the handy dandy `handle_outlier_pdu` function here
+			// because it may then try to fetch missing auth events, resulting in deep
+			// recursion. We will do the minimum required steps to validate the PDU here.
+			// Checks 1-3 were already done before this function is called, so we only need
+			// to do check 4.
 
 			let mut auth_events_by_key: HashMap<_, _> =
 				HashMap::with_capacity(pdu.auth_events.len());
@@ -154,24 +189,21 @@ impl super::Service {
 					},
 					| hash_map::Entry::Occupied(_) => {
 						// Duplicate auth events by key are not allowed.
-						self.services
-							.pdu_metadata
-							.mark_event_rejected(auth_event_id);
-						self.services.pdu_metadata.mark_event_rejected(&event_id);
+						self.reject_and_persist(&event_id, &pdu.to_canonical_object());
 						continue 'outer;
 					},
 				}
 			}
 			if !self
-				.is_event_self_authorised(
+				.auth_state_check_4(
 					&pdu,
 					room_version_rules,
 					create_event.as_pdu(),
 					&auth_events_by_key,
 				)
-				.await
+				.await?
 			{
-				self.services.pdu_metadata.mark_event_rejected(&event_id);
+				self.reject_and_persist(&event_id, &pdu.to_canonical_object());
 			}
 		}
 

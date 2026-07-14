@@ -150,7 +150,7 @@ async fn process_inbound_transaction(
 		.pdus
 		.iter()
 		.stream()
-		.broad_then(|pdu| services.rooms.event_handler.parse_incoming_pdu(pdu))
+		.broad_then(|pdu| services.rooms.event_handler.parse_incoming_pdu(pdu, None))
 		.inspect_err(|e| warn!("Could not parse incoming PDU: {e}"))
 		.ready_filter_map(Result::ok);
 
@@ -241,7 +241,7 @@ async fn handle(
 	pdus: impl Stream<Item = Pdu> + Send,
 	edus: impl Stream<Item = Edu> + Send,
 ) -> std::result::Result<ResolvedMap, TransactionError> {
-	// group pdus by room
+	// Group PDUs by room for parallel processing
 	let pdus = pdus
 		.collect()
 		.map(|mut pdus: Vec<_>| {
@@ -252,7 +252,7 @@ async fn handle(
 		})
 		.await;
 
-	// we can evaluate rooms concurrently
+	// Evaluate rooms in parallel
 	let results: ResolvedMap = pdus
 		.into_iter()
 		.try_stream()
@@ -266,7 +266,7 @@ async fn handle(
 		.boxed()
 		.await?;
 
-	// evaluate edus after pdus, at least for now.
+	// Evaluate EDUs after PDUs in case some of the PDUs then forbid some EDUs.
 	edus.for_each_concurrent(automatic_width(), |edu| handle_edu(services, client, origin, edu))
 		.boxed()
 		.await;
@@ -296,20 +296,12 @@ async fn handle_room(
 	// Try to sort PDUs by their dependencies, but fall back to arbitrary order on
 	// failure (e.g., cycles). This is best-effort; proper ordering is the sender's
 	// responsibility.
-	let sorted_event_ids = if pdu_map.len() >= 2 {
-		let refmap = pdu_map
-			.iter()
-			.map(|(event_id, obj)| (event_id.clone(), obj))
-			.collect();
-		build_local_dag(&refmap, DagBuilderTree::PrevEvents)
-			.await
-			.unwrap_or_else(|e| {
-				debug_warn!("Failed to build local DAG for room {room_id}: {e}");
-				pdu_map.keys().cloned().collect()
-			})
-	} else {
-		pdu_map.keys().cloned().collect()
-	};
+	let sorted_event_ids = build_local_dag(&pdu_map, DagBuilderTree::PrevEvents)
+		.await
+		.unwrap_or_else(|e| {
+			debug_warn!("Failed to build local DAG for room {room_id}: {e}");
+			pdu_map.keys().cloned().collect()
+		});
 	let mut results = Vec::with_capacity(sorted_event_ids.len());
 	for event_id in sorted_event_ids {
 		let value = pdu_map
@@ -322,7 +314,7 @@ async fn handle_room(
 		let result = services
 			.rooms
 			.event_handler
-			.handle_incoming_pdu(origin, room_id, &event_id, value.clone(), true)
+			.handle_incoming_pdu(origin, room_id, &event_id, value, false)
 			.boxed()
 			.await
 			.map(|_| ());

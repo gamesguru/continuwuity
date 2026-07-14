@@ -6,6 +6,7 @@ mod fetch_state;
 mod handle_incoming_pdu;
 mod handle_outlier_pdu;
 mod parse_incoming_pdu;
+pub mod pdu_checks;
 mod policy_server;
 mod resolve_state;
 mod state_at_incoming;
@@ -19,7 +20,7 @@ pub use fetch_and_handle_outliers::{
 	DagBuilderTree, GET_MISSING_EVENTS_MAX_BATCH_SIZE, build_local_dag,
 };
 use ruma::{
-	OwnedEventId, OwnedRoomId, RoomId, events::room::create::RoomCreateEventContent,
+	OwnedEventId, OwnedRoomId, events::room::create::RoomCreateEventContent,
 	room_version_rules::RoomVersionRules,
 };
 use tokio::sync::{Notify, mpsc};
@@ -112,22 +113,6 @@ impl Service {
 	async fn event_fetch(&self, event_id: OwnedEventId) -> Option<PduEvent> {
 		self.services.timeline.get_pdu(&event_id).await.ok()
 	}
-}
-
-fn check_room_id<Pdu: Event>(room_id: &RoomId, pdu: &Pdu) -> Result {
-	if pdu
-		.room_id()
-		.is_some_and(|claimed_room_id| claimed_room_id != room_id)
-	{
-		return Err!(Request(InvalidParam(error!(
-			pdu_event_id = %pdu.event_id(),
-			pdu_room_id = pdu.room_id().map(tracing::field::display),
-			%room_id,
-			"Found event from room in room",
-		))));
-	}
-
-	Ok(())
 }
 
 fn get_room_version_rules<Pdu: Event>(create_event: &Pdu) -> Result<RoomVersionRules> {

@@ -3,7 +3,7 @@ use axum_client_ip::ClientIp;
 use conduwuit::{
 	Err, Result, debug_error, err, info,
 	matrix::{event::gen_event_id_canonical_json, pdu::PartialPdu},
-	warn,
+	trace, warn,
 };
 use futures::FutureExt;
 use ruma::{
@@ -166,7 +166,7 @@ pub(crate) async fn invite_helper(
 			let invite_room_state = services
 				.rooms
 				.state
-				.summary_stripped(&pdu, room_id, recipient_user)
+				.summary_stripped(&pdu, room_id, recipient_user, true)
 				.await;
 
 			drop(state_lock);
@@ -193,6 +193,7 @@ pub(crate) async fn invite_helper(
 			.await
 			.ok();
 
+		trace!(?request, "Sending invite");
 		let response = services
 			.sending
 			.send_federation_request(recipient_user.server_name(), request)
@@ -221,7 +222,7 @@ pub(crate) async fn invite_helper(
 		let pdu_id = services
 			.rooms
 			.event_handler
-			.handle_incoming_pdu(recipient_user.server_name(), room_id, &event_id, value, true)
+			.handle_incoming_pdu(recipient_user.server_name(), room_id, &event_id, value, false)
 			.boxed()
 			.await?
 			.ok_or_else(|| {

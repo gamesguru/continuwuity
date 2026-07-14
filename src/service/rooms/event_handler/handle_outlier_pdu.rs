@@ -1,24 +1,25 @@
 use std::collections::{BTreeMap, HashMap, hash_map};
 
 use conduwuit::{
-	Err, Event, EventTypeExt, PduEvent, Result, debug, debug_info, debug_warn, err, info,
-	matrix::StateKey, state_res::auth_check, trace, warn,
+	Err, Event, EventTypeExt, PduEvent, Result, debug, debug_warn, err, info, trace,
 };
-use futures::future::ready;
-use ruma::{
-	CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, RoomId, ServerName,
-	canonical_json::redact, events::StateEventType, room_version_rules::RoomVersionRules,
-};
+use ruma::{CanonicalJsonObject, CanonicalJsonValue, EventId, OwnedEventId, RoomId, ServerName};
 
-use super::{check_room_id, get_room_version_rules};
-use crate::rooms::timeline::pdu_fits;
+use super::get_room_version_rules;
 
 impl super::Service {
 	/// Handles a PDU as an outlier, performing basic checks like signatures and
 	/// hashes, proclaimed event auth, and then adding it to the outlier tree.
+	///
+	/// This performs steps 1 through 4 of [S-S section 5.1][spec], returning
+	/// the parsed PDU and modified JSON object.
+	///
+	/// **External callers likely want `handle_incoming_pdu` instead.**
+	///
+	/// [spec]: https://spec.matrix.org/v1.19/server-server-api/#checks-performed-on-receipt-of-a-pdu
 	#[allow(clippy::too_many_arguments)]
-	#[tracing::instrument(name="handle_outlier", skip_all, fields(%event_id))]
-	pub(super) async fn handle_outlier_pdu<'a, Pdu>(
+	#[tracing::instrument(name = "handle_outlier", skip_all)]
+	pub async fn handle_outlier_pdu<'a, Pdu>(
 		&self,
 		origin: &'a ServerName,
 		create_event: &'a Pdu,
@@ -29,61 +30,38 @@ impl super::Service {
 	where
 		Pdu: Event + Send + Sync,
 	{
-		if !pdu_fits(&mut value.clone()) {
-			warn!(
-				"dropping incoming PDU {event_id} in room {room_id} from {origin} because it \
-				 exceeds 65535 bytes or is otherwise too large."
+		// Skip outlier handling if we already have this event as either a timeline or
+		// outlier PDU.
+		if let Ok(pdu_event) = self.services.timeline.get_pdu(event_id).await {
+			debug!(
+				"Database hit for {event_id} (event is either an outlier or already promoted), \
+				 skipping outlier handling"
 			);
-			return Err!(Request(TooLarge("PDU is too large")));
+			value.insert(
+				"event_id".to_owned(),
+				CanonicalJsonValue::String(event_id.as_str().to_owned()),
+			);
+			return Ok((pdu_event, value));
 		}
-		// 1. Remove unsigned field
+
+		// 1. Check that the PDU follows the format for the room version
+		// (in this case, just size check)
+		let room_version_rules = get_room_version_rules(create_event)?;
+		Self::pdu_format_check_1(&value, &room_version_rules, create_event.event_id())
+			.inspect_err(|e| {
+				info!(
+					err=?e,
+					"Dropping incoming PDU from {origin} because it violates the room event format"
+				);
+			})?;
+
 		value.remove("unsigned");
 
-		// 2. Check signatures, otherwise drop
-		// 3. check content hash, redact if doesn't match
-		let room_version_rules = get_room_version_rules(create_event)?;
-		let mut incoming_pdu = match self
-			.services
-			.server_keys
-			.verify_event(&value, &room_version_rules)
-			.await
-		{
-			| Ok(ruma::signatures::Verified::All) => {
-				if let Ok(pdu_event) = self.services.timeline.get_pdu(event_id).await {
-					debug!(
-						"Already have event {event_id} as an outlier or timeline event, not \
-						 re-processing"
-					);
-					value.insert(
-						"event_id".to_owned(),
-						CanonicalJsonValue::String(event_id.as_str().to_owned()),
-					);
-					check_room_id(room_id, &pdu_event)?;
-					return Ok((pdu_event, value));
-				}
-				value
-			},
-			| Ok(ruma::signatures::Verified::Signatures) => {
-				if let Ok(pdu_event) = self.services.timeline.get_pdu(event_id).await {
-					debug!(
-						"Received a redacted copy of {event_id}, but we already knew about it. \
-						 Re-using known content instead."
-					);
-					check_room_id(room_id, &pdu_event)?;
-					let obj = pdu_event.to_canonical_object();
-					return Ok((pdu_event, obj));
-				}
-
-				debug_info!("Calculated hash does not match (redaction): {event_id}");
-				redact(value, &room_version_rules.redaction, None)
-					.map_err(|e| err!(Request(BadJson("Failed to redact {event_id}: {e}"))))?
-			},
-			| Err(e) => {
-				return Err!(Request(Forbidden(debug_error!(
-					"Signature verification failed for {event_id}: {e}"
-				))));
-			},
-		};
+		// 2. Check signatures, otherwise drop.
+		// 3. Check content hash, redacting the event if it fails.
+		let mut incoming_pdu = self
+			.signature_hash_check_2_3(value, &room_version_rules)
+			.await?;
 
 		// Now that we have checked the signature and hashes we can add the eventID and
 		// convert to our PduEvent type
@@ -91,13 +69,10 @@ impl super::Service {
 			"event_id".to_owned(),
 			CanonicalJsonValue::String(event_id.as_str().to_owned()),
 		);
-
 		let pdu_event = serde_json::from_value::<PduEvent>(
 			serde_json::to_value(&incoming_pdu).expect("CanonicalJsonObj is a valid JsonValue"),
 		)
 		.map_err(|e| err!(Request(BadJson(debug_warn!("Event is not a valid PDU: {e}")))))?;
-
-		check_room_id(room_id, &pdu_event)?;
 
 		// TODO(nex): From hereon the event is not dropped, and thus always added as an
 		// outlier. However, we only do that at the end of this function, which means
@@ -116,7 +91,6 @@ impl super::Service {
 
 		for auth_event_id in pdu_event.auth_events() {
 			if let Ok(auth_event) = self.services.timeline.get_pdu(auth_event_id).await {
-				check_room_id(room_id, &auth_event)?;
 				trace!("Found auth event {auth_event_id} for outlier event {event_id} locally");
 				auth_events.insert(auth_event_id.to_owned(), auth_event);
 			} else {
@@ -154,7 +128,7 @@ impl super::Service {
 		}
 
 		// Ensure none of the auth events are rejected - if they are, reject too.
-		for auth_event_id in auth_events.keys() {
+		for (auth_event_id, auth_event) in &auth_events {
 			if self
 				.services
 				.pdu_metadata
@@ -166,15 +140,27 @@ impl super::Service {
 					 {auth_event_id}",
 					event_id,
 				);
-				self.services.pdu_metadata.mark_event_rejected(event_id);
+				self.reject_and_persist(event_id, &incoming_pdu);
 				return Err!(Request(Forbidden(
 					"Event has rejected auth event: {auth_event_id}"
 				)));
 			}
+			if auth_event.room_id_or_hash() != room_id {
+				debug_warn!(
+					%auth_event_id,
+					auth_event_room_id=%auth_event.room_id_or_hash(),
+					expected_room_id=%room_id,
+					"Rejecting incoming event which depends on an auth event in another room.",
+				);
+				self.reject_and_persist(event_id, &incoming_pdu);
+				return Err!(Request(Forbidden(
+					"Event depends on a cross-room auth event: {auth_event_id}"
+				)));
+			}
 		}
 
-		// 6. Reject "due to auth events" if the event doesn't pass auth based on the
-		//    auth events
+		// 4. Reject "due to auth events" if the event doesn't pass auth based on the
+		//    claimed auth events
 		debug!("Checking based on auth events");
 		let mut auth_events_by_key: HashMap<_, _> = HashMap::with_capacity(auth_events.len());
 		// Build map of auth events
@@ -183,8 +169,6 @@ impl super::Service {
 				.get(id)
 				.expect("we just checked that we have all auth events")
 				.to_owned();
-
-			check_room_id(room_id, &auth_event)?;
 
 			let key = auth_event.kind().with_state_key(
 				auth_event
@@ -197,98 +181,45 @@ impl super::Service {
 					v.insert(auth_event);
 				},
 				| hash_map::Entry::Occupied(_) => {
-					self.services
-						.outlier
-						.add_pdu_outlier(pdu_event.event_id(), &incoming_pdu);
-					self.services.pdu_metadata.mark_event_rejected(event_id);
-					return Err!(Request(Forbidden(
+					self.reject_and_persist(event_id, &incoming_pdu);
+					return Err!(Request(Forbidden(debug_warn!(
 						"Auth event's type and state_key combination exists multiple times: {}, \
 						 {}",
 						auth_event.kind,
 						auth_event.state_key().unwrap_or("")
-					)));
+					))));
 				},
 			}
 		}
 
 		if !self
-			.is_event_self_authorised(
+			.auth_state_check_4(
 				&pdu_event,
 				&room_version_rules,
 				create_event.as_pdu(),
 				&auth_events_by_key,
 			)
-			.await
+			.await?
 		{
-			self.services.pdu_metadata.mark_event_rejected(event_id);
-			self.services
-				.outlier
-				.add_pdu_outlier(pdu_event.event_id(), &incoming_pdu);
-			return Err!(Request(Forbidden(
+			self.reject_and_persist(event_id, &incoming_pdu);
+			return Err!(Request(Forbidden(debug_warn!(
 				"Event authorisation fails based on event's claimed auth events"
-			)));
+			))));
 		}
-
-		trace!("Validation successful.");
 
 		// 7. Persist the event as an outlier.
 		self.services
 			.outlier
 			.add_pdu_outlier(pdu_event.event_id(), &incoming_pdu);
 
-		trace!("Added pdu as outlier.");
+		debug!("PDU passed checks and has been persisted as an outlier");
 
 		Ok((pdu_event, incoming_pdu))
 	}
 
-	/// Helper method that turns the return value of `is_event_self_authorised`
-	/// into a `Result` depending on the value.
-	///
-	/// If the event is not authorised, a Forbidden error is returned.
-	/// Otherwise, an empty `Ok`.
-	pub(super) async fn is_event_self_authorised(
-		&self,
-		pdu: &PduEvent,
-		room_version_rules: &RoomVersionRules,
-		create_event: &PduEvent,
-		auth_events_by_key: &HashMap<(StateEventType, StateKey), PduEvent>,
-	) -> bool {
-		self.expect_event_is_self_authorised(
-			pdu,
-			room_version_rules,
-			create_event,
-			auth_events_by_key,
-		)
-		.await
-		.is_ok()
-	}
-
-	/// Checks PDU check 4: Passes authorisation rules based on the event's auth
-	/// events ([spec]).
-	///
-	/// If the auth check fails, false is returned, otherwise true.
-	///
-	/// [spec]: https://spec.matrix.org/v1.19/server-server-api/#checks-performed-on-receipt-of-a-pdu
-	pub(super) async fn expect_event_is_self_authorised(
-		&self,
-		pdu: &PduEvent,
-		room_version_rules: &RoomVersionRules,
-		create_event: &PduEvent,
-		auth_events_by_key: &HashMap<(StateEventType, StateKey), PduEvent>,
-	) -> Result<bool> {
-		let state_fetch = |ty: &StateEventType, sk: &str| {
-			let key = (ty.to_owned(), sk.into());
-			ready(auth_events_by_key.get(&key).map(ToOwned::to_owned))
-		};
-
-		auth_check(
-			room_version_rules,
-			pdu,
-			None, // TODO: third party invite
-			state_fetch,
-			create_event,
-		)
-		.await
-		.map_err(|e| err!("Event self-authentication failed: {e:?}"))
+	/// Marks the event as rejected and then saves it as an outlier.
+	pub(super) fn reject_and_persist(&self, event_id: &EventId, pdu: &CanonicalJsonObject) {
+		self.services.pdu_metadata.mark_event_rejected(event_id);
+		self.services.outlier.add_pdu_outlier(event_id, pdu);
 	}
 }

@@ -1,5 +1,6 @@
 use std::{
 	collections::{HashMap, HashSet, VecDeque},
+	fmt::{Display, Formatter},
 	time::Instant,
 };
 
@@ -33,6 +34,20 @@ pub enum DagBuilderTree {
 	AuthEvents,
 }
 
+impl DagBuilderTree {
+	#[must_use]
+	pub fn as_str(&self) -> &str {
+		match self {
+			| Self::AuthEvents => "auth_events",
+			| Self::PrevEvents => "prev_events",
+		}
+	}
+}
+
+impl Display for DagBuilderTree {
+	fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result { f.write_str(self.as_str()) }
+}
+
 /// Attempts to build a localised directed acyclic graph out of the given PDUs,
 /// returning them in a topologically sorted order.
 ///
@@ -42,23 +57,22 @@ pub enum DagBuilderTree {
 /// not account for power levels or other tie breaks.
 #[allow(clippy::implicit_hasher)]
 pub async fn build_local_dag(
-	pdu_map: &HashMap<OwnedEventId, &CanonicalJsonObject>,
+	pdu_map: &HashMap<OwnedEventId, CanonicalJsonObject>,
 	tree: DagBuilderTree,
 ) -> Result<Vec<OwnedEventId>> {
-	debug_assert!(pdu_map.len() >= 2, "needless call to build_local_dag with less than 2 PDUs");
+	if pdu_map.len() <= 1 {
+		return Ok(pdu_map.keys().cloned().collect());
+	}
+
 	let mut dag: HashMap<OwnedEventId, HashSet<OwnedEventId>> =
 		HashMap::with_capacity(pdu_map.len());
 	let mut id_origin_ts: HashMap<OwnedEventId, _> = HashMap::with_capacity(pdu_map.len());
-	let tree = match tree {
-		| DagBuilderTree::AuthEvents => "auth_events",
-		| DagBuilderTree::PrevEvents => "prev_events",
-	};
 
 	for (event_id, value) in pdu_map {
 		// Parse all prev events as event IDs - if they are missing, return an error (we
 		// can't sanely continue in this case), otherwise skip invalid prev events.
 		let prev_events = value
-			.get(tree)
+			.get(tree.as_str())
 			.and_then(CanonicalJsonValue::as_array)
 			.ok_or_else(|| err!(Request(BadJson("event JSON for {event_id} is missing {tree}"))))?
 			.iter()
@@ -227,7 +241,7 @@ impl super::Service {
 
 			latest_events.clear();
 			for raw_event in response.events {
-				let (_, event_id, pdu_json) = self.parse_incoming_pdu(&raw_event).await?;
+				let (_, event_id, pdu_json) = self.parse_incoming_pdu(&raw_event, None).await?;
 				let pdu = PduEvent::from_id_val(&event_id, pdu_json).map_err(|e| {
 					err!(Request(BadJson("Failed to parse gapfilled event {event_id}: {e}")))
 				})?;
@@ -370,8 +384,8 @@ impl super::Service {
 			.send_federation_request(&remote, get_event::v1::Request::new(event_id.clone()))
 			.await?;
 
-		let (calculated_event_id, value) = self
-			.parse_incoming_pdu_with_known_room(&res.pdu, room_version_rules)
+		let (_, calculated_event_id, value) = self
+			.parse_incoming_pdu(&res.pdu, Some(room_version_rules))
 			.await?;
 
 		if calculated_event_id != event_id {
@@ -538,11 +552,7 @@ impl super::Service {
 			}
 		}
 
-		let refmap: HashMap<OwnedEventId, &CanonicalJsonObject> = discovered_events
-			.iter()
-			.map(|(id, data)| (id.clone(), data))
-			.collect();
-		let seeded_ordered = build_local_dag(&refmap, DagBuilderTree::AuthEvents)
+		let seeded_ordered = build_local_dag(&discovered_events, DagBuilderTree::AuthEvents)
 			.await
 			.expect("failed to build local DAG");
 		let mut pdus = HashMap::with_capacity(seeded_ordered.len());

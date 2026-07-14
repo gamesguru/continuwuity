@@ -829,7 +829,7 @@ async fn fix_local_invite_state(services: &Services) -> Result {
 				&& services.globals.user_is_local(&membership_event.sender) {
 
 				// build and save stripped state for their invite in the database
-				let stripped_state = services.rooms.state.summary_stripped(&membership_event, &room_id, &user_id).await;
+				let stripped_state = services.rooms.state.summary_stripped(&membership_event, &room_id, &user_id, false).await;
 				userroomid_invitestate.put((&user_id, &room_id), Json(stripped_state));
 				fixed = fixed.saturating_add(1);
 			}
@@ -867,7 +867,7 @@ async fn split_userid_password(services: &Services) -> Result {
 				userid_password.remove(&user_id);
 				remote_users = remote_users.saturating_add(1);
 			} else if hash.is_empty() {
-				if !(services.appservice.is_exclusive_user_id(&user_id).await
+				if !(services.appservice.is_user_id(&user_id).await
 					|| user_id == services.globals.server_user)
 				{
 					info!("Marking {user_id} as deactivated");
@@ -882,7 +882,7 @@ async fn split_userid_password(services: &Services) -> Result {
 	drop(cork);
 	info!(?remote_users, "Split userid_password.");
 
-	db["global"].insert(FIXED_LOCAL_INVITE_STATE_MARKER, []);
+	db["global"].insert(SPLIT_USERID_PASSWORD, []);
 	db.db.sort()?;
 	Ok(())
 }
@@ -894,6 +894,8 @@ async fn obliterate_roomsynctoken_shortstatehash_with_extreme_prejudice(
 	services.db.db.drop_column("roomsynctoken_shortstatehash")?;
 
 	info!("Cleared roomsynctoken_shortstatehash.");
+
+	services.db["global"].insert(DROP_ROOMSYNCTOKEN_SHORTSTATEHASH, []);
 
 	Ok(())
 }
