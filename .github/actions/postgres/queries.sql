@@ -35,11 +35,11 @@ baseline_runs AS (
             FROM
                 baseline_commit)
 ),
--- Union each test's status across every arch at the baseline commit (per os), so an
--- arch-specific baseline flake can't hide a real fix/regression on another arch.
+-- Union each test's status across every job (arch/os/room_version/profile/features) at
+-- the baseline commit, so one config's baseline flake or gap can't hide a real
+-- fix/regression seen anywhere else on that same commit.
 baseline_status AS (
     SELECT
-        br.os,
         rd.test_name,
         bool_or(rd.status = 'pass') AS any_pass,
         bool_or(rd.status = 'skip') AS any_skip
@@ -47,7 +47,6 @@ baseline_status AS (
         baseline_runs br
         JOIN run_details rd ON rd.run_id = br.id
     GROUP BY
-        br.os,
         rd.test_name
 ),
 recent_runs AS (
@@ -104,16 +103,12 @@ run_regs AS (
                 COUNT(*) FILTER (WHERE NOT bs.any_pass
                     AND NOT bs.any_skip) AS baseline_n_fail
         FROM
-            baseline_status bs
-    WHERE
-        bs.os IS NOT DISTINCT FROM r.os) baseline_totals ON TRUE
+            baseline_status bs) baseline_totals ON TRUE
     LEFT JOIN LATERAL (
         SELECT
             array_agg(b2.id) AS baseline_run_id
         FROM
-            baseline_runs b2
-        WHERE
-            b2.os IS NOT DISTINCT FROM r.os) baseline_ids ON TRUE
+            baseline_runs b2) baseline_ids ON TRUE
         LEFT JOIN LATERAL (
             SELECT
                 COUNT(*) AS run_total,
@@ -149,8 +144,7 @@ run_regs AS (
                 FROM
                     baseline_status bs
                 WHERE
-                    bs.os IS NOT DISTINCT FROM r.os
-                    AND bs.test_name = rd.test_name) eb ON TRUE
+                    bs.test_name = rd.test_name) eb ON TRUE
             WHERE
                 rd.run_id = r.id) counts ON TRUE
         WHERE
