@@ -25,12 +25,6 @@ CREATE TABLE IF NOT EXISTS runs (
     room_version text
 );
 
--- Unique index to prevent duplicate machine reports.
--- Keep this in sync with ON CONFLICT targets in ingest scripts.
-DROP INDEX IF EXISTS idx_runs_unique_machine_run;
-
-CREATE UNIQUE INDEX idx_runs_unique_machine_run ON runs (commit_hash, arch, os, profile, room_version, features) NULLS NOT DISTINCT;
-
 -- Create run_details table
 CREATE TABLE IF NOT EXISTS run_details (
     id serial PRIMARY KEY,
@@ -41,6 +35,80 @@ CREATE TABLE IF NOT EXISTS run_details (
 
 -- Ensure we don't log the same test twice for the same run
 CREATE UNIQUE INDEX IF NOT EXISTS idx_run_details_unique_test ON run_details (run_id, test_name);
+
+-- Unique index to prevent duplicate machine reports.
+-- Keep this in sync with ON CONFLICT targets in ingest scripts.
+CREATE TEMP TABLE duplicated_runs AS
+WITH normalized_runs AS (
+    SELECT
+        id AS run_id,
+        commit_hash,
+        NULLIF (arch, '') AS arch,
+        NULLIF (os, '') AS os,
+        NULLIF (profile, '') AS profile,
+        NULLIF (room_version, '') AS room_version,
+        COALESCE(regexp_replace(btrim(features, ' ,'), '[,\s]+', ' ', 'g'), '') AS features,
+        COUNT(*) OVER GROUPING AS dup_count,
+            ROW_NUMBER() OVER ordered_grouping AS rn,
+                FIRST_VALUE(id) OVER ordered_grouping AS keep_id
+                FROM
+                    runs
+WINDOW GROUPING AS (PARTITION BY commit_hash,
+    NULLIF (arch, ''),
+    NULLIF (os, ''),
+    NULLIF (profile, ''),
+    NULLIF (room_version, ''),
+    COALESCE(regexp_replace(btrim(features, ' ,'), '[,\s]+', ' ', 'g'), '')),
+ordered_grouping AS (PARTITION BY commit_hash,
+    NULLIF (arch, ''),
+    NULLIF (os, ''),
+    NULLIF (profile, ''),
+    NULLIF (room_version, ''),
+    COALESCE(regexp_replace(btrim(features, ' ,'), '[,\s]+', ' ', 'g'), '')
+ORDER BY
+    run_date DESC,
+    id DESC))
+SELECT
+    run_id,
+    keep_id,
+    rn
+FROM
+    normalized_runs
+WHERE
+    dup_count > 1;
+
+CREATE TEMP TABLE duplicated_run_details AS
+SELECT
+    dr.keep_id,
+    rd.test_name,
+    rd.status,
+    dr.rn
+FROM
+    duplicated_runs dr
+    JOIN run_details rd ON rd.run_id = dr.run_id;
+
+DELETE FROM run_details rd USING duplicated_runs dr
+WHERE rd.run_id = dr.run_id;
+
+INSERT INTO run_details (run_id, test_name, status)
+SELECT DISTINCT ON (keep_id, test_name)
+    keep_id,
+    test_name,
+    status
+FROM
+    duplicated_run_details
+ORDER BY
+    keep_id,
+    test_name,
+    rn;
+
+DELETE FROM runs r USING duplicated_runs dr
+WHERE r.id = dr.run_id
+    AND dr.rn > 1;
+
+DROP INDEX IF EXISTS idx_runs_unique_machine_run;
+
+CREATE UNIQUE INDEX idx_runs_unique_machine_run ON runs (commit_hash, arch, os, profile, room_version, features) NULLS NOT DISTINCT;
 
 -- Remember the latest passing date per test/room_version across all ingests.
 CREATE TABLE IF NOT EXISTS ever_passed (

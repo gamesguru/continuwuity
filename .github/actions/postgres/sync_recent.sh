@@ -80,6 +80,7 @@ if [[ "${1:-}" == "--direct" ]]; then
 	[[ "$PASS" =~ ^[0-9]+$ ]] || PASS=0
 	[[ "$FAIL" =~ ^[0-9]+$ ]] || FAIL=0
 	[[ "$SKIP" =~ ^[0-9]+$ ]] || SKIP=0
+	ROOM_VERSION=${ROOM_VERSION:-11}
 
 	if [[ -z "$COMMIT" || ! -f "$RESULTS_FILE" ]]; then
 		echo "⚠ Direct ingest skipped: missing commit_hash or results_file"
@@ -94,7 +95,8 @@ if [[ "${1:-}" == "--direct" ]]; then
 		# this transaction before interpolating any external values into string literals.
 		echo "SET LOCAL standard_conforming_strings = on;"
 		echo "INSERT INTO runs (run_date, commit_hash, branch, arch, os, profile, n_pass, n_skip, n_fail, room_version, features, version_string)
-        SELECT '$(sql_quote "$RUN_DATE")'::timestamptz, '$(sql_quote "$COMMIT")', '$(sql_quote "$BRANCH")', '$(sql_quote "$ARCH")', '$(sql_quote "$OS")', '$(sql_quote "$PROFILE")', ${PASS}, ${SKIP}, ${FAIL}, '$(sql_quote "$ROOM_VERSION")',
+        SELECT '$(sql_quote "$RUN_DATE")'::timestamptz, '$(sql_quote "$COMMIT")', '$(sql_quote "$BRANCH")', NULLIF('$(sql_quote "$ARCH")', ''), NULLIF('$(sql_quote "$OS")', ''), NULLIF('$(sql_quote "$PROFILE")', ''), ${PASS}, ${SKIP}, ${FAIL},
+          COALESCE(NULLIF('$(sql_quote "$ROOM_VERSION")', ''), '11'),
           COALESCE(regexp_replace(btrim('$(sql_quote "$FEATURES")', ' ,'), '[,\s]+', ' ', 'g'), ''), '$(sql_quote "$VERSION")'
         ON CONFLICT (commit_hash, arch, os, profile, room_version, features) DO NOTHING;"
 		echo "COMMIT;"
@@ -126,7 +128,7 @@ echo "→ Streaming last $LIMIT run summaries..."
           (j->>'run_date')::timestamptz, (j->>'commit_hash'), (j->>'upstream_commit'), (j->>'branch'),
           (j->>'author_name'), (j->>'actor'), (j->>'provider'), NULLIF(j->>'arch', ''), NULLIF(j->>'os', ''),
           (j->>'version_string'), COALESCE(btrim(regexp_replace(j->>'features', '[,\s]+', ' ', 'g'), ' ,'), ''), (j->>'profile'), (j->>'binary_sha256'),
-          (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int, (j->>'room_version')
+          (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int, COALESCE(NULLIF(j->>'room_version', ''), '11')
         FROM b ON CONFLICT (commit_hash, arch, os, profile, room_version, features) DO NOTHING;"
 	echo "COMMIT;"
 ) | psql_remote
@@ -138,7 +140,7 @@ ALL_FILES=$(git ls-tree -r FETCH_HEAD:runs_data --name-only || true)
 TMPMANIFEST=$(mktemp)
 trap 'rm -f "$TMPMANIFEST"' EXIT
 git show "FETCH_HEAD:runs.jsonl" | tail -n "$LIMIT" |
-	jq -r '[.commit_hash, (.arch // ""), (.os // ""), (.profile // ""), (.room_version // ""), ((.features // "") | gsub("[,\\s]+"; " ") | gsub("^ | $"; ""))] | @tsv' \
+	jq -r '[.commit_hash, (.arch // ""), (.os // ""), (.profile // ""), (.room_version // "11"), ((.features // "") | gsub("[,\\s]+"; " ") | gsub("^ | $"; ""))] | @tsv' \
 		>"$TMPMANIFEST"
 
 # Find which of these exact $LIMIT runs already have details (to skip re-ingesting).
@@ -152,7 +154,7 @@ EXISTING_KEYS=$(
 		cut -f1 "$TMPMANIFEST" | sort -u
 		echo "\."
 		cat <<'SQL'
-SELECT r.commit_hash || '|' || COALESCE(r.arch,'') || '|' || COALESCE(r.os,'') || '|' || COALESCE(r.profile,'') || '|' || COALESCE(r.room_version,'') || '|' || COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '')
+SELECT r.commit_hash || '|' || COALESCE(r.arch,'') || '|' || COALESCE(r.os,'') || '|' || COALESCE(r.profile,'') || '|' || COALESCE(NULLIF(r.room_version, ''), '11') || '|' || COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '')
 FROM runs r
 JOIN m ON m.commit_hash = r.commit_hash
 WHERE EXISTS (SELECT 1 FROM run_details rd WHERE rd.run_id = r.id LIMIT 1);

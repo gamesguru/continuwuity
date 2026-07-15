@@ -56,31 +56,35 @@ ON CONFLICT (commit_hash, arch, os, profile, room_version, features) DO NOTHING;
 COMMIT;
 EOF
 
-# 2. Bulk Ingest Test Details (Injecting metadata from filenames)
+# 2. Bulk Ingest Test Details (Injecting metadata from summaries / filenames)
 echo "→ Consolidating and ingesting test details..."
 (
-	for f in "$LEDGER_DIR/runs_data"/*.jsonl; do
-		[ -f "$f" ] || continue
-		BASENAME=$(basename "$f" .jsonl)
-		if [[ "$BASENAME" == *-* ]]; then
-			# Format: COMMIT-ARCH-OS-PROFILE
-			COMMIT=$(echo "$BASENAME" | cut -d'-' -f1)
-			ARCH=$(echo "$BASENAME" | cut -d'-' -f2)
-			OS=$(echo "$BASENAME" | cut -d'-' -f3)
-			PROFILE=$(echo "$BASENAME" | cut -d'-' -f4-)
-		else
-			COMMIT="$BASENAME"
-			ARCH=""
-			OS=""
-			PROFILE=""
+	jq -r '[.commit_hash, (.arch // ""), (.os // ""), (.profile // ""), (.room_version // "11"), ((.features // "") | gsub("[,\\s]+"; " ") | gsub("^ | $"; ""))] | @tsv' \
+		"$LEDGER_DIR/runs.jsonl" |
+	while IFS=$'\t' read -r COMMIT ARCH OS PROFILE ROOM_VERSION FEATURES; do
+		SAFE_ARCH=${ARCH//[!a-zA-Z0-9._-]/_}
+		SAFE_OS=${OS//[!a-zA-Z0-9._-]/_}
+		SAFE_PROFILE=${PROFILE//[!a-zA-Z0-9._-]/_}
+		SAFE_ROOM_VERSION=${ROOM_VERSION//[!a-zA-Z0-9._-]/_}
+		FILE="$LEDGER_DIR/runs_data/${COMMIT}-${SAFE_ARCH}-${SAFE_OS}-${SAFE_PROFILE}-${SAFE_ROOM_VERSION}.jsonl"
+
+		if [ ! -f "$FILE" ]; then
+			LEGACY_FILE="$LEDGER_DIR/runs_data/${COMMIT}-${SAFE_ARCH}-${SAFE_OS}-${SAFE_PROFILE}.jsonl"
+			if [ -f "$LEGACY_FILE" ]; then
+				FILE="$LEGACY_FILE"
+			else
+				FILE="$LEDGER_DIR/runs_data/${COMMIT}.jsonl"
+			fi
 		fi
-		jq -c --arg h "$COMMIT" --arg a "$ARCH" --arg o "$OS" --arg p "$PROFILE" \
+
+		[ -f "$FILE" ] || continue
+		jq -c --arg h "$COMMIT" --arg a "$ARCH" --arg o "$OS" --arg p "$PROFILE" --arg rv "$ROOM_VERSION" --arg f "$FEATURES" \
 			'. + {commit: (if ((.commit // "") | length) > 0 then .commit else $h end),
              arch: (if ((.arch // "") | length) > 0 then .arch else $a end),
              os: (if ((.os // "") | length) > 0 then .os else $o end),
              profile: (if ((.profile // "") | length) > 0 then .profile else $p end),
-             room_version: (if ((.room_version // "") | length) > 0 then .room_version else "11" end),
-             features: (if ((.features // "") | length) > 0 then (.features | gsub("[,\\s]+"; " ") | gsub("^ | $"; "")) else "" end)}' "$f"
+             room_version: (if ((.room_version // "") | length) > 0 then .room_version else $rv end),
+             features: (if ((.features // "") | length) > 0 then (.features | gsub("[,\\s]+"; " ") | gsub("^ | $"; "")) else $f end)}' "$FILE"
 	done
 ) | ingest_details
 [ -n "$TEMP_DIR" ] && rm -rf "$TEMP_DIR"

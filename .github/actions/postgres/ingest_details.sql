@@ -6,6 +6,17 @@
 SELECT
     pg_advisory_lock(42);
 
+CREATE TABLE IF NOT EXISTS ever_passed (
+    test_name text NOT NULL,
+    rv text NOT NULL,
+    last_passed text NOT NULL,
+    last_commit text,
+    last_branch text,
+    branches text[] NOT NULL DEFAULT '{}'::text[]
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ever_passed_unique_test_rv ON ever_passed (test_name, rv);
+
 -- Map the distinct run configurations in the temp table to actual run IDs
 CREATE TEMP TABLE newly_ingested_runs AS SELECT DISTINCT
     r.id AS run_id
@@ -19,10 +30,10 @@ FROM ( SELECT DISTINCT
     FROM
         t) nt
     JOIN runs r ON r.commit_hash = nt.commit_hash
-        AND r.arch IS NOT DISTINCT FROM nt.arch
-        AND r.os IS NOT DISTINCT FROM nt.os
-        AND r.profile IS NOT DISTINCT FROM nt.profile
-        AND r.room_version IS NOT DISTINCT FROM nt.room_version
+        AND NULLIF (r.arch, '') IS NOT DISTINCT FROM nt.arch
+        AND NULLIF (r.os, '') IS NOT DISTINCT FROM nt.os
+        AND NULLIF (r.profile, '') IS NOT DISTINCT FROM nt.profile
+        AND NULLIF (r.room_version, '') IS NOT DISTINCT FROM nt.room_version
         AND COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '') IS NOT DISTINCT FROM COALESCE(regexp_replace(btrim(nt.features, ' ,'), '[,\s]+', ' ', 'g'), '');
 
 INSERT INTO run_details (run_id, test_name, status)
@@ -33,12 +44,11 @@ SELECT DISTINCT ON (r.id, (t.j ->> 'Test')
 FROM
     t
     JOIN runs r ON r.commit_hash = (t.j ->> 'commit')
-        AND r.arch IS NOT DISTINCT FROM (NULLIF ((t.j ->> 'arch'), ''))
-        AND r.os IS NOT DISTINCT FROM (NULLIF ((t.j ->> 'os'), ''))
-        AND r.profile IS NOT DISTINCT FROM (NULLIF ((t.j ->> 'profile'), ''))
-        AND r.room_version IS NOT DISTINCT FROM (NULLIF ((t.j ->> 'room_version'), ''))
-        AND COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '') IS NOT DISTINCT FROM COALESCE(NULLIF((t.j->>'features'), ''),
-        '')
+        AND NULLIF (r.arch, '') IS NOT DISTINCT FROM (NULLIF ((t.j ->> 'arch'), ''))
+    AND NULLIF (r.os, '') IS NOT DISTINCT FROM (NULLIF ((t.j ->> 'os'), ''))
+AND NULLIF (r.profile, '') IS NOT DISTINCT FROM (NULLIF ((t.j ->> 'profile'), ''))
+AND NULLIF (r.room_version, '') IS NOT DISTINCT FROM (NULLIF ((t.j ->> 'room_version'), ''))
+AND COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '') IS NOT DISTINCT FROM COALESCE(regexp_replace(btrim((t.j ->> 'features'), ' ,'), '[,\s]+', ' ', 'g'), '')
 WHERE (t.j ->> 'Action') IN ('pass', 'fail', 'skip')
 AND r.id IN (
     SELECT
@@ -47,7 +57,8 @@ AND r.id IN (
         newly_ingested_runs)
 ON CONFLICT (run_id,
     test_name)
-    DO NOTHING;
+    DO UPDATE SET
+        status = EXCLUDED.status;
 
 -- Incremental ever_passed: scoped to only the newly ingested runs
 INSERT INTO ever_passed (test_name, rv, last_passed, last_commit, last_branch, branches)
