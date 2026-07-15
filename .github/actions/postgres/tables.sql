@@ -38,6 +38,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_run_details_unique_test ON run_details (ru
 
 -- Unique index to prevent duplicate machine reports.
 -- Keep this in sync with ON CONFLICT targets in ingest scripts.
+DROP INDEX IF EXISTS idx_runs_unique_machine_run;
+
 UPDATE
     runs
 SET
@@ -136,8 +138,6 @@ WHERE
 DELETE FROM runs r USING duplicated_runs dr
 WHERE r.id = dr.run_id
     AND dr.rn > 1;
-
-DROP INDEX IF EXISTS idx_runs_unique_machine_run;
 
 CREATE UNIQUE INDEX idx_runs_unique_machine_run ON runs (commit_hash, arch, os, profile, room_version, features) NULLS NOT DISTINCT;
 
