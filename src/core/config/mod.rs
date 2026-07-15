@@ -528,6 +528,14 @@ pub struct Config {
 	#[serde(default = "default_sender_idle_timeout")]
 	pub sender_idle_timeout: u64,
 
+	/// Federation sender transaction retry backoff base (seconds). This is
+	/// the minimum delay before the first retry after a failed transaction.
+	/// Subsequent retries use exponential backoff: base × 2^(tries-1).
+	///
+	/// default: 5
+	#[serde(default = "default_sender_retry_backoff_base")]
+	pub sender_retry_backoff_base: u64,
+
 	/// Federation sender transaction retry backoff limit (seconds).
 	///
 	/// default: 86400
@@ -2521,7 +2529,7 @@ pub struct DraupnirConfig {
 	pub secret: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Default)]
+#[derive(Clone, Debug, Deserialize)]
 #[config_example_generator(
 	filename = "conduwuit-example.toml",
 	section = "global.experimental_features",
@@ -2537,8 +2545,18 @@ pub struct ExperimentalConfig {
 	pub msc4222_enabled: bool,
 
 	/// MSC3030: timestamp to event
-	#[serde(default)]
+	#[serde(default = "true_fn")]
 	pub msc3030_enabled: bool,
+}
+
+impl Default for ExperimentalConfig {
+	fn default() -> Self {
+		Self {
+			msc3266_enabled: false,
+			msc4222_enabled: false,
+			msc3030_enabled: true,
+		}
+	}
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -2779,6 +2797,8 @@ fn default_federation_idle_per_host() -> u16 { 1 }
 fn default_sender_timeout() -> u64 { 180 }
 
 fn default_sender_idle_timeout() -> u64 { 180 }
+
+fn default_sender_retry_backoff_base() -> u64 { 5 }
 
 fn default_sender_retry_backoff_limit() -> u64 { 86400 }
 

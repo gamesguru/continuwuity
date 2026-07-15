@@ -372,52 +372,67 @@ jobs:
           OS="${{ matrix.os }}"
           PROFILE="${{ matrix.profile }}"
           ROOM_VERSION="${{ matrix.room_version }}"
+          FEATURES="${{ env.FEATURES }}"
 
           # Fetch the newly failing and passing tests for this specific run.
           # Keep this query branch-local instead of depending on v_run_regressions,
           # because that shared view may be managed by another branch.
           COMMON_CTES="
             WITH current_run AS (
-              SELECT r.*
+              SELECT r.id, r.os
               FROM runs r
               WHERE r.commit_hash LIKE '${SHA}%'
                 AND r.arch IS NOT DISTINCT FROM '${ARCH}'
                 AND r.os IS NOT DISTINCT FROM '${OS}'
                 AND r.profile IS NOT DISTINCT FROM '${PROFILE}'
                 AND r.room_version IS NOT DISTINCT FROM '${ROOM_VERSION}'
+                AND COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '') IS NOT DISTINCT FROM COALESCE(regexp_replace(btrim('${FEATURES}', ' ,'), '[,\s]+', ' ', 'g'), '')
                 AND EXISTS (SELECT 1 FROM run_details rd WHERE rd.run_id = r.id)
               ORDER BY r.run_date DESC, r.id DESC
               LIMIT 1
             ),
-            baseline_run AS (
-              SELECT b.id
-              FROM runs b
-              CROSS JOIN current_run r
-              WHERE (b.branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream')
-                OR b.version_string LIKE '%main%')
-                AND b.arch IS NOT DISTINCT FROM r.arch
-                AND b.os IS NOT DISTINCT FROM r.os
-                AND b.profile IS NOT DISTINCT FROM r.profile
-                AND regexp_replace(btrim(b.features, ' ,'), '[,\s]+', ' ', 'g') IS NOT DISTINCT FROM regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g')
-                AND COALESCE(b.room_version, '11') IS NOT DISTINCT FROM COALESCE(r.room_version, '11')
-                AND EXISTS (SELECT 1 FROM run_details rd_base WHERE rd_base.run_id = b.id)
-              ORDER BY b.run_date DESC, b.id DESC
-              LIMIT 1
+            baseline_selection AS (
+              SELECT DISTINCT ON (arch, os)
+                id,
+                os
+              FROM runs
+              WHERE (branch IN ('main', 'main-upstream', 'refs/heads/main', 'refs/heads/main-upstream')
+                OR version_string LIKE '%main%')
+              ORDER BY
+                arch,
+                os,
+                run_date DESC,
+                id DESC
+            ),
+            baseline_status AS (
+              SELECT
+                bsel.os,
+                rd.test_name,
+                bool_or(rd.status = 'pass') AS any_pass,
+                bool_or(rd.status = 'skip') AS any_skip
+              FROM baseline_selection bsel
+              JOIN run_details rd ON rd.run_id = bsel.id
+              GROUP BY
+                bsel.os,
+                rd.test_name
             )"
           NEW_FAILURES=$(./bin/db-shell -A -t -c "${COMMON_CTES}
             SELECT COALESCE(STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name), '')
             FROM current_run r
             JOIN run_details rd ON rd.run_id = r.id
-            LEFT JOIN baseline_run br ON TRUE
-            LEFT JOIN run_details mb ON mb.test_name = rd.test_name AND mb.run_id = br.id
-            WHERE rd.status = 'fail' AND (mb.status IS NULL OR mb.status != 'fail');" | sed 's/\\n/\n/g')
+            LEFT JOIN baseline_status bs ON bs.os IS NOT DISTINCT FROM r.os AND bs.test_name = rd.test_name
+            WHERE rd.status = 'fail'
+              AND bs.test_name IS NOT NULL
+              AND (bs.any_pass OR bs.any_skip);" | sed 's/\\n/\n/g')
           NEW_PASSES=$(./bin/db-shell -A -t -c "${COMMON_CTES}
             SELECT COALESCE(STRING_AGG(rd.test_name, E'\n' ORDER BY rd.test_name), '')
             FROM current_run r
             JOIN run_details rd ON rd.run_id = r.id
-            LEFT JOIN baseline_run br ON TRUE
-            LEFT JOIN run_details mb ON mb.test_name = rd.test_name AND mb.run_id = br.id
-            WHERE rd.status = 'pass' AND mb.status IS NOT NULL AND mb.status != 'pass';" | sed 's/\\n/\n/g')
+            LEFT JOIN baseline_status bs ON bs.os IS NOT DISTINCT FROM r.os AND bs.test_name = rd.test_name
+            WHERE rd.status = 'pass'
+              AND bs.test_name IS NOT NULL
+              AND NOT bs.any_pass;" | sed 's/\\n/\n/g')
+
 
           echo "new_failures<<EOF" | tee -a "$GITHUB_OUTPUT"
           echo "$NEW_FAILURES" | tee -a "$GITHUB_OUTPUT"

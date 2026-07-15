@@ -396,6 +396,7 @@ where
 			| Some(false) => all_joined_rooms.clone().collect(),
 		};
 
+		// Filter by room type FIRST to minimize DB lookups
 		let active_rooms = match list.filters.as_ref().map(|f| &f.not_room_types) {
 			| None => active_rooms,
 			| Some(filter) if filter.is_empty() => active_rooms,
@@ -421,7 +422,7 @@ where
 		let fetched_timestamps = missing_rooms
 			.into_iter()
 			.stream()
-			.wide_then(|room_id| async move {
+			.widen_then(10, |room_id| async move {
 				let ts = match services.rooms.timeline.latest_pdu_in_room(&room_id).await {
 					| Ok(pdu) => pdu.origin_server_ts().get().into(),
 					| Err(_) => 0_u64,
