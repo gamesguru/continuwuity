@@ -1,8 +1,6 @@
 -- tables.sql
 -- Relational schema for Continuwuity CI runs.
--- Drop views to allow schema updates
-DROP VIEW IF EXISTS v_run_regressions CASCADE;
-
+-- Drop views to allow schema updates (MOVED TO reset.sql)
 -- Create runs table
 CREATE TABLE IF NOT EXISTS runs (
     id serial PRIMARY KEY,

@@ -4,7 +4,7 @@ use axum::extract::State;
 use conduwuit::{
 	Err, Pdu, Result, debug_info, debug_warn, err,
 	matrix::{event::gen_event_id, pdu::PduBuilder},
-	utils::{self, FutureBoolExt, future::ReadyEqExt},
+	utils::{self, FutureBoolExt},
 	warn,
 };
 use futures::{FutureExt, StreamExt, pin_mut};
@@ -84,18 +84,6 @@ pub async fn leave_room(
 ) -> Result {
 	let is_banned = services.rooms.metadata.is_banned(room_id);
 	let is_disabled = services.rooms.metadata.is_disabled(room_id);
-
-	let dont_have_room = services
-		.rooms
-		.state_cache
-		.server_in_room(services.globals.server_name(), room_id)
-		.eq(&false);
-
-	let not_knocked = services
-		.rooms
-		.state_cache
-		.is_knocked(user_id, room_id)
-		.eq(&false);
 
 	pin_mut!(is_banned, is_disabled);
 

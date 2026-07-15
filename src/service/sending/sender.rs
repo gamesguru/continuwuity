@@ -100,7 +100,7 @@ impl Service {
 
 	#[tracing::instrument(
 		name = "work",
-		level = "trace"
+		level = "trace",
 		skip_all,
 		fields(
 			futures = %futures.len(),
@@ -223,6 +223,7 @@ impl Service {
 	/// due to timer jitter), so the retry isn't permanently lost.
 	/// The delay should match the remaining backoff time to avoid hot-polling.
 	fn reschedule_flush(&self, dest: Destination, delay: Duration) {
+		let delay = delay.max(Duration::from_millis(100));
 		let sender = self
 			.channels
 			.get(self.shard_id(&dest))
@@ -569,6 +570,12 @@ impl Service {
 						&& !matches!(dest, Destination::Appservice(_))
 					{
 						allow = false;
+
+						let min_dur = Duration::from_secs(min)
+							.saturating_mul(1_u32.checked_shl(tries.saturating_sub(1)).unwrap_or(u32::MAX));
+						let min_dur = std::cmp::min(min_dur, Duration::from_secs(max));
+						let remaining = min_dur.saturating_sub(time.elapsed());
+						self.reschedule_flush(dest.clone(), remaining);
 					} else {
 						retry = true;
 						*e = TransactionStatus::Retrying(*tries);
@@ -669,11 +676,15 @@ impl Service {
 		events.extend(presence);
 		events.extend(receipts);
 
+		if events.is_empty() {
+			return Ok((events, since_upper));
+		}
+
 		Ok((events, last_count))
 	}
 
 	/// Look for device changes
-	#[tracing::instrument(name = "device_changes", level = "info", skip(self, server_name))]
+	#[tracing::instrument(name = "device_changes", level = "trace", skip(self, server_name))]
 	async fn select_edus_device_changes(
 		&self,
 		server_name: &ServerName,
@@ -1014,7 +1025,7 @@ impl Service {
 
 	#[tracing::instrument(
 		name = "push",
-		level = "info",
+		level = "trace",
 		skip(self, events),
 		fields(
 			events = %events.len(),

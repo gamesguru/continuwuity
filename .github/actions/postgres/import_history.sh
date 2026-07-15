@@ -24,7 +24,7 @@ fi
 SQL_FILE="$(dirname "$0")/tables.sql"
 if [ -f "$SQL_FILE" ]; then
 	echo "✓ Applying fresh schema from $SQL_FILE..."
-	psql "$DB_TARGET" -c "DROP MATERIALIZED VIEW IF EXISTS mv_ever_passed CASCADE; DROP TABLE IF EXISTS run_details CASCADE; DROP TABLE IF EXISTS runs CASCADE; DROP TABLE IF EXISTS master_baseline CASCADE; DROP TABLE IF EXISTS ever_passed CASCADE;" >/dev/null
+	psql "$DB_TARGET" -f "$(dirname "$0")/reset.sql" >/dev/null
 	psql "$DB_TARGET" -f "$SQL_FILE" >/dev/null
 fi
 
