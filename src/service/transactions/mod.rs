@@ -9,9 +9,12 @@ use std::{
 };
 
 use async_trait::async_trait;
-use conduwuit::{Error, Result, SyncRwLock, debug_warn, info, warn};
+use conduwuit::{
+	Error, Result, SyncRwLock, debug_warn, info,
+	utils::{MutexMap, MutexMapGuard},
+	warn,
+};
 use database::{Handle, Map};
-use conduwuit::utils::{MutexMap, MutexMapGuard};
 use ruma::{
 	DeviceId, OwnedServerName, OwnedTransactionId, TransactionId, UserId,
 	api::{
