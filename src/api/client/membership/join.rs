@@ -748,7 +748,11 @@ async fn join_room_by_id_helper_remote_process(
 		|k, s| state_fetch(k.clone(), s.into()),
 		&state_fetch(StateEventType::RoomCreate, "".into())
 			.await
-			.expect("create event is missing from send_join auth"),
+			.ok_or_else(|| {
+				err!(Request(Forbidden(warn!(
+					"send_join auth check failed: missing create event"
+				))))
+			})?,
 	)
 	.await
 	.map_err(|e| err!(Request(Forbidden(warn!("Auth check failed: {e:?}")))))?;

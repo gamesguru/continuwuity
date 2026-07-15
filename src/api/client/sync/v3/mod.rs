@@ -47,7 +47,7 @@ use ruma::{
 };
 use service::rooms::lazy_loading::{self, MemberSet, Options as _};
 
-use super::load_timeline;
+use super::{load_timeline, shares_a_room};
 use crate::{
 	Ruma, RumaResponse,
 	client::{
@@ -483,6 +483,36 @@ pub(crate) async fn build_sync_events(
 	let ((), to_device_events, presence_updates) = ephemeral;
 	let mut device_list_updates: DeviceLists = device_list_updates.into();
 	device_list_updates.changed.extend(keys_changed);
+
+	// For rooms the user has left, add members to device_lists.left if the
+	// syncing user no longer shares any other room with them. This is needed
+	// because build_device_list_updates only runs for joined rooms and would
+	// never see the user's own leave event.
+	if last_sync_end_count.is_some() {
+		let mut left_candidates: HashSet<OwnedUserId> = HashSet::new();
+		for room_id in left_rooms.keys() {
+			let members: Vec<OwnedUserId> = services
+				.rooms
+				.state_cache
+				.room_members(room_id)
+				.map(ToOwned::to_owned)
+				.collect()
+				.await;
+
+			left_candidates.extend(members.into_iter().filter(|member| {
+				member != syncing_user && !device_list_updates.left.contains(member)
+			}));
+		}
+
+		let newly_left: Vec<OwnedUserId> = futures::stream::iter(left_candidates)
+			.broad_filter_map(|member| async move {
+				(!shares_a_room(services, syncing_user, &member, None).await).then_some(member)
+			})
+			.collect()
+			.await;
+
+		device_list_updates.left.extend(newly_left);
+	}
 
 	let mut presence_updates = presence_updates.unwrap_or_default();
 	if services.config.allow_local_presence {
