@@ -1,12 +1,9 @@
 use std::collections::HashSet;
 
 use axum::extract::State;
-use conduwuit::{
-	Err, Event, Result, debug, info, matrix::dag::sort_topologically, trace,
-	utils::to_canonical_object, warn,
-};
+use conduwuit::{Err, Event, Result, debug, info, trace, utils::to_canonical_object, warn};
 use ruma::{OwnedEventId, api::federation::event::get_missing_events};
-use serde_json::value::RawValue;
+use serde_json::json;
 
 use super::AccessCheck;
 use crate::Ruma;
@@ -54,7 +51,12 @@ pub(crate) async fn get_missing_events_route(
 	let room_version = services.rooms.state.get_room_version(&body.room_id).await?;
 
 	let mut stack: Vec<OwnedEventId> = body.latest_events.clone();
-	let mut results = Vec::with_capacity(limit);
+	let mut results: Vec<(
+		OwnedEventId,
+		Vec<OwnedEventId>,
+		ruma::UInt,
+		Box<serde_json::value::RawValue>,
+	)> = Vec::with_capacity(limit);
 	let mut seen: HashSet<OwnedEventId> = HashSet::from_iter(body.earliest_events.clone());
 
 	while let Some(next_event_id) = stack.pop() {
@@ -68,7 +70,7 @@ pub(crate) async fn get_missing_events_route(
 			break;
 		}
 
-		let mut pdu = match services.rooms.timeline.get_pdu(&next_event_id).await {
+		let pdu = match services.rooms.timeline.get_pdu(&next_event_id).await {
 			| Ok(pdu) => pdu,
 			| Err(e) => {
 				warn!("could not find event {next_event_id} while walking missing events: {e}");
@@ -82,11 +84,15 @@ pub(crate) async fn get_missing_events_route(
 			)));
 		}
 
-		let visible = services
+		if !services
 			.rooms
 			.state_accessor
 			.server_can_see_event(body.origin(), &body.room_id, pdu.event_id())
-			.await;
+			.await
+		{
+			debug!(%next_event_id, origin = %body.origin(), "redacting event origin cannot see");
+			pdu.redact(&room_version, json!({}))?;
+		}
 
 		trace!(
 			%next_event_id,
@@ -99,11 +105,15 @@ pub(crate) async fn get_missing_events_route(
 			continue; // Don't include latest_events in results,
 			// but do include their prev_events in the stack.
 		}
-		if !visible {
-			debug!(%next_event_id, origin = %body.origin(), "skipping event origin cannot see");
-			continue;
-		}
-		results.push(pdu);
+		results.push((
+			next_event_id.clone(),
+			pdu.prev_events.clone(),
+			pdu.depth,
+			services
+				.sending
+				.convert_to_outgoing_federation_event(to_canonical_object(pdu)?)
+				.await,
+		));
 		trace!(
 			%next_event_id,
 			stack_len = stack.len(),
@@ -117,16 +127,41 @@ pub(crate) async fn get_missing_events_route(
 		debug!("limit reached before stack was empty");
 	}
 
-	let mut results = sort_topologically(results);
-	let mut events = Vec::with_capacity(results.len());
-	for pdu in results.drain(..) {
-		events.push(
-			services
-				.sending
-				.convert_to_outgoing_federation_event(to_canonical_object(pdu)?)
-				.await,
-		);
-	}
+	let sorted_ids = topo_sort_events(
+		results
+			.iter()
+			.map(|(id, prevs, depth, _)| (id.clone(), prevs.clone(), *depth)),
+	);
+
+	let mut event_map: std::collections::BTreeMap<
+		OwnedEventId,
+		Box<serde_json::value::RawValue>,
+	> = results
+		.into_iter()
+		.map(|(id, _, _, raw)| (id, raw))
+		.collect();
+
+	let events = sorted_ids
+		.into_iter()
+		.filter_map(|id| event_map.remove(&id))
+		.collect();
 
 	Ok(get_missing_events::v1::Response { events })
+}
+
+/// Topologically sort events using Kahn's algorithm.
+///
+/// Returns event IDs ordered such that an event always appears after its
+/// prev_events (i.e. oldest first). Events at the same depth are
+/// tie-broken by event ID (lexicographic ascending).
+///
+/// Only events present in the input set participate in the graph - external
+/// prev_events (e.g. `earliest_events`) are treated as implicit roots.
+pub(crate) fn topo_sort_events(
+	events: impl IntoIterator<Item = (OwnedEventId, Vec<OwnedEventId>, ruma::UInt)>,
+) -> Vec<OwnedEventId> {
+	conduwuit::utils::kahns_sort::kahn_sort(events.into_iter().map(|(id, prevs, depth)| {
+		let key = (depth, id.clone());
+		(id, prevs, key)
+	}))
 }
