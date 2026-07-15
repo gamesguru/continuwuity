@@ -9,7 +9,7 @@ use conduwuit::{
 	result::NotFound,
 	utils::{
 		self,
-		stream::{TryReadyExt, WidebandExt},
+		stream::{ReadyExt, TryReadyExt, WidebandExt},
 	},
 };
 use database::{Database, Deserialized, Json, KeyVal, Map};
@@ -1969,94 +1969,51 @@ impl Data {
 			.map_err(|e| err!(Database("Failed to deserialize EventMetadata: {e:?}")))?;
 		Ok(ruma::MilliSecondsSinceUnixEpoch(meta.origin_server_ts))
 	}
-}
 
-fn pack_timestamp_key(shortroomid: [u8; 8], ts: u64, count: PduCount) -> [u8; 25] {
-	let mut key = [0_u8; 25];
-	key[0..8].copy_from_slice(&shortroomid);
-	key[8..16].copy_from_slice(&ts.to_be_bytes());
-	match count {
-		| PduCount::Backfilled(c) => {
-			key[16] = 0;
-			// Map negative i64 to correctly ordered u64 for RocksDB sorting
-			let sortable_c = c.cast_unsigned() ^ (1 << 63);
-			key[17..25].copy_from_slice(&sortable_c.to_be_bytes());
-		},
-		| PduCount::Normal(c) => {
-			key[16] = 1;
-			key[17..25].copy_from_slice(&c.to_be_bytes());
-		},
-	}
-	key
-}
+	pub(super) fn pdus_by_timestamp<'a>(
+		&'a self,
+		room_id: &'a RoomId,
+		timestamp: u64,
+		dir: Direction,
+	) -> impl Stream<Item = Result<PduEvent>> + Send + 'a {
+		// Define rules of the stream
+		let setup = async move {
+			let short: u64 = self
+				.services
+				.short
+				.get_shortroomid(room_id)
+				.await
+				.map_err(|e| err!(Request(NotFound("Room {room_id:?} not found: {e:?}"))))?;
 
-const INCREMENT_LOCK_SHARDS: usize = 256;
-
-static INCREMENT_LOCKS: std::sync::LazyLock<[conduwuit::SyncMutex<()>; INCREMENT_LOCK_SHARDS]> =
-	std::sync::LazyLock::new(|| std::array::from_fn(|_| conduwuit::SyncMutex::new(())));
-
-fn increment(db: &Arc<Map>, key: &[u8]) {
-	use std::hash::{DefaultHasher, Hash, Hasher};
-	let mut hasher = DefaultHasher::new();
-	key.hash(&mut hasher);
-	let shard_count = u64::try_from(INCREMENT_LOCK_SHARDS).expect("lock shard count fits in u64");
-	let lock_index = usize::try_from(
-		hasher
-			.finish()
-			.checked_rem(shard_count)
-			.expect("lock shard count is non-zero"),
-	)
-	.expect("hash remainder fits in usize");
-	let _lock = INCREMENT_LOCKS[lock_index].lock();
-	let old = db.get_blocking(key);
-	let new = utils::increment(old.ok().as_deref());
-	db.insert(key, new);
-}
-
-pub(super) fn pdus_by_timestamp<'a>(
-	&'a self,
-	room_id: &'a RoomId,
-	timestamp: u64,
-	dir: Direction,
-) -> impl Stream<Item = Result<PduEvent>> + Send + 'a {
-	// Define rules of the stream
-	let setup = async move {
-		let short = self
-			.services
-			.short
-			.get_shortroomid(room_id)
-			.await
-			.map_err(|e| err!(Request(NotFound("Room {room_id:?} not found: {e:?}"))))?;
-
-		let (seek_ts, count) = match dir {
-			| Direction::Forward => (timestamp, PduCount::min()),
-			// Must be inclusive (at or before) according to Matrix MSC3030.
-			// Do NOT subtract 1 from timestamp (which breaks tie-breaking/pagination).
-			| Direction::Backward => (timestamp, PduCount::max()),
-		};
-
-		let key = pack_timestamp_key(short.to_be_bytes(), seek_ts, count);
-		Ok::<_, conduwuit::Error>((short, key.to_vec()))
-	};
-
-	// Main stream
-	setup
-		.map_ok(move |(short, key)| {
-			if key.is_empty() {
-				return futures::stream::empty().boxed();
-			}
-
-			let prefix = short.to_be_bytes();
-			let map = &self.db["roomid_timestamp_pducount"];
-
-			// Get stream w/ matching DB keys, in requested direction
-			let stream = match dir {
-				| Direction::Forward => map.raw_stream_from(&key).boxed(),
-				| Direction::Backward => map.rev_raw_stream_from(&key).boxed(),
+			let (seek_ts, count) = match dir {
+				| Direction::Forward => (timestamp, PduCount::min()),
+				// Must be inclusive (at or before) according to Matrix MSC3030.
+				// Do NOT subtract 1 from timestamp (which breaks tie-breaking/pagination).
+				| Direction::Backward => (timestamp, PduCount::max()),
 			};
 
-			stream
-					.ready_try_take_while(move |(k, _)| Ok(k.starts_with(&prefix)))
+			let key = pack_timestamp_key(short.to_be_bytes(), seek_ts, count);
+			Ok::<_, conduwuit::Error>((short, key.to_vec()))
+		};
+
+		// Main stream
+		setup
+			.map_ok(move |(short, key): (u64, Vec<u8>)| {
+				if key.is_empty() {
+					return futures::stream::empty().boxed();
+				}
+
+				let prefix = short.to_be_bytes();
+				let map = &self.db["roomid_timestamp_pducount"];
+
+				// Get stream w/ matching DB keys, in requested direction
+				let stream = match dir {
+					| Direction::Forward => map.raw_stream_from(&key).boxed(),
+					| Direction::Backward => map.rev_raw_stream_from(&key).boxed(),
+				};
+
+				stream
+					.ready_try_take_while(move |&(k, _)| Ok(k.starts_with(&prefix)))
 					// Extract PDU count via key lookup (shortroomid, timestamp, count)
 					.ready_filter_map(|res| {
 						let (k, _) = match res {
@@ -2104,8 +2061,51 @@ pub(super) fn pdus_by_timestamp<'a>(
 						}
 					})
 					.boxed()
-		})
-		.try_flatten_stream()
+			})
+			.try_flatten_stream()
+	}
+}
+
+fn pack_timestamp_key(shortroomid: [u8; 8], ts: u64, count: PduCount) -> [u8; 25] {
+	let mut key = [0_u8; 25];
+	key[0..8].copy_from_slice(&shortroomid);
+	key[8..16].copy_from_slice(&ts.to_be_bytes());
+	match count {
+		| PduCount::Backfilled(c) => {
+			key[16] = 0;
+			// Map negative i64 to correctly ordered u64 for RocksDB sorting
+			let sortable_c = c.cast_unsigned() ^ (1 << 63);
+			key[17..25].copy_from_slice(&sortable_c.to_be_bytes());
+		},
+		| PduCount::Normal(c) => {
+			key[16] = 1;
+			key[17..25].copy_from_slice(&c.to_be_bytes());
+		},
+	}
+	key
+}
+
+const INCREMENT_LOCK_SHARDS: usize = 256;
+
+static INCREMENT_LOCKS: std::sync::LazyLock<[conduwuit::SyncMutex<()>; INCREMENT_LOCK_SHARDS]> =
+	std::sync::LazyLock::new(|| std::array::from_fn(|_| conduwuit::SyncMutex::new(())));
+
+fn increment(db: &Arc<Map>, key: &[u8]) {
+	use std::hash::{DefaultHasher, Hash, Hasher};
+	let mut hasher = DefaultHasher::new();
+	key.hash(&mut hasher);
+	let shard_count = u64::try_from(INCREMENT_LOCK_SHARDS).expect("lock shard count fits in u64");
+	let lock_index = usize::try_from(
+		hasher
+			.finish()
+			.checked_rem(shard_count)
+			.expect("lock shard count is non-zero"),
+	)
+	.expect("hash remainder fits in usize");
+	let _lock = INCREMENT_LOCKS[lock_index].lock();
+	let old = db.get_blocking(key);
+	let new = utils::increment(old.ok().as_deref());
+	db.insert(key, new);
 }
 
 #[cfg(test)]
