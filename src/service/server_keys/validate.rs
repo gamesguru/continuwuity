@@ -17,13 +17,6 @@ pub(super) fn check_no_duplicate_json_keys(raw: &str) -> Result {
 	let vk_count = check_raw_duplicates(bytes, b"verify_keys")?;
 	let ovk_count = check_raw_duplicates(bytes, b"old_verify_keys")?;
 
-	let value: serde_json::Value =
-		serde_json::from_str(raw).map_err(|e| conduwuit::err!(BadServerResponse("{e}")))?;
-
-	let Some(obj) = value.as_object() else {
-		return Ok(());
-	};
-
 	// MSC4499: "If a single key response payload contains more than 50 keys in its
 	// verify_keys dictionary, receiving servers MUST treat the entire response
 	// payload as malformed/hostile and reject it."
@@ -39,6 +32,13 @@ pub(super) fn check_no_duplicate_json_keys(raw: &str) -> Result {
 	if ovk_count > 3000 {
 		return Err!(BadServerResponse("Too many keys in old_verify_keys (limit: 3000)"));
 	}
+
+	let value: serde_json::Value =
+		serde_json::from_str(raw).map_err(|e| conduwuit::err!(BadServerResponse("{e}")))?;
+
+	let Some(obj) = value.as_object() else {
+		return Ok(());
+	};
 
 	// Cross-map collision: same key ID with different body across sections
 	if let (Some(verify_keys), Some(old_verify_keys)) = (

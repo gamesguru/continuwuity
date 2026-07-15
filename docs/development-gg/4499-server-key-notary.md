@@ -46,7 +46,7 @@ The 3,000-key ceiling governs the notary's *served* binding set (what it returns
 
 ## 8. Duplicate JSON Key Rejection
 
-The rejection of payloads with duplicate JSON keys applies to the entire response document (any object at any depth). This enforces strict Canonical JSON rules (RFC 8259 permits duplicate members with undefined semantics, which is why parsers silently deduplicate, leading to potential bypasses).
+The implementation rejects payloads with duplicate JSON keys within the `verify_keys` and `old_verify_keys` objects (before deserialization) to prevent last-key-wins deduplication bypasses.
 
 ## 9. Implementation and Rollout Notes
 

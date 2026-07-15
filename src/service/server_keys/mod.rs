@@ -398,7 +398,7 @@ pub async fn add_signing_keys(
 			.collect();
 
 		for id in to_evict_ids {
-			conduwuit::warn!("MSC4499: EVICTED KEY {id}");
+			conduwuit::debug!("MSC4499: evicted old_verify_key {id} for {origin} due to 3,000-key quota");
 			historical_keys.old_verify_keys.remove(&id);
 			new_keys.old_verify_keys.remove(&id);
 		}
