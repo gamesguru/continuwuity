@@ -90,9 +90,9 @@ async fn get_our_signing_keys(services: &crate::State) -> ServerSigningKeys {
 
 async fn sign_signing_keys(
 	services: &crate::State,
-	server_keys: &ServerSigningKeys,
+	server_keys: &Raw<ServerSigningKeys>,
 ) -> Result<Raw<ServerSigningKeys>> {
-	let mut keys_obj = conduwuit::utils::to_canonical_object(server_keys)?;
+	let mut keys_obj: ruma::CanonicalJsonObject = serde_json::from_str(server_keys.json().get())?;
 	services.server_keys.sign_json(&mut keys_obj)?;
 	let raw_value = serde_json::value::to_raw_value(&keys_obj)?;
 	Ok(Raw::from_json(raw_value))
@@ -103,17 +103,27 @@ async fn get_signing_keys_for(
 	server_name: &ruma::ServerName,
 	minimum_valid_until_ts: Option<MilliSecondsSinceUnixEpoch>,
 	requested_key_ids: &[&ruma::ServerSigningKeyId],
-) -> Result<ServerSigningKeys> {
+) -> Result<Raw<ServerSigningKeys>> {
 	if services.globals.server_is_ours(server_name) {
-		return Ok(get_our_signing_keys(services).await);
+		return Raw::new(&get_our_signing_keys(services).await).map_err(Into::into);
 	}
 
-	let mut server_key = match services.server_keys.signing_keys_for(server_name).await {
+	let mut server_key = match services.server_keys.raw_signing_keys_for(server_name).await {
 		| Ok(keys) => Some(keys),
 		| Err(ref e) if e.is_not_found() => None,
 		| Err(e) => return Err(e),
 	};
-	let needs_fetch = match &server_key {
+	let merged_server_key = match services
+		.server_keys
+		.merged_signing_keys_for(server_name)
+		.await
+	{
+		| Ok(keys) => Some(keys),
+		| Err(ref e) if e.is_not_found() => None,
+		| Err(e) => return Err(e),
+	};
+
+	let needs_fetch = match &merged_server_key {
 		| Some(keys) => {
 			// Re-fetch if any requested key ID is missing from the cached payload
 			let missing_requested_key = requested_key_ids.iter().any(|kid| {
@@ -131,24 +141,18 @@ async fn get_signing_keys_for(
 		| None => true,
 	};
 
-	if needs_fetch && !services.server_keys.is_in_backoff(server_name).await {
+	if needs_fetch {
 		match services
 			.server_keys
 			.server_request_coalesced(server_name, minimum_valid_until_ts, requested_key_ids)
 			.await
 		{
-			| Ok(new_keys) => {
-				services.server_keys.clear_backoff(server_name).await;
-				match services.server_keys.add_signing_keys(new_keys).await {
-					| Ok(patched_keys) => server_key = Some(patched_keys),
-					| Err(e) =>
-						conduwuit::warn!("add_signing_keys failed for {server_name}: {e}"),
-				}
+			| Ok(new_keys) => match services.server_keys.add_signing_keys(&new_keys).await {
+				| Ok(_) => server_key = Some(new_keys),
+				| Err(e) => conduwuit::warn!("add_signing_keys failed for {server_name}: {e}"),
 			},
-			| Err(e) => {
-				conduwuit::warn!("server_request_coalesced failed for {server_name}: {e}");
-				services.server_keys.record_backoff(server_name).await;
-			},
+			| Err(e) =>
+				conduwuit::warn!("server_request_coalesced failed for {server_name}: {e}"),
 		}
 	}
 

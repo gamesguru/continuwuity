@@ -131,8 +131,8 @@ async fn is_key_expired_for_event(
 	key_id: &ServerSigningKeyId,
 	event_ts: MilliSecondsSinceUnixEpoch,
 ) -> bool {
-	// Check the origin key record (includes merged historical old_verify_keys)
-	if let Ok(server_keys) = self.signing_keys_for(origin).await {
+	// Check the origin key record (including merged historical old_verify_keys).
+	if let Ok(server_keys) = self.merged_signing_keys_for(origin).await {
 		if let Some(old_key) = server_keys.old_verify_keys.get(key_id) {
 			return old_key.expired_ts <= event_ts;
 		}
@@ -190,7 +190,7 @@ async fn get_verify_key_from_notaries(
 	for notary in self.services.globals.trusted_servers() {
 		if let Ok(server_keys) = self.notary_request(notary, origin).await {
 			for server_key in server_keys {
-				let server_key = match self.add_signing_keys(server_key).await {
+				let server_key = match self.add_signing_keys(&server_key).await {
 					| Ok(patched) => patched,
 					| Err(e) => {
 						debug_error!("Failed to add signing keys: {e}");
@@ -215,7 +215,7 @@ async fn get_verify_key_from_origin(
 	key_id: &ServerSigningKeyId,
 ) -> Result<VerifyKey> {
 	if let Ok(server_key) = self.server_request(origin).await {
-		let server_key = match self.add_signing_keys(server_key).await {
+		let server_key = match self.add_signing_keys(&server_key).await {
 			| Ok(patched) => patched,
 			| Err(e) => {
 				debug_error!("Failed to add signing keys: {e}");

@@ -32,6 +32,7 @@ struct BackoffState {
 	failures: u32,
 }
 
+const BACKOFF_FAILURE_MEMORY: Duration = Duration::from_secs(24 * 60 * 60);
 const MAX_FETCH_BACKOFF_ENTRIES: usize = 4096;
 
 pub struct Service {
@@ -94,38 +95,25 @@ impl crate::Service for Service {
 #[implement(Service)]
 pub async fn is_in_backoff(&self, server: &ServerName) -> bool {
 	let now = std::time::Instant::now();
-	{
-		let backoff = self.fetch_backoff.read().await;
-		if let Some(state) = backoff.get(server) {
-			if now < state.expires {
-				return true;
-			}
-		} else {
-			return false;
-		}
-	}
-
-	let mut backoff = self.fetch_backoff.write().await;
-	if backoff.get(server).is_some_and(|state| now < state.expires) {
-		return true;
-	}
-
-	backoff.remove(server);
-	false
+	self.fetch_backoff
+		.read()
+		.await
+		.get(server)
+		.is_some_and(|state| now < state.expires)
 }
 
 /// Records a fetch failure, starting a backoff period for the server.
 #[implement(Service)]
 pub async fn record_backoff(&self, server: &ServerName) {
-	let base_secs = self
-		.services
-		.server
-		.config
-		.msc4499_backoff_secs
-		.clamp(60, 3600);
+	let base_secs = self.services.server.config.msc4499_backoff_secs.min(3600);
 	let now = std::time::Instant::now();
 	let mut backoff = self.fetch_backoff.write().await;
-	backoff.retain(|_, state| now < state.expires);
+	backoff.retain(|_, state| {
+		state
+			.expires
+			.checked_add(BACKOFF_FAILURE_MEMORY)
+			.is_some_and(|horizon| now < horizon)
+	});
 
 	let state = backoff
 		.entry(server.into())
@@ -171,12 +159,16 @@ pub async fn server_request_coalesced(
 	server: &ServerName,
 	minimum_valid_until_ts: Option<MilliSecondsSinceUnixEpoch>,
 	requested_key_ids: &[&ServerSigningKeyId],
-) -> Result<ServerSigningKeys> {
+) -> Result<Raw<ServerSigningKeys>> {
 	let _guard = self.fetching.lock(server).await;
+
+	if self.is_in_backoff(server).await {
+		return Err(err!(Request(NotFound("origin is in fetch backoff"))));
+	}
 
 	// Re-check cache — a concurrent caller may have already fetched.
 	// Evaluate using the same freshness criteria as the caller.
-	if let Ok(cached) = self.signing_keys_for(server).await {
+	if let Ok(cached) = self.merged_signing_keys_for(server).await {
 		let missing_key = requested_key_ids.iter().any(|kid| {
 			!cached.verify_keys.contains_key(*kid) && !cached.old_verify_keys.contains_key(*kid)
 		});
@@ -184,11 +176,20 @@ pub async fn server_request_coalesced(
 		let stale = minimum_valid_until_ts.is_some_and(|min| cached.valid_until_ts < min);
 
 		if !missing_key && !stale {
-			return Ok(cached);
+			return self.raw_signing_keys_for(server).await;
 		}
 	}
 
-	self.server_request(server).await
+	match self.server_request(server).await {
+		| Ok(keys) => {
+			self.clear_backoff(server).await;
+			Ok(keys)
+		},
+		| Err(e) => {
+			self.record_backoff(server).await;
+			Err(e)
+		},
+	}
 }
 
 /// Constructs the database key for the historical/cumulative signing keys
@@ -222,8 +223,11 @@ pub fn active_verify_key(&self) -> (&ServerSigningKeyId, &VerifyKey) {
 #[implement(Service)]
 pub async fn add_signing_keys(
 	&self,
-	mut new_keys: ServerSigningKeys,
+	raw_new_keys: &Raw<ServerSigningKeys>,
 ) -> Result<ServerSigningKeys> {
+	let mut new_keys: ServerSigningKeys = raw_new_keys
+		.deserialize()
+		.map_err(|e| err!(BadServerResponse("{e}")))?;
 	let origin = &new_keys.server_name;
 
 	// MSC4499: "A future expired_ts (beyond a 5-minute clock-skew allowance) MUST
@@ -476,7 +480,9 @@ pub async fn add_signing_keys(
 	}
 
 	// Store the (possibly FSW-patched) response under `origin`
-	self.db.server_signingkeys.raw_put(origin, Json(&new_keys));
+	self.db
+		.server_signingkeys
+		.raw_put(origin, Json(raw_new_keys));
 
 	Ok(new_keys)
 }
@@ -586,12 +592,24 @@ pub async fn verify_keys_for(&self, origin: &ServerName) -> VerifyKeys {
 
 #[implement(Service)]
 pub async fn signing_keys_for(&self, origin: &ServerName) -> Result<ServerSigningKeys> {
+	self.raw_signing_keys_for(origin)
+		.await?
+		.deserialize()
+		.map_err(|e| err!(BadServerResponse("{e}")))
+}
+
+#[implement(Service)]
+pub async fn raw_signing_keys_for(&self, origin: &ServerName) -> Result<Raw<ServerSigningKeys>> {
+	self.db.server_signingkeys.get(origin).await.deserialized()
+}
+
+#[implement(Service)]
+pub async fn merged_signing_keys_for(&self, origin: &ServerName) -> Result<ServerSigningKeys> {
 	let mut keys: ServerSigningKeys = self
-		.db
-		.server_signingkeys
-		.get(origin)
-		.await
-		.deserialized()?;
+		.raw_signing_keys_for(origin)
+		.await?
+		.deserialize()
+		.map_err(|e| err!(BadServerResponse("{e}")))?;
 
 	// Augment with historical keys if they exist. We prioritize the latest keys.
 	let historical_key = historical_db_key(origin);

@@ -13,14 +13,15 @@ use ruma::{
 
 use super::validate::check_no_duplicate_json_keys;
 
-/// MSC4499: Validate raw JSON for duplicate keys, then deserialize.
+/// MSC4499: Validate raw JSON before any typed deserialization.
 /// Shared by all key ingestion paths (direct fetch, notary, batch notary).
-fn deserialize_validated(raw: &Raw<ServerSigningKeys>) -> Option<ServerSigningKeys> {
+fn validate_raw(raw: &Raw<ServerSigningKeys>) -> bool {
 	if let Err(e) = check_no_duplicate_json_keys(raw.json().get()) {
 		debug_warn!("Rejecting key response with duplicate JSON keys: {e}");
-		return None;
+		return false;
 	}
-	raw.deserialize().ok()
+
+	true
 }
 
 #[implement(super::Service)]
@@ -28,7 +29,7 @@ pub(super) async fn batch_notary_request<'a, S, K>(
 	&self,
 	notary: &ServerName,
 	batch: S,
-) -> Result<Vec<ServerSigningKeys>>
+) -> Result<Vec<Raw<ServerSigningKeys>>>
 where
 	S: Iterator<Item = (&'a ServerName, K)> + Send,
 	K: Iterator<Item = &'a ServerSigningKeyId> + Send,
@@ -80,7 +81,8 @@ where
 		let response = batch_response
 			.server_keys
 			.iter()
-			.filter_map(deserialize_validated);
+			.filter(|raw| validate_raw(raw))
+			.cloned();
 
 		results.extend(response);
 	}
@@ -93,7 +95,7 @@ pub async fn notary_request(
 	&self,
 	notary: &ServerName,
 	target: &ServerName,
-) -> Result<impl Iterator<Item = ServerSigningKeys> + Clone + Debug + Send + use<>> {
+) -> Result<impl Iterator<Item = Raw<ServerSigningKeys>> + Clone + Debug + Send + use<>> {
 	use get_remote_server_keys::v2::Request;
 
 	let request = Request {
@@ -110,13 +112,14 @@ pub async fn notary_request(
 	Ok(notary_response
 		.server_keys
 		.iter()
-		.filter_map(deserialize_validated)
+		.filter(|raw| validate_raw(raw))
+		.cloned()
 		.collect::<Vec<_>>()
 		.into_iter())
 }
 
 #[implement(super::Service)]
-pub async fn server_request(&self, target: &ServerName) -> Result<ServerSigningKeys> {
+pub async fn server_request(&self, target: &ServerName) -> Result<Raw<ServerSigningKeys>> {
 	use get_server_keys::v2::Request;
 
 	let response = self
@@ -128,7 +131,7 @@ pub async fn server_request(&self, target: &ServerName) -> Result<ServerSigningK
 	// MSC4499: Check raw JSON for duplicate keys before serde_json dedup
 	check_no_duplicate_json_keys(response.server_key.json().get())?;
 
-	let server_signing_key = response
+	let server_signing_key: ServerSigningKeys = response
 		.server_key
 		.deserialize()
 		.map_err(|e| conduwuit::err!(BadServerResponse("{e}")))?;
@@ -141,5 +144,5 @@ pub async fn server_request(&self, target: &ServerName) -> Result<ServerSigningK
 		)));
 	}
 
-	Ok(server_signing_key)
+	Ok(response.server_key)
 }

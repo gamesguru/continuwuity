@@ -13,14 +13,12 @@ pub(super) fn check_no_duplicate_json_keys(raw: &str) -> Result {
 	// Scan the raw bytes for duplicate keys and count limits FIRST, before
 	// full deserialization. This prevents memory exhaustion if a rogue server
 	// sends 100,000 keys, since we reject it before allocating a JSON tree.
-	let bytes = raw.as_bytes();
-	let vk_count = check_raw_duplicates(bytes, b"verify_keys")?;
-	let ovk_count = check_raw_duplicates(bytes, b"old_verify_keys")?;
+	let counts = scan_root_sections(raw.as_bytes())?;
 
 	// MSC4499: "If a single key response payload contains more than 50 keys in its
 	// verify_keys dictionary, receiving servers MUST treat the entire response
 	// payload as malformed/hostile and reject it."
-	if vk_count > 50 {
+	if counts.verify_keys > 50 {
 		return Err!(BadServerResponse("Too many keys in verify_keys (limit: 50)"));
 	}
 
@@ -29,7 +27,7 @@ pub(super) fn check_no_duplicate_json_keys(raw: &str) -> Result {
 	// response payload as malformed/hostile and reject it."
 	// Note: We updated our quota to 3,000 keys total to accommodate the "hostile"
 	// active-key spillover behavior, so the old_verify_keys ceiling is also 3,000.
-	if ovk_count > 3000 {
+	if counts.old_verify_keys > 3000 {
 		return Err!(BadServerResponse("Too many keys in old_verify_keys (limit: 3000)"));
 	}
 
@@ -62,114 +60,226 @@ pub(super) fn check_no_duplicate_json_keys(raw: &str) -> Result {
 	Ok(())
 }
 
-/// Scan raw JSON bytes for duplicate keys within a named top-level object.
-/// Operates entirely on `&[u8]` with checked/saturating arithmetic.
-fn check_raw_duplicates(bytes: &[u8], section_name: &[u8]) -> Result<usize> {
-	// Build the search pattern: `"section_name"`
-	let mut pattern = Vec::with_capacity(section_name.len().saturating_add(2));
-	pattern.push(b'"');
-	pattern.extend_from_slice(section_name);
-	pattern.push(b'"');
-
-	// Find the section in the raw JSON
-	let Some(section_start) = find_subsequence(bytes, &pattern) else {
-		return Ok(0);
-	};
-
-	// Advance past `"section_name"` and find ':'
-	let past_key = section_start.saturating_add(pattern.len());
-	let Some(colon_offset) = find_byte(&bytes[past_key..], b':') else {
-		return Ok(0);
-	};
-
-	// Advance past ':' and find '{'
-	let past_colon = past_key.saturating_add(colon_offset).saturating_add(1);
-	let Some(brace_offset) = find_byte(&bytes[past_colon..], b'{') else {
-		return Ok(0);
-	};
-
-	let obj_bytes = &bytes[past_colon.saturating_add(brace_offset)..];
-
-	scan_object_for_duplicate_keys(obj_bytes, section_name)
+#[derive(Default)]
+struct SectionCounts {
+	verify_keys: usize,
+	old_verify_keys: usize,
 }
 
-/// Walk a JSON object's top-level keys (depth == 1) and detect duplicates.
-fn scan_object_for_duplicate_keys(obj_bytes: &[u8], section_name: &[u8]) -> Result<usize> {
-	let mut seen_keys: HashSet<Vec<u8>> = HashSet::new();
-	let mut depth = 0_u32;
-	let mut i = 0_usize;
-	let len = obj_bytes.len();
+fn scan_root_sections(bytes: &[u8]) -> Result<SectionCounts> {
+	let mut counts = SectionCounts::default();
+	let mut i = skip_ws(bytes, 0);
+	if bytes.get(i) != Some(&b'{') {
+		return Ok(counts);
+	}
 
-	while i < len {
-		match obj_bytes[i] {
-			| b'{' => {
-				depth = depth.saturating_add(1);
-				i = i.saturating_add(1);
-			},
-			| b'}' => {
-				if depth <= 1 {
-					break;
-				}
-				depth = depth.saturating_sub(1);
-				i = i.saturating_add(1);
-			},
-			| b'"' if depth == 1 => {
-				// At depth 1 inside the section object — potential key
-				i = i.saturating_add(1); // skip opening quote
-				let key_start = i;
-				while i < len && obj_bytes[i] != b'"' {
-					if obj_bytes[i] == b'\\' {
-						i = i.saturating_add(1); // skip escaped char
-					}
-					i = i.saturating_add(1);
-				}
-				if i >= len {
-					break;
-				}
-				let key = &obj_bytes[key_start..i];
-				i = i.saturating_add(1); // skip closing quote
+	i += 1;
+	let mut seen_verify_keys = false;
+	let mut seen_old_verify_keys = false;
 
-				// Check if followed by ':' (making it an object key, not a value)
-				let mut j = i;
-				while j < len && obj_bytes[j].is_ascii_whitespace() {
-					j = j.saturating_add(1);
+	loop {
+		i = skip_ws(bytes, i);
+		match bytes.get(i) {
+			| Some(b'}') | None => return Ok(counts),
+			| Some(b'"') => {},
+			| Some(_) => return Ok(counts),
+		}
+
+		let (key, next) = parse_string(bytes, i)?;
+		i = skip_ws(bytes, next);
+		if bytes.get(i) != Some(&b':') {
+			return Ok(counts);
+		}
+
+		i = skip_ws(bytes, i.saturating_add(1));
+		match key {
+			| b"verify_keys" => {
+				if seen_verify_keys {
+					return Err!(BadServerResponse("Duplicate top-level verify_keys section"));
 				}
-				if j < len && obj_bytes[j] == b':' {
-					if contains_escapes(key) {
-						let section = std::str::from_utf8(section_name).unwrap_or("<invalid>");
-						let key_str = std::str::from_utf8(key).unwrap_or("<invalid utf-8>");
-						return Err!(BadServerResponse(
-							"JSON key '{key_str}' in {section} contains illegal escape sequences"
-						));
-					}
-					if !seen_keys.insert(key.to_vec()) {
-						let section = std::str::from_utf8(section_name).unwrap_or("<invalid>");
-						let key_str = std::str::from_utf8(key).unwrap_or("<invalid utf-8>");
-						return Err!(BadServerResponse(
-							"Duplicate JSON key '{key_str}' in {section}"
-						));
-					}
+				seen_verify_keys = true;
+
+				if bytes.get(i) != Some(&b'{') {
+					return Ok(counts);
 				}
+
+				let (count, end) = scan_object_for_duplicate_keys(bytes, i, key)?;
+				counts.verify_keys = count;
+				i = end;
+			},
+			| b"old_verify_keys" => {
+				if seen_old_verify_keys {
+					return Err!(BadServerResponse(
+						"Duplicate top-level old_verify_keys section"
+					));
+				}
+				seen_old_verify_keys = true;
+
+				if bytes.get(i) != Some(&b'{') {
+					return Ok(counts);
+				}
+
+				let (count, end) = scan_object_for_duplicate_keys(bytes, i, key)?;
+				counts.old_verify_keys = count;
+				i = end;
 			},
 			| _ => {
-				i = i.saturating_add(1);
+				i = skip_json_value(bytes, i)?;
 			},
+		}
+
+		i = skip_ws(bytes, i);
+		match bytes.get(i) {
+			| Some(b',') => i += 1,
+			| Some(b'}') | None => return Ok(counts),
+			| Some(_) => return Ok(counts),
+		}
+	}
+}
+
+/// Walk a JSON object's top-level keys and detect duplicates.
+fn scan_object_for_duplicate_keys(
+	bytes: &[u8],
+	start: usize,
+	section_name: &[u8],
+) -> Result<(usize, usize)> {
+	let mut seen_keys: HashSet<Vec<u8>> = HashSet::new();
+	let mut i = start.saturating_add(1);
+
+	loop {
+		i = skip_ws(bytes, i);
+		match bytes.get(i) {
+			| Some(b'}') => return Ok((seen_keys.len(), i.saturating_add(1))),
+			| Some(b'"') => {},
+			| Some(_) | None => return Ok((seen_keys.len(), i)),
+		}
+
+		let (key, next) = parse_string(bytes, i)?;
+		if contains_escapes(key) {
+			let section = std::str::from_utf8(section_name).unwrap_or("<invalid>");
+			let key_str = std::str::from_utf8(key).unwrap_or("<invalid utf-8>");
+			return Err!(BadServerResponse(
+				"JSON key '{key_str}' in {section} contains illegal escape sequences"
+			));
+		}
+		if !seen_keys.insert(key.to_vec()) {
+			let section = std::str::from_utf8(section_name).unwrap_or("<invalid>");
+			let key_str = std::str::from_utf8(key).unwrap_or("<invalid utf-8>");
+			return Err!(BadServerResponse("Duplicate JSON key '{key_str}' in {section}"));
+		}
+
+		i = skip_ws(bytes, next);
+		if bytes.get(i) != Some(&b':') {
+			return Ok((seen_keys.len(), i));
+		}
+
+		i = skip_json_value(bytes, i.saturating_add(1))?;
+		i = skip_ws(bytes, i);
+		match bytes.get(i) {
+			| Some(b',') => i += 1,
+			| Some(b'}') => return Ok((seen_keys.len(), i.saturating_add(1))),
+			| Some(_) | None => return Ok((seen_keys.len(), i)),
+		}
+	}
+}
+
+fn skip_json_value(bytes: &[u8], start: usize) -> Result<usize> {
+	let i = skip_ws(bytes, start);
+	match bytes.get(i) {
+		| Some(b'"') => parse_string(bytes, i).map(|(_, next)| next),
+		| Some(b'{') => skip_object(bytes, i),
+		| Some(b'[') => skip_array(bytes, i),
+		| Some(b'-' | b'0'..=b'9') => Ok(skip_scalar(bytes, i)),
+		| Some(b't') if bytes.get(i..i.saturating_add(4)) == Some(b"true") => Ok(i + 4),
+		| Some(b'f') if bytes.get(i..i.saturating_add(5)) == Some(b"false") => Ok(i + 5),
+		| Some(b'n') if bytes.get(i..i.saturating_add(4)) == Some(b"null") => Ok(i + 4),
+		| Some(_) | None => Ok(i),
+	}
+}
+
+fn skip_object(bytes: &[u8], start: usize) -> Result<usize> {
+	let mut i = start.saturating_add(1);
+	loop {
+		i = skip_ws(bytes, i);
+		match bytes.get(i) {
+			| Some(b'}') => return Ok(i.saturating_add(1)),
+			| Some(b'"') => {},
+			| Some(_) | None => return Ok(i),
+		}
+
+		let (_, next) = parse_string(bytes, i)?;
+		i = skip_ws(bytes, next);
+		if bytes.get(i) != Some(&b':') {
+			return Ok(i);
+		}
+
+		i = skip_json_value(bytes, i.saturating_add(1))?;
+		i = skip_ws(bytes, i);
+		match bytes.get(i) {
+			| Some(b',') => i += 1,
+			| Some(b'}') => return Ok(i.saturating_add(1)),
+			| Some(_) | None => return Ok(i),
+		}
+	}
+}
+
+fn skip_array(bytes: &[u8], start: usize) -> Result<usize> {
+	let mut i = start.saturating_add(1);
+	loop {
+		i = skip_ws(bytes, i);
+		match bytes.get(i) {
+			| Some(b']') => return Ok(i.saturating_add(1)),
+			| Some(_) => {
+				i = skip_json_value(bytes, i)?;
+				i = skip_ws(bytes, i);
+				match bytes.get(i) {
+					| Some(b',') => i += 1,
+					| Some(b']') => return Ok(i.saturating_add(1)),
+					| Some(_) | None => return Ok(i),
+				}
+			},
+			| None => return Ok(i),
+		}
+	}
+}
+
+fn parse_string<'a>(bytes: &'a [u8], start: usize) -> Result<(&'a [u8], usize)> {
+	if bytes.get(start) != Some(&b'"') {
+		return Ok((&[], start));
+	}
+
+	let mut i = start.saturating_add(1);
+	let string_start = i;
+	while i < bytes.len() {
+		match bytes[i] {
+			| b'\\' => i = i.saturating_add(2),
+			| b'"' => return Ok((&bytes[string_start..i], i.saturating_add(1))),
+			| _ => i = i.saturating_add(1),
 		}
 	}
 
-	Ok(seen_keys.len())
+	Err!(BadServerResponse("Unterminated JSON string"))
 }
 
-/// Find the first occurrence of `needle` in `haystack`.
-fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-	haystack
-		.windows(needle.len())
-		.position(|window| window == needle)
+fn skip_scalar(bytes: &[u8], start: usize) -> usize {
+	let mut i = start;
+	while let Some(byte) = bytes.get(i) {
+		match byte {
+			| b',' | b'}' | b']' | b' ' | b'\n' | b'\r' | b'\t' => break,
+			| _ => i = i.saturating_add(1),
+		}
+	}
+
+	i
 }
 
-/// Find the first occurrence of a single byte in a slice.
-fn find_byte(haystack: &[u8], needle: u8) -> Option<usize> {
-	haystack.iter().position(|&b| b == needle)
+fn skip_ws(bytes: &[u8], start: usize) -> usize {
+	let mut i = start;
+	while bytes.get(i).is_some_and(u8::is_ascii_whitespace) {
+		i = i.saturating_add(1);
+	}
+
+	i
 }
 
 /// Check if a key contains any backslashes (JSON escapes).
@@ -198,6 +308,18 @@ mod tests {
 	#[test]
 	fn duplicate_in_old_verify_keys() {
 		let json = r#"{"old_verify_keys": {"ed25519:a": {"key": "AAA", "expired_ts": 1}, "ed25519:a": {"key": "BBB", "expired_ts": 2}}}"#;
+		assert!(check_no_duplicate_json_keys(json).is_err());
+	}
+
+	#[test]
+	fn duplicate_top_level_section_is_rejected() {
+		let json = r#"{"verify_keys": {}, "verify_keys": {}}"#;
+		assert!(check_no_duplicate_json_keys(json).is_err());
+	}
+
+	#[test]
+	fn nested_decoy_section_does_not_hide_root_duplicates() {
+		let json = r#"{"unsigned":{"verify_keys":{"ed25519:a":{"key":"AAA"}}},"verify_keys":{"ed25519:a":{"key":"AAA"},"ed25519:a":{"key":"BBB"}}}"#;
 		assert!(check_no_duplicate_json_keys(json).is_err());
 	}
 
