@@ -234,7 +234,9 @@ pub(crate) async fn get_context_route(
 			.or_else(|| {
 				Some(TopoToken {
 					depth: base_token.depth,
-					pdu_count: base_token.pdu_count.saturating_inc(ruma::api::Direction::Backward),
+					pdu_count: base_token
+						.pdu_count
+						.saturating_inc(ruma::api::Direction::Backward),
 				})
 			})
 			.as_ref()
@@ -246,7 +248,9 @@ pub(crate) async fn get_context_route(
 			.or_else(|| {
 				Some(TopoToken {
 					depth: base_token.depth,
-					pdu_count: base_token.pdu_count.saturating_inc(ruma::api::Direction::Forward),
+					pdu_count: base_token
+						.pdu_count
+						.saturating_inc(ruma::api::Direction::Forward),
 				})
 			})
 			.as_ref()

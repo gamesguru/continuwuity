@@ -1131,7 +1131,8 @@ impl Data {
 		// Integrate hotfix timestamp index into WriteBatch
 		if let Some(ruma::CanonicalJsonValue::Integer(ts)) = json.get("origin_server_ts") {
 			if let Ok(ts) = ruma::UInt::try_from(i64::from(*ts)) {
-				let ts_key = pack_timestamp_key(pdu_id.shortroomid(), u64::from(ts), pdu_id.pdu_count());
+				let ts_key =
+					pack_timestamp_key(pdu_id.shortroomid(), u64::from(ts), pdu_id.pdu_count());
 				self.db["roomid_timestamp_pducount"].insert_into_batch(batch, &ts_key, []);
 			}
 		}
@@ -1241,7 +1242,8 @@ impl Data {
 		// Integrate hotfix timestamp index into WriteBatch
 		if let Some(ruma::CanonicalJsonValue::Integer(ts)) = json.get("origin_server_ts") {
 			if let Ok(ts) = ruma::UInt::try_from(i64::from(*ts)) {
-				let ts_key = pack_timestamp_key(pdu_id.shortroomid(), u64::from(ts), pdu_id.pdu_count());
+				let ts_key =
+					pack_timestamp_key(pdu_id.shortroomid(), u64::from(ts), pdu_id.pdu_count());
 				self.db["roomid_timestamp_pducount"].insert_into_batch(batch, &ts_key, []);
 			}
 		}
@@ -1969,8 +1971,43 @@ impl Data {
 	}
 }
 
-//TODO: this is an ABA
+fn pack_timestamp_key(shortroomid: [u8; 8], ts: u64, count: PduCount) -> [u8; 25] {
+	let mut key = [0_u8; 25];
+	key[0..8].copy_from_slice(&shortroomid);
+	key[8..16].copy_from_slice(&ts.to_be_bytes());
+	match count {
+		| PduCount::Backfilled(c) => {
+			key[16] = 0;
+			// Map negative i64 to correctly ordered u64 for RocksDB sorting
+			let sortable_c = c.cast_unsigned() ^ (1 << 63);
+			key[17..25].copy_from_slice(&sortable_c.to_be_bytes());
+		},
+		| PduCount::Normal(c) => {
+			key[16] = 1;
+			key[17..25].copy_from_slice(&c.to_be_bytes());
+		},
+	}
+	key
+}
+
+const INCREMENT_LOCK_SHARDS: usize = 256;
+
+static INCREMENT_LOCKS: std::sync::LazyLock<[conduwuit::SyncMutex<()>; INCREMENT_LOCK_SHARDS]> =
+	std::sync::LazyLock::new(|| std::array::from_fn(|_| conduwuit::SyncMutex::new(())));
+
 fn increment(db: &Arc<Map>, key: &[u8]) {
+	use std::hash::{DefaultHasher, Hash, Hasher};
+	let mut hasher = DefaultHasher::new();
+	key.hash(&mut hasher);
+	let shard_count = u64::try_from(INCREMENT_LOCK_SHARDS).expect("lock shard count fits in u64");
+	let lock_index = usize::try_from(
+		hasher
+			.finish()
+			.checked_rem(shard_count)
+			.expect("lock shard count is non-zero"),
+	)
+	.expect("hash remainder fits in usize");
+	let _lock = INCREMENT_LOCKS[lock_index].lock();
 	let old = db.get_blocking(key);
 	let new = utils::increment(old.ok().as_deref());
 	db.insert(key, new);
@@ -2503,47 +2540,6 @@ mod tests {
 		assert_eq!(exact_total, 7, "exact seek from MAX must return all 7 events");
 		assert_eq!(inflate_total, 7, "inflated seek from MAX must also return all 7 events");
 	}
-}
-
-fn pack_timestamp_key(shortroomid: [u8; 8], ts: u64, count: PduCount) -> [u8; 25] {
-	let mut key = [0_u8; 25];
-	key[0..8].copy_from_slice(&shortroomid);
-	key[8..16].copy_from_slice(&ts.to_be_bytes());
-	match count {
-		| PduCount::Backfilled(c) => {
-			key[16] = 0;
-			// Map negative i64 to correctly ordered u64 for RocksDB sorting
-			let sortable_c = c.cast_unsigned() ^ (1 << 63);
-			key[17..25].copy_from_slice(&sortable_c.to_be_bytes());
-		},
-		| PduCount::Normal(c) => {
-			key[16] = 1;
-			key[17..25].copy_from_slice(&c.to_be_bytes());
-		},
-	}
-	key
-}
-
-const INCREMENT_LOCK_SHARDS: usize = 256;
-
-static INCREMENT_LOCKS: LazyLock<[conduwuit::SyncMutex<()>; INCREMENT_LOCK_SHARDS]> =
-	LazyLock::new(|| std::array::from_fn(|_| conduwuit::SyncMutex::new(())));
-
-fn increment(db: &Arc<Map>, key: &[u8]) {
-	let mut hasher = DefaultHasher::new();
-	key.hash(&mut hasher);
-	let shard_count = u64::try_from(INCREMENT_LOCK_SHARDS).expect("lock shard count fits in u64");
-	let lock_index = usize::try_from(
-		hasher
-			.finish()
-			.checked_rem(shard_count)
-			.expect("lock shard count is non-zero"),
-	)
-	.expect("hash remainder fits in usize");
-	let _lock = INCREMENT_LOCKS[lock_index].lock();
-	let old = db.get_blocking(key);
-	let new = utils::increment(old.ok().as_deref());
-	db.insert(key, new);
 }
 
 #[cfg(test)]

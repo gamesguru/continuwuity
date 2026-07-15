@@ -328,4 +328,8 @@ pub async fn startup_janitor(&self) {
 
 /// Clear all outlier PDUs.
 #[implement(Service)]
-pub async fn clear_outliers(&self) { self.db.eventid_outlierpdu.clear().await; }
+pub async fn clear_outliers(&self) {
+	conduwuit::warn!(
+		"clear_outliers is no longer supported since outliers are merged into eventid_pdu"
+	);
+}

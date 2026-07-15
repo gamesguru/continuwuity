@@ -5,6 +5,7 @@ mod create;
 mod data;
 pub mod extremities;
 mod heal;
+mod helpers;
 mod metadata;
 mod rebuild_state;
 mod redact;
@@ -84,6 +85,7 @@ struct Services {
 	appservice: Dep<appservice::Service>,
 	admin: Dep<admin::Service>,
 	alias: Dep<rooms::alias::Service>,
+	directory: Dep<rooms::directory::Service>,
 	globals: Dep<globals::Service>,
 	short: Dep<rooms::short::Service>,
 	state: Dep<rooms::state::Service>,
@@ -129,6 +131,7 @@ impl crate::Service for Service {
 				appservice: args.depend::<appservice::Service>("appservice"),
 				admin: args.depend::<admin::Service>("admin"),
 				alias: args.depend::<rooms::alias::Service>("rooms::alias"),
+				directory: args.depend::<rooms::directory::Service>("rooms::directory"),
 				globals: args.depend::<globals::Service>("globals"),
 				short: args.depend::<rooms::short::Service>("rooms::short"),
 				state: args.depend::<rooms::state::Service>("rooms::state"),

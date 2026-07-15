@@ -153,11 +153,10 @@ async fn load_timeline(
 		},
 	};
 
-	// Fetch one extra PDU to determine whether the timeline is limited without
-	// changing the returned chronological window.
+	// 1. Fetch one extra PDU to evaluate layout limits without shifting the window
 	let fetch_limit = limit.saturating_add(1);
 
-	// Return at most `fetch_limit` PDUs from the stream
+	// 2. Stream layout into a temporary sequence container
 	let mut pdus = pdu_stream
 		.by_ref()
 		.take(fetch_limit)
@@ -167,57 +166,24 @@ async fn load_timeline(
 		})
 		.await;
 
-	// The timeline is limited if there are still more PDUs in the stream or if we
-	// fetched more than `limit`
+	// 3. Establish initial constraint boundaries using lookahead markers
 	let mut limited = pdus.len() > limit || pdu_stream.next().await.is_some();
 
-	// capture the count of the absolute earliest PDU we will return as the
-	// prev_batch token. This must be determined before topological sort changes
-	// the order of the PDUs.
-	let prev_batch = if pdus.len() > limit {
+	// 4. Capture chronological batch boundaries BEFORE topo sort shuffles order
+	let mut prev_batch = if pdus.len() > limit {
 		pdus.get(pdus.len().saturating_sub(limit))
 			.map(|(count, _)| *count)
 	} else {
 		pdus.front().map(|(count, _)| *count)
 	};
 
+	// 5. Trim off the lookahead element from the primary evaluation window
 	if pdus.len() > limit {
 		let drop_count = pdus.len().saturating_sub(limit);
 		pdus.drain(0..drop_count);
 	}
 
-	if starting_count.is_some() {
-		// Traverse newest to oldest to find the first topological gap backwards
-		for (i, (_, pdu)) in pdus.iter().enumerate().rev() {
-			let mut gap_found = false;
-			for prev_id in pdu.prev_events() {
-				if services
-					.rooms
-					.timeline
-					.get_pdu_count(prev_id)
-					.await
-					.is_err()
-				{
-					gap_found = true;
-					break;
-				}
-			}
-
-			if gap_found {
-				// We found a gap BEFORE this PDU. Keep this PDU, but drop anything before.
-				info!(
-					"Topological gap in timeline for {} before PDU {}. Truncating.",
-					room_id,
-					pdu.event_id()
-				);
-				pdus.drain(0..i);
-				limited = true;
-				break;
-			}
-		}
-	}
-
-	// 5. Apply topological sort to the final window (Hotfix)
+	// 6. Execute hotfix branch's Topo Sort for correct DAG traversal ordering
 	if !pdus.is_empty() {
 		let mut event_to_count = std::collections::HashMap::new();
 		let events: Vec<_> = pdus
@@ -241,6 +207,48 @@ async fn load_timeline(
 			.collect();
 	}
 
+	// 7. Execute HEAD branch's Backward Topological Gap Truncation logic
+	if starting_count.is_some() {
+		let mut gap_idx = None;
+
+		// Traverse newest to oldest to pinpoint structural graph breaks
+		for (i, (_, pdu)) in pdus.iter().enumerate().rev() {
+			let mut gap_found = false;
+			for prev_id in pdu.prev_events() {
+				if services
+					.rooms
+					.timeline
+					.get_pdu_count(prev_id)
+					.await
+					.is_err()
+				{
+					gap_found = true;
+					break;
+				}
+			}
+
+			if gap_found {
+				gap_idx = Some(i);
+				info!(
+					"Topological gap in timeline for {} before PDU {}. Truncating.",
+					room_id,
+					pdu.event_id()
+				);
+				break;
+			}
+		}
+
+		// If a break is found, drop broken history and rewrite the pagination tokens
+		if let Some(i) = gap_idx {
+			pdus.drain(0..i);
+			limited = true;
+
+			// The chronological edge has shifted; point prev_batch to the new front
+			prev_batch = pdus.front().map(|(count, _)| *count);
+		}
+	}
+
+	// 8. Unified Telemetry Logging
 	if pdus.is_empty() && starting_count.is_some() {
 		info!(
 			target: "timeline_debug",

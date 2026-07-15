@@ -61,7 +61,7 @@ echo "→ Consolidating and ingesting test details..."
 (
 	echo "CREATE TEMP TABLE t (j jsonb);"
 	printf '%s\n' "\copy t FROM STDIN csv quote e'\x01' delimiter e'\x02';"
-	
+
 	jq -r --arg sep "$MANIFEST_SEP" '[.commit_hash, (.arch // ""), (.os // ""), (.profile // ""), ((.room_version // "") | if length == 0 then "11" else . end), ((.features // "") | gsub("[,\\s]+"; " ") | gsub("^ | $"; ""))] | join($sep)' \
 		"$LEDGER_DIR/runs.jsonl" |
 	while IFS="$MANIFEST_SEP" read -r COMMIT ARCH OS PROFILE ROOM_VERSION FEATURES; do
