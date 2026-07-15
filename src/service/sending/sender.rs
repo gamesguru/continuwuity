@@ -1159,7 +1159,7 @@ fn build_receipt_map(
 			| Entry::Vacant(e) => {
 				if num
 					.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
-						(n < limit).then_some(n + 1)
+						(n < limit).then_some(n.saturating_add(1))
 					})
 					.is_err()
 				{
