@@ -162,8 +162,18 @@ impl Service {
 	) {
 		debug!(dest = ?dest, "{e:?}");
 		let status = e.status_code();
+
+		// For definitive non-retryable client errors (e.g. 400 Bad Request on a bad
+		// PDU), we don't retry the transaction — but we MUST still schedule a flush so
+		// that any queued EDU-only data (e.g. to-device messages) that survived in
+		// servercurrentevent_data isn't permanently orphaned. Without the reschedule,
+		// there is no future PDU or event that would wake this destination up, and the
+		// EDU stays stuck in the DB forever.
 		if status.is_client_error() && !matches!(status.as_u16(), 401 | 403 | 404 | 429) {
 			statuses.remove(&dest);
+			// Reschedule so orphaned EDU-only queued items are retried after a short
+			// delay rather than being silently dropped.
+			self.reschedule_flush(dest, Duration::from_secs(1));
 			return;
 		}
 
