@@ -5,8 +5,8 @@ use conduwuit::{Err, Result};
 /// MSC4499: Scan raw JSON bytes for duplicate keys within `verify_keys` and
 /// `old_verify_keys` objects. Returns Err if any duplicate keys are found.
 ///
-/// This must run on the raw bytes BEFORE serde_json deserialization, because
-/// serde_json silently deduplicates (last-key-wins). Without this pre-scan,
+/// This must run on the raw bytes BEFORE `serde_json` deserialization, because
+/// `serde_json` silently deduplicates (last-key-wins). Without this pre-scan,
 /// a payload with `{"verify_keys": {"ed25519:foo": ..., "ed25519:foo": ...}}`
 /// would be silently accepted with the second value winning.
 pub(super) fn check_no_duplicate_json_keys(raw: &str) -> Result {
@@ -73,16 +73,15 @@ fn scan_root_sections(bytes: &[u8]) -> Result<SectionCounts> {
 		return Ok(counts);
 	}
 
-	i += 1;
+	i = i.saturating_add(1);
 	let mut seen_verify_keys = false;
 	let mut seen_old_verify_keys = false;
 
 	loop {
 		i = skip_ws(bytes, i);
 		match bytes.get(i) {
-			| Some(b'}') | None => return Ok(counts),
 			| Some(b'"') => {},
-			| Some(_) => return Ok(counts),
+			| Some(_) | None => return Ok(counts),
 		}
 
 		let (key, next) = parse_string(bytes, i)?;
@@ -130,9 +129,8 @@ fn scan_root_sections(bytes: &[u8]) -> Result<SectionCounts> {
 
 		i = skip_ws(bytes, i);
 		match bytes.get(i) {
-			| Some(b',') => i += 1,
-			| Some(b'}') | None => return Ok(counts),
-			| Some(_) => return Ok(counts),
+			| Some(b',') => i = i.saturating_add(1),
+			| Some(_) | None => return Ok(counts),
 		}
 	}
 }
@@ -176,7 +174,7 @@ fn scan_object_for_duplicate_keys(
 		i = skip_json_value(bytes, i.saturating_add(1))?;
 		i = skip_ws(bytes, i);
 		match bytes.get(i) {
-			| Some(b',') => i += 1,
+			| Some(b',') => i = i.saturating_add(1),
 			| Some(b'}') => return Ok((seen_keys.len(), i.saturating_add(1))),
 			| Some(_) | None => return Ok((seen_keys.len(), i)),
 		}
@@ -190,9 +188,12 @@ fn skip_json_value(bytes: &[u8], start: usize) -> Result<usize> {
 		| Some(b'{') => skip_object(bytes, i),
 		| Some(b'[') => skip_array(bytes, i),
 		| Some(b'-' | b'0'..=b'9') => Ok(skip_scalar(bytes, i)),
-		| Some(b't') if bytes.get(i..i.saturating_add(4)) == Some(b"true") => Ok(i + 4),
-		| Some(b'f') if bytes.get(i..i.saturating_add(5)) == Some(b"false") => Ok(i + 5),
-		| Some(b'n') if bytes.get(i..i.saturating_add(4)) == Some(b"null") => Ok(i + 4),
+		| Some(b't') if bytes.get(i..i.saturating_add(4)) == Some(b"true") =>
+			Ok(i.saturating_add(4)),
+		| Some(b'f') if bytes.get(i..i.saturating_add(5)) == Some(b"false") =>
+			Ok(i.saturating_add(5)),
+		| Some(b'n') if bytes.get(i..i.saturating_add(4)) == Some(b"null") =>
+			Ok(i.saturating_add(4)),
 		| Some(_) | None => Ok(i),
 	}
 }
@@ -216,7 +217,7 @@ fn skip_object(bytes: &[u8], start: usize) -> Result<usize> {
 		i = skip_json_value(bytes, i.saturating_add(1))?;
 		i = skip_ws(bytes, i);
 		match bytes.get(i) {
-			| Some(b',') => i += 1,
+			| Some(b',') => i = i.saturating_add(1),
 			| Some(b'}') => return Ok(i.saturating_add(1)),
 			| Some(_) | None => return Ok(i),
 		}
@@ -233,7 +234,7 @@ fn skip_array(bytes: &[u8], start: usize) -> Result<usize> {
 				i = skip_json_value(bytes, i)?;
 				i = skip_ws(bytes, i);
 				match bytes.get(i) {
-					| Some(b',') => i += 1,
+					| Some(b',') => i = i.saturating_add(1),
 					| Some(b']') => return Ok(i.saturating_add(1)),
 					| Some(_) | None => return Ok(i),
 				}
@@ -243,7 +244,7 @@ fn skip_array(bytes: &[u8], start: usize) -> Result<usize> {
 	}
 }
 
-fn parse_string<'a>(bytes: &'a [u8], start: usize) -> Result<(&'a [u8], usize)> {
+fn parse_string(bytes: &[u8], start: usize) -> Result<(&[u8], usize)> {
 	if bytes.get(start) != Some(&b'"') {
 		return Ok((&[], start));
 	}
