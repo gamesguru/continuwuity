@@ -26,13 +26,19 @@ use tokio::sync::RwLock;
 
 use crate::{Dep, globals, sending};
 
+#[derive(Clone, Copy, Debug)]
+struct BackoffState {
+	expires: std::time::Instant,
+	failures: u32,
+}
+
 pub struct Service {
 	keypair: Box<Ed25519KeyPair>,
 	verify_keys: VerifyKeys,
 	minimum_valid: Duration,
-	/// Tracks servers that recently failed key fetches, mapping to the instant
-	/// the backoff expires. Prevents hammering unreachable origins.
-	fetch_backoff: RwLock<BTreeMap<OwnedServerName, std::time::Instant>>,
+	/// Tracks servers that recently failed key fetches, including the instant
+	/// the backoff expires and how many consecutive failures have occurred.
+	fetch_backoff: RwLock<BTreeMap<OwnedServerName, BackoffState>>,
 	/// Deduplicates concurrent in-flight key fetches per server name.
 	/// Uses MutexMap (same pattern as resolver) — concurrent calls for the
 	/// same server serialize on the mutex; the second caller re-checks cache.
@@ -86,8 +92,8 @@ impl crate::Service for Service {
 #[implement(Service)]
 pub async fn is_in_backoff(&self, server: &ServerName) -> bool {
 	let backoff = self.fetch_backoff.read().await;
-	if let Some(expires) = backoff.get(server) {
-		if std::time::Instant::now() < *expires {
+	if let Some(state) = backoff.get(server) {
+		if std::time::Instant::now() < state.expires {
 			return true;
 		}
 	}
@@ -97,16 +103,28 @@ pub async fn is_in_backoff(&self, server: &ServerName) -> bool {
 /// Records a fetch failure, starting a backoff period for the server.
 #[implement(Service)]
 pub async fn record_backoff(&self, server: &ServerName) {
-	let backoff_secs = self.services.server.config.msc4499_backoff_secs.min(86400);
+	let base_secs = self
+		.services
+		.server
+		.config
+		.msc4499_backoff_secs
+		.clamp(60, 3600);
 	let now = std::time::Instant::now();
+	let mut backoff = self.fetch_backoff.write().await;
+	let state = backoff
+		.entry(server.into())
+		.or_insert(BackoffState { expires: now, failures: 0 });
+	state.failures = state.failures.saturating_add(1);
+
+	let shift = state.failures.saturating_sub(1).min(63);
+	let multiplier = 1_u64.checked_shl(shift).unwrap_or(u64::MAX);
+	let delay_secs = base_secs.saturating_mul(multiplier).min(3600);
+
 	let expires = now
-		.checked_add(Duration::from_secs(backoff_secs))
+		.checked_add(Duration::from_secs(delay_secs))
 		.or_else(|| now.checked_add(Duration::from_secs(86400)))
 		.unwrap_or(now);
-	self.fetch_backoff
-		.write()
-		.await
-		.insert(server.into(), expires);
+	state.expires = expires;
 }
 
 /// Clears the backoff state for a server after a successful fetch.
@@ -343,9 +361,12 @@ pub async fn add_signing_keys(
 
 	// Store the filtered/merged historical keys
 	historical_keys.verify_keys.extend(filtered_verify_keys);
-	historical_keys
-		.old_verify_keys
-		.extend(filtered_old_verify_keys);
+	for (key_id, old_key) in filtered_old_verify_keys {
+		historical_keys
+			.old_verify_keys
+			.entry(key_id)
+			.or_insert(old_key);
+	}
 
 	// MSC4499: "The server SHOULD cap total stored keys (active + old) at 1,000.
 	// When it hits 1,000, it evicts the oldest from old_verify_keys."
@@ -551,8 +572,12 @@ pub async fn signing_keys_for(&self, origin: &ServerName) -> Result<ServerSignin
 		// Augment with historical keys if they exist. We prioritize the latest keys.
 		// We merge historical old_verify_keys into the latest payload so historical
 		// key material remains available for verification and notary responses.
+		// Preserve the first-seen record for each key ID instead of letting a
+		// later payload overwrite an earlier expired_ts.
 		let mut merged_ovks = historical_keys.old_verify_keys;
-		merged_ovks.extend(keys.old_verify_keys);
+		for (key_id, old_key) in keys.old_verify_keys {
+			merged_ovks.entry(key_id).or_insert(old_key);
+		}
 
 		keys.old_verify_keys = merged_ovks;
 	}
