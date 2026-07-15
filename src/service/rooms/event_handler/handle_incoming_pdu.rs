@@ -175,12 +175,18 @@ pub async fn handle_incoming_pdu<'a>(
 		return Err!(Request(Forbidden("Federation of this room is disabled by this server.")));
 	}
 
-	if !self
+	// Snapshot participation under the room lock so we do not branch on a stale
+	// projection while a concurrent membership transition is still committing.
+	let state_lock = self.services.state.mutex.lock(room_id).await;
+	let server_in_room = self
 		.services
 		.state_cache
 		.server_in_room(self.services.globals.server_name(), room_id)
-		.await && !self.services.state_cache.is_joining(room_id)
-	{
+		.await;
+	let is_joining = self.services.state_cache.is_joining(room_id);
+	drop(state_lock);
+
+	if !server_in_room && !is_joining {
 		let is_room_member_event =
 			value.get("type").and_then(|t| t.as_str()) == Some("m.room.member");
 

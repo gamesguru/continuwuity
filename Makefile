@@ -142,16 +142,11 @@ _confirm:
 .PHONY: format
 format: ##H Run pre-commit hooks/formatters
 	pre-commit run --all-files
-	$(MAKE) format-sql
+	pg_format -i -L .github/actions/postgres/*.sql
 #	ROCKSDB_INCLUDE_DIR=$(ROCKSDB_INCLUDE_DIR) \
 		ROCKSDB_LIB_DIR=$(ROCKSDB_LIB_DIR) \
 		LD_LIBRARY_PATH=$(ROCKSDB_LIB_DIR):$$LD_LIBRARY_PATH \
 		cargo fix $(CARGO_SCOPE) $(CARGO_FLAGS) --features default --allow-dirty --allow-no-vcs
-
-.PHONY: format-sql
-format-sql: ##H Format PostgreSQL SQL files with pg_format
-	@command -v pg_format >/dev/null 2>&1 || { echo "pg_format is not installed"; exit 1; }
-	pg_format -i -L .github/actions/postgres/*.sql
 
 .PHONY: lint
 lint:   ##H Lint code
