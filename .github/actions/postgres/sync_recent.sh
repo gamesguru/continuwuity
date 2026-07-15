@@ -140,7 +140,7 @@ ALL_FILES=$(git ls-tree -r FETCH_HEAD:runs_data --name-only || true)
 TMPMANIFEST=$(mktemp)
 trap 'rm -f "$TMPMANIFEST"' EXIT
 git show "FETCH_HEAD:runs.jsonl" | tail -n "$LIMIT" |
-	jq -r '[.commit_hash, (.arch // ""), (.os // ""), (.profile // ""), (.room_version // "11"), ((.features // "") | gsub("[,\\s]+"; " ") | gsub("^ | $"; ""))] | @tsv' \
+	jq -r '[.commit_hash, (.arch // ""), (.os // ""), (.profile // ""), ((.room_version // "") | if length > 0 then . else "11" end), ((.features // "") | gsub("[,\\s]+"; " ") | gsub("^ | $"; ""))] | @tsv' \
 		>"$TMPMANIFEST"
 
 # Find which of these exact $LIMIT runs already have details (to skip re-ingesting).

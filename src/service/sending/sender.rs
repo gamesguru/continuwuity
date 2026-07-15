@@ -1157,10 +1157,15 @@ fn build_receipt_map(
 
 		match read.entry(user_id) {
 			| Entry::Vacant(e) => {
-				e.insert(receipt_data);
-				if num.fetch_add(1, Ordering::Relaxed).saturating_add(1) >= limit {
+				if num
+					.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| {
+						(n < limit).then_some(n + 1)
+					})
+					.is_err()
+				{
 					break;
 				}
+				e.insert(receipt_data);
 			},
 			| Entry::Occupied(mut e) =>
 				if is_unthreaded {

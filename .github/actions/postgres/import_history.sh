@@ -59,7 +59,7 @@ EOF
 # 2. Bulk Ingest Test Details (Injecting metadata from summaries / filenames)
 echo "→ Consolidating and ingesting test details..."
 (
-	jq -r '[.commit_hash, (.arch // ""), (.os // ""), (.profile // ""), (.room_version // "11"), ((.features // "") | gsub("[,\\s]+"; " ") | gsub("^ | $"; ""))] | @tsv' \
+	jq -r '[.commit_hash, (.arch // ""), (.os // ""), (.profile // ""), ((.room_version // "") | if length == 0 then "11" else . end), ((.features // "") | gsub("[,\\s]+"; " ") | gsub("^ | $"; ""))] | @tsv' \
 		"$LEDGER_DIR/runs.jsonl" |
 	while IFS=$'\t' read -r COMMIT ARCH OS PROFILE ROOM_VERSION FEATURES; do
 		SAFE_ARCH=${ARCH//[!a-zA-Z0-9._-]/_}
