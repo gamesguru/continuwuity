@@ -503,7 +503,16 @@ impl Service {
 		events.extend(presence);
 		events.extend(receipts);
 
-		Ok((events, max_edu_count.load(Ordering::Acquire)))
+		let last_count = if events.is_empty() {
+			// We scanned the full window and found nothing relevant for this server.
+			// Advance to the upper bound so empty catch-up transactions do not loop
+			// forever against the global count.
+			since_upper
+		} else {
+			max_edu_count.load(Ordering::Acquire)
+		};
+
+		Ok((events, last_count))
 	}
 
 	/// Look for device changes
