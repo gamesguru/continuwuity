@@ -105,7 +105,12 @@ pub async fn is_in_backoff(&self, server: &ServerName) -> bool {
 		}
 	}
 
-	self.fetch_backoff.write().await.remove(server);
+	let mut backoff = self.fetch_backoff.write().await;
+	if backoff.get(server).is_some_and(|state| now < state.expires) {
+		return true;
+	}
+
+	backoff.remove(server);
 	false
 }
 
