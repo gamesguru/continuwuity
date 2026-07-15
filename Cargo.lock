@@ -1117,6 +1117,7 @@ dependencies = [
  "reqwest 0.13.2",
  "roaring",
  "ruma",
+ "rustc-hash",
  "sanitize-filename",
  "serde",
  "serde-saphyr",
