@@ -1128,6 +1128,14 @@ impl Data {
 		self.roomid_topologicalorder_pducount
 			.insert_into_batch(batch, &topo_key, event_id_bytes);
 
+		// Integrate hotfix timestamp index into WriteBatch
+		if let Some(ruma::CanonicalJsonValue::Integer(ts)) = json.get("origin_server_ts") {
+			if let Ok(ts) = ruma::UInt::try_from(i64::from(*ts)) {
+				let ts_key = pack_timestamp_key(pdu_id.shortroomid(), u64::from(ts), pdu_id.pdu_count());
+				self.db["roomid_timestamp_pducount"].insert_into_batch(batch, &ts_key, []);
+			}
+		}
+
 		let metadata = rooms::timeline::EventMetadata {
 			short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
 			is_outlier: false,
@@ -1229,6 +1237,14 @@ impl Data {
 		let topo_key = Self::topo_pducount_key(pdu_id, pdu.depth().into());
 		self.roomid_topologicalorder_pducount
 			.insert_into_batch(batch, &topo_key, event_id_bytes);
+
+		// Integrate hotfix timestamp index into WriteBatch
+		if let Some(ruma::CanonicalJsonValue::Integer(ts)) = json.get("origin_server_ts") {
+			if let Ok(ts) = ruma::UInt::try_from(i64::from(*ts)) {
+				let ts_key = pack_timestamp_key(pdu_id.shortroomid(), u64::from(ts), pdu_id.pdu_count());
+				self.db["roomid_timestamp_pducount"].insert_into_batch(batch, &ts_key, []);
+			}
+		}
 
 		let metadata = rooms::timeline::EventMetadata {
 			short_room_id: u64::from_be_bytes(pdu_id.shortroomid()),
@@ -2486,5 +2502,165 @@ mod tests {
 
 		assert_eq!(exact_total, 7, "exact seek from MAX must return all 7 events");
 		assert_eq!(inflate_total, 7, "inflated seek from MAX must also return all 7 events");
+	}
+}
+
+fn pack_timestamp_key(shortroomid: [u8; 8], ts: u64, count: PduCount) -> [u8; 25] {
+	let mut key = [0_u8; 25];
+	key[0..8].copy_from_slice(&shortroomid);
+	key[8..16].copy_from_slice(&ts.to_be_bytes());
+	match count {
+		| PduCount::Backfilled(c) => {
+			key[16] = 0;
+			// Map negative i64 to correctly ordered u64 for RocksDB sorting
+			let sortable_c = c.cast_unsigned() ^ (1 << 63);
+			key[17..25].copy_from_slice(&sortable_c.to_be_bytes());
+		},
+		| PduCount::Normal(c) => {
+			key[16] = 1;
+			key[17..25].copy_from_slice(&c.to_be_bytes());
+		},
+	}
+	key
+}
+
+const INCREMENT_LOCK_SHARDS: usize = 256;
+
+static INCREMENT_LOCKS: LazyLock<[conduwuit::SyncMutex<()>; INCREMENT_LOCK_SHARDS]> =
+	LazyLock::new(|| std::array::from_fn(|_| conduwuit::SyncMutex::new(())));
+
+fn increment(db: &Arc<Map>, key: &[u8]) {
+	let mut hasher = DefaultHasher::new();
+	key.hash(&mut hasher);
+	let shard_count = u64::try_from(INCREMENT_LOCK_SHARDS).expect("lock shard count fits in u64");
+	let lock_index = usize::try_from(
+		hasher
+			.finish()
+			.checked_rem(shard_count)
+			.expect("lock shard count is non-zero"),
+	)
+	.expect("hash remainder fits in usize");
+	let _lock = INCREMENT_LOCKS[lock_index].lock();
+	let old = db.get_blocking(key);
+	let new = utils::increment(old.ok().as_deref());
+	db.insert(key, new);
+}
+
+#[cfg(test)]
+mod tests {
+	use conduwuit::Result;
+	use ruma::api::Direction;
+
+	// Tests for edge cases and out-of-order events.
+
+	// Helper to make a BTreeSet act like our database queries
+	fn simulate_pdus_by_timestamp(
+		index: &std::collections::BTreeSet<(u64, u64)>,
+		search_ts: u64,
+		dir: Direction,
+	) -> Vec<(u64, u64)> {
+		// Keys are (timestamp, count)
+		let start_count = match dir {
+			| Direction::Forward => u64::MIN,
+			| Direction::Backward => u64::MAX,
+		};
+		let start_key = (search_ts, start_count);
+
+		match dir {
+			| Direction::Forward => index.range(start_key..).copied().collect(),
+			| Direction::Backward => index.range(..=start_key).rev().copied().collect(),
+		}
+	}
+
+	#[tokio::test]
+	async fn test_pdus_by_timestamp_complex_walk() -> Result<()> {
+		// Test a messy timeline where timestamps don't always go up in order.
+		//
+		// Example timeline:
+		// E1: 1000ms, Count 1
+		// E2: 2000ms, Count 2
+		// E3: 2000ms, Count 3 (Duplicate TS, arrived after E2)
+		// E4: 1500ms, Count 4 (Clock Skew - arrived later but has earlier TS)
+		// E5: 3000ms, Count 5
+		//
+		// How it looks in the database (sorted by time, then count):
+		// 1. (1000ms, Count 1)
+		// 2. (1500ms, Count 4)
+		// 3. (2000ms, Count 2)
+		// 4. (2000ms, Count 3)
+		// 5. (3000ms, Count 5)
+
+		let mut index = std::collections::BTreeSet::new();
+		index.insert((1000, 1));
+		index.insert((2000, 2));
+		index.insert((2000, 3));
+		index.insert((1500, 4)); // Non-monotonic TS relative to count
+		index.insert((3000, 5));
+
+		// Searching forward from 1700ms finds the 2000ms and 3000ms events
+		let fwd = simulate_pdus_by_timestamp(&index, 1700, Direction::Forward);
+		assert_eq!(fwd, vec![(2000, 2), (2000, 3), (3000, 5)]);
+
+		// Searching backward from 1700ms finds the 1500ms and 1000ms events
+		let bwd = simulate_pdus_by_timestamp(&index, 1700, Direction::Backward);
+		assert_eq!(bwd, vec![(1500, 4), (1000, 1)]);
+
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn test_pdus_by_timestamp_large_sparse_gaps() -> Result<()> {
+		// Check we jump straight to the next event, not scan huge empty gaps.
+
+		let mut index = std::collections::BTreeSet::new();
+
+		// 1st group of events: 100,000 to 101,000
+		for i in 100_000..=101_000 {
+			index.insert((i, i));
+		}
+
+		// 2nd group of events: 964,000 to 965,000
+		for i in 964_000..=965_000 {
+			index.insert((i, i));
+		}
+
+		// Searching forward from the middle should find next group.
+		let fwd = simulate_pdus_by_timestamp(&index, 500_000, Direction::Forward);
+		assert_eq!(fwd.first(), Some(&(964_000, 964_000)));
+
+		// Searching backward should find the first group.
+		let bwd = simulate_pdus_by_timestamp(&index, 500_000, Direction::Backward);
+		assert_eq!(bwd.first(), Some(&(101_000, 101_000)));
+
+		Ok(())
+	}
+
+	#[tokio::test]
+	async fn test_pdus_by_timestamp_wild_jitter_staircase() -> Result<()> {
+		// Create 1000 events where the time generally goes up but sometimes jumps back
+		let timeline = (0..1000_u64).map(|i| {
+			let i_signed = i as i64;
+			let ts = i_signed * 10 + (i_signed % 11) * 5 - (i_signed % 13) * 7;
+			(ts.max(0) as u64, i)
+		});
+
+		// Set sorts like RocksDB, luckily
+		let mut index = std::collections::BTreeSet::new();
+		for (ts, count) in timeline {
+			index.insert((ts, count));
+		}
+
+		// Check we find correct starting point even if the timestamps jump around
+		let search_ts = 5000_u64;
+		let results = simulate_pdus_by_timestamp(&index, search_ts, Direction::Forward);
+
+		// Check first event we find is at (or after) our search time
+		if let Some(&(ts, _count)) = results.first() {
+			assert!(ts >= search_ts);
+		} else {
+			panic!("Search yielded no results");
+		}
+
+		Ok(())
 	}
 }

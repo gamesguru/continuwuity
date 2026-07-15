@@ -325,3 +325,7 @@ pub fn fix_pdu_event_ids(&self) -> Result<usize> { Ok(0) }
 pub async fn startup_janitor(&self) {
 	info!("Outlier janitor is disabled.");
 }
+
+/// Clear all outlier PDUs.
+#[implement(Service)]
+pub async fn clear_outliers(&self) { self.db.eventid_outlierpdu.clear().await; }

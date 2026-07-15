@@ -52,6 +52,7 @@ pub enum AdminCommand {
 	Check(CheckCommand),
 
 	#[command(subcommand)]
+	#[command(alias = "yolo")]
 	/// Commands for debugging things
 	Debug(DebugCommand),
 

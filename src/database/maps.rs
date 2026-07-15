@@ -230,6 +230,11 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::SEQUENTIAL_SMALL
 	},
 	Descriptor {
+		name: "roomid_timestamp_pducount",
+		key_size_hint: Some(25),
+		..descriptor::SEQUENTIAL
+	},
+	Descriptor {
 		name: "roomserverids",
 		..descriptor::RANDOM_SMALL
 	},
@@ -529,6 +534,18 @@ pub(super) static MAPS: &[Descriptor] = &[
 	Descriptor {
 		name: "userroomid_notificationcount",
 		..descriptor::RANDOM
+	},
+	Descriptor {
+		name: "delayid_scheduleddelayedevent",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "delayid_finalizeddelayedevent",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
+		name: "userroomdelayid",
+		..descriptor::RANDOM_SMALL
 	},
 ];
 

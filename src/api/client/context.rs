@@ -231,14 +231,24 @@ pub(crate) async fn get_context_route(
 		start: events_before
 			.last()
 			.map(at!(0))
-			.or(Some(base_token))
+			.or_else(|| {
+				Some(TopoToken {
+					depth: base_token.depth,
+					pdu_count: base_token.pdu_count.saturating_inc(ruma::api::Direction::Backward),
+				})
+			})
 			.as_ref()
 			.map(TopoToken::to_string),
 
 		end: events_after
 			.last()
 			.map(at!(0))
-			.or(Some(base_token))
+			.or_else(|| {
+				Some(TopoToken {
+					depth: base_token.depth,
+					pdu_count: base_token.pdu_count.saturating_inc(ruma::api::Direction::Forward),
+				})
+			})
 			.as_ref()
 			.map(TopoToken::to_string),
 
