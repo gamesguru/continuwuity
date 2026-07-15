@@ -761,9 +761,9 @@
 {"Action":"pass","Test":"TestSyncLeaveSection/Left_rooms_appear_in_the_leave_section_of_sync"}
 {"Action":"pass","Test":"TestSyncLeaveSection/Newly_left_rooms_appear_in_the_leave_section_of_incremental_sync"}
 {"Action":"pass","Test":"TestSyncOmitsStateChangeOnFilteredEvents"}
-{"Action":"pass","Test":"TestSyncTimelineGap"}
-{"Action":"pass","Test":"TestSyncTimelineGap/full"}
-{"Action":"pass","Test":"TestSyncTimelineGap/incremental"}
+{"Action":"fail","Test":"TestSyncTimelineGap"}
+{"Action":"fail","Test":"TestSyncTimelineGap/full"}
+{"Action":"fail","Test":"TestSyncTimelineGap/incremental"}
 {"Action":"pass","Test":"TestTentativeEventualJoiningAfterRejecting"}
 {"Action":"fail","Test":"TestThreadReceiptsInSyncMSC4102"}
 {"Action":"fail","Test":"TestThreadSubscriptions"}
@@ -778,10 +778,10 @@
 {"Action":"fail","Test":"TestThreadedReceipts"}
 {"Action":"fail","Test":"TestThreadsEndpoint"}
 {"Action":"pass","Test":"TestToDeviceMessages"}
-{"Action":"fail","Test":"TestToDeviceMessagesOverFederation"}
+{"Action":"pass","Test":"TestToDeviceMessagesOverFederation"}
 {"Action":"pass","Test":"TestToDeviceMessagesOverFederation/good_connectivity"}
 {"Action":"pass","Test":"TestToDeviceMessagesOverFederation/interrupted_connectivity"}
-{"Action":"fail","Test":"TestToDeviceMessagesOverFederation/stopped_server"}
+{"Action":"pass","Test":"TestToDeviceMessagesOverFederation/stopped_server"}
 {"Action":"skip","Test":"TestTxnIdWithRefreshToken"}
 {"Action":"skip","Test":"TestTxnIdempotency"}
 {"Action":"pass","Test":"TestTxnIdempotencyScopedToDevice"}
