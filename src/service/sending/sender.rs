@@ -15,7 +15,7 @@ use conduwuit_core::{
 	result::LogErr,
 	trace,
 	utils::{
-		ReadyExt, calculate_hash, continue_exponential_backoff_secs,
+		ReadyExt, calculate_hash,
 		future::TryExtExt,
 		stream::{BroadbandExt, IterStream, WidebandExt},
 	},
@@ -58,8 +58,11 @@ use super::{Destination, EduBuf, EduVec, Msg, SendingEvent, Service, data::Queue
 #[derive(Debug)]
 enum TransactionStatus {
 	Running,
-	Failed(u32, Instant), // number of times failed, time of last failure
-	Retrying(u32),        // number of times failed
+	Failed {
+		tries: u32,
+		retry_at: Instant,
+	},
+	Retrying(u32), // number of times failed
 }
 
 type SendingError = (Destination, Error);
@@ -169,35 +172,30 @@ impl Service {
 			.entry(dest.clone())
 			.and_modify(|e| {
 				*e = match e {
-					| TransactionStatus::Running => TransactionStatus::Failed(1, Instant::now()),
+					| TransactionStatus::Running =>
+						TransactionStatus::Failed { tries: 1, retry_at: Instant::now() },
 					| &mut TransactionStatus::Retrying(ref n) => {
 						tries = n.saturating_add(1);
-						TransactionStatus::Failed(tries, Instant::now())
+						TransactionStatus::Failed { tries, retry_at: Instant::now() }
 					},
-					| TransactionStatus::Failed(t, _) => {
+					| &mut TransactionStatus::Failed { tries: t, .. } => {
 						tries = t.saturating_add(1);
-						TransactionStatus::Failed(tries, Instant::now())
+						TransactionStatus::Failed { tries, retry_at: Instant::now() }
 					},
 				}
 			})
-			.or_insert_with(|| TransactionStatus::Failed(1, Instant::now()));
+			.or_insert_with(|| TransactionStatus::Failed { tries: 1, retry_at: Instant::now() });
 
 		// Schedule a delayed retry so EDU-only destinations (e.g. to-device
 		// messages) are retried after backoff even when no new PDUs arrive.
 		// If the remote gave us an explicit M_LIMIT_EXCEEDED retry_after, honor it
 		// instead of our own exponential backoff.
-		let base = self.server.config.sender_retry_backoff_base;
-		let max = self.server.config.sender_retry_backoff_limit;
-		let delay = retry_after_delay(e).unwrap_or_else(|| {
-			Duration::from_secs(
-				base.saturating_mul(
-					1_u64
-						.checked_shl(tries.saturating_sub(1))
-						.unwrap_or(u64::MAX),
-				)
-				.min(max),
-			)
-		});
+		let delay = self.retry_delay(tries, e);
+		let retry_at = Instant::now() + delay;
+
+		if let Some(status) = statuses.get_mut(&dest) {
+			*status = TransactionStatus::Failed { tries, retry_at };
+		}
 
 		self.reschedule_flush(dest, delay);
 	}
@@ -420,13 +418,8 @@ impl Service {
 		statuses
 			.entry(dest.clone()) // TODO: can we avoid cloning?
 			.and_modify(|e| match e {
-				TransactionStatus::Failed(tries, time) => {
-					// Fail if a request has failed recently (exponential backoff)
-					let min = 2;
-					let max = self.server.config.sender_retry_backoff_limit;
-					if continue_exponential_backoff_secs(min, max, time.elapsed(), *tries)
-						&& !matches!(dest, Destination::Appservice(_))
-					{
+				TransactionStatus::Failed { tries, retry_at } => {
+					if Instant::now() < *retry_at && !matches!(dest, Destination::Appservice(_)) {
 						allow = false;
 					} else {
 						retry = true;
@@ -440,6 +433,21 @@ impl Service {
 			.or_insert(TransactionStatus::Running);
 
 		Ok((allow, retry))
+	}
+
+	fn retry_delay(&self, tries: u32, e: &Error) -> Duration {
+		let base = self.server.config.sender_retry_backoff_base;
+		let max = self.server.config.sender_retry_backoff_limit;
+		retry_after_delay(e).unwrap_or_else(|| {
+			Duration::from_secs(
+				base.saturating_mul(
+					1_u64
+						.checked_shl(tries.saturating_sub(1))
+						.unwrap_or(u64::MAX),
+				)
+				.min(max),
+			)
+		})
 	}
 
 	#[tracing::instrument(

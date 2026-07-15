@@ -90,6 +90,9 @@ if [[ "${1:-}" == "--direct" ]]; then
 	(
 		echo "BEGIN;"
 		echo "SET LOCAL synchronous_commit = OFF;"
+		# sql_quote() only doubles single quotes, so force standard string semantics for
+		# this transaction before interpolating any external values into string literals.
+		echo "SET LOCAL standard_conforming_strings = on;"
 		echo "INSERT INTO runs (run_date, commit_hash, branch, arch, os, profile, n_pass, n_skip, n_fail, room_version, features, version_string)
         SELECT '$(sql_quote "$RUN_DATE")'::timestamptz, '$(sql_quote "$COMMIT")', '$(sql_quote "$BRANCH")', '$(sql_quote "$ARCH")', '$(sql_quote "$OS")', '$(sql_quote "$PROFILE")', ${PASS}, ${SKIP}, ${FAIL}, '$(sql_quote "$ROOM_VERSION")',
           COALESCE(regexp_replace(btrim('$(sql_quote "$FEATURES")', ' ,'), '[,\s]+', ' ', 'g'), ''), '$(sql_quote "$VERSION")'
