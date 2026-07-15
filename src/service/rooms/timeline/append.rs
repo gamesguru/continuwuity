@@ -115,8 +115,9 @@ pub async fn append_pdu<'a, Leaves>(
 where
 	Leaves: Iterator<Item = &'a EventId> + Send + 'a,
 {
-	// Coalesce database writes for the remainder of this scope.
-	let _cork = self.db.db.cork();
+	// Flush the room-event batch before returning so sync readers do not observe
+	// the terminal event without the related timeline/state writes.
+	let _cork = self.db.db.cork_and_flush();
 
 	let shortroomid = self
 		.services

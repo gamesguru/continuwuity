@@ -167,7 +167,7 @@ impl Service {
 	pub fn send_pdu_push(&self, pdu_id: &RawPduId, user: &UserId, pushkey: String) -> Result {
 		let dest = Destination::Push(user.to_owned(), pushkey);
 		let event = SendingEvent::Pdu(*pdu_id);
-		let _cork = self.db.db.cork();
+		let _cork = self.db.db.cork_and_flush();
 		let keys = self.db.queue_requests(once((&event, &dest)));
 		self.dispatch(Msg {
 			dest,
@@ -180,7 +180,7 @@ impl Service {
 	pub fn send_pdu_appservice(&self, appservice_id: String, pdu_id: RawPduId) -> Result {
 		let dest = Destination::Appservice(appservice_id);
 		let event = SendingEvent::Pdu(pdu_id);
-		let _cork = self.db.db.cork();
+		let _cork = self.db.db.cork_and_flush();
 		let keys = self.db.queue_requests(once((&event, &dest)));
 		self.dispatch(Msg {
 			dest,
@@ -230,7 +230,7 @@ impl Service {
 			.collect::<Vec<_>>()
 			.await;
 
-		let _cork = self.db.db.cork();
+		let _cork = self.db.db.cork_and_flush();
 		let keys = self.db.queue_requests(requests.iter().map(|(o, e)| (e, o)));
 
 		for ((dest, event), queue_id) in requests.into_iter().zip(keys) {
@@ -244,7 +244,7 @@ impl Service {
 	pub fn send_edu_server(&self, server: &ServerName, serialized: EduBuf) -> Result {
 		let dest = Destination::Federation(server.to_owned());
 		let event = SendingEvent::Edu(serialized);
-		let _cork = self.db.db.cork();
+		let _cork = self.db.db.cork_and_flush();
 		let keys = self.db.queue_requests(once((&event, &dest)));
 		self.dispatch(Msg {
 			dest,
@@ -279,7 +279,7 @@ impl Service {
 			.collect::<Vec<_>>()
 			.await;
 
-		let _cork = self.db.db.cork();
+		let _cork = self.db.db.cork_and_flush();
 		let keys = self.db.queue_requests(requests.iter().map(|(o, e)| (e, o)));
 
 		for ((dest, event), queue_id) in requests.into_iter().zip(keys) {
