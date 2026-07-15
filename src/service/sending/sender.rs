@@ -190,8 +190,11 @@ impl Service {
 		// messages) are retried after backoff even when no new PDUs arrive.
 		// If the remote gave us an explicit M_LIMIT_EXCEEDED retry_after, honor it
 		// instead of our own exponential backoff.
-		let delay = self.retry_delay(tries, e);
-		let retry_at = Instant::now() + delay;
+		let base = self.server.config.sender_retry_backoff_base;
+		let max = self.server.config.sender_retry_backoff_limit;
+		let delay = Self::retry_delay(tries, e, base, max);
+		let now = Instant::now();
+		let retry_at = now.checked_add(delay).unwrap_or(now);
 
 		if let Some(status) = statuses.get_mut(&dest) {
 			*status = TransactionStatus::Failed { tries, retry_at };
@@ -363,7 +366,7 @@ impl Service {
 		new_events: Vec<QueueItem>, // Events we want to send: event and full key
 		statuses: &mut CurTransactionStatus,
 	) -> Result<Option<(Vec<SendingEvent>, Option<u64>)>> {
-		let (allow, retry) = self.select_events_current(dest, statuses)?;
+		let (allow, retry) = Self::select_events_current(dest, statuses);
 
 		// Nothing can be done for this remote, bail out.
 		if !allow {
@@ -410,10 +413,9 @@ impl Service {
 	}
 
 	fn select_events_current(
-		&self,
 		dest: &Destination,
 		statuses: &mut CurTransactionStatus,
-	) -> Result<(bool, bool)> {
+	) -> (bool, bool) {
 		let (mut allow, mut retry) = (true, false);
 		statuses
 			.entry(dest.clone()) // TODO: can we avoid cloning?
@@ -432,12 +434,10 @@ impl Service {
 			})
 			.or_insert(TransactionStatus::Running);
 
-		Ok((allow, retry))
+		(allow, retry)
 	}
 
-	fn retry_delay(&self, tries: u32, e: &Error) -> Duration {
-		let base = self.server.config.sender_retry_backoff_base;
-		let max = self.server.config.sender_retry_backoff_limit;
+	fn retry_delay(tries: u32, e: &Error, base: u64, max: u64) -> Duration {
 		retry_after_delay(e).unwrap_or_else(|| {
 			Duration::from_secs(
 				base.saturating_mul(
