@@ -32,6 +32,8 @@ struct BackoffState {
 	failures: u32,
 }
 
+const MAX_FETCH_BACKOFF_ENTRIES: usize = 4096;
+
 pub struct Service {
 	keypair: Box<Ed25519KeyPair>,
 	verify_keys: VerifyKeys,
@@ -91,12 +93,19 @@ impl crate::Service for Service {
 /// Returns true if the server is currently in backoff (a recent fetch failed).
 #[implement(Service)]
 pub async fn is_in_backoff(&self, server: &ServerName) -> bool {
-	let backoff = self.fetch_backoff.read().await;
-	if let Some(state) = backoff.get(server) {
-		if std::time::Instant::now() < state.expires {
-			return true;
+	let now = std::time::Instant::now();
+	{
+		let backoff = self.fetch_backoff.read().await;
+		if let Some(state) = backoff.get(server) {
+			if now < state.expires {
+				return true;
+			}
+		} else {
+			return false;
 		}
 	}
+
+	self.fetch_backoff.write().await.remove(server);
 	false
 }
 
@@ -111,6 +120,8 @@ pub async fn record_backoff(&self, server: &ServerName) {
 		.clamp(60, 3600);
 	let now = std::time::Instant::now();
 	let mut backoff = self.fetch_backoff.write().await;
+	backoff.retain(|_, state| now < state.expires);
+
 	let state = backoff
 		.entry(server.into())
 		.or_insert(BackoffState { expires: now, failures: 0 });
@@ -125,6 +136,17 @@ pub async fn record_backoff(&self, server: &ServerName) {
 		.or_else(|| now.checked_add(Duration::from_secs(86400)))
 		.unwrap_or(now);
 	state.expires = expires;
+
+	while backoff.len() > MAX_FETCH_BACKOFF_ENTRIES {
+		let Some(evict) = backoff
+			.keys()
+			.find(|key| key.as_str() != server.as_str())
+			.cloned()
+		else {
+			break;
+		};
+		backoff.remove(&evict);
+	}
 }
 
 /// Clears the backoff state for a server after a successful fetch.
@@ -362,10 +384,14 @@ pub async fn add_signing_keys(
 	// Store the filtered/merged historical keys
 	historical_keys.verify_keys.extend(filtered_verify_keys);
 	for (key_id, old_key) in filtered_old_verify_keys {
-		historical_keys
-			.old_verify_keys
-			.entry(key_id)
-			.or_insert(old_key);
+		if enforce_fsw {
+			historical_keys
+				.old_verify_keys
+				.entry(key_id)
+				.or_insert(old_key);
+		} else {
+			historical_keys.old_verify_keys.insert(key_id, old_key);
+		}
 	}
 
 	// MSC4499: "The server SHOULD cap total stored keys (active + old) at 1,000.
@@ -398,7 +424,9 @@ pub async fn add_signing_keys(
 			.collect();
 
 		for id in to_evict_ids {
-			conduwuit::debug!("MSC4499: evicted old_verify_key {id} for {origin} due to 3,000-key quota");
+			conduwuit::warn!(
+				"MSC4499: evicted old_verify_key {id} for {origin} due to 3,000-key quota"
+			);
 			historical_keys.old_verify_keys.remove(&id);
 			new_keys.old_verify_keys.remove(&id);
 		}

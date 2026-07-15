@@ -12,7 +12,7 @@ High-severity, high-confidence gaps:
 
 Worth flagging, lower confidence:
 
-6. Backoff is flat, not exponential. msc4499_backoff_secs is a constant (default 60s); the spec wants "starting at 1 minute, capping at 1 hour" with growth on repeated failures.
+6. Backoff growth is already exponential in current code: record_backoff multiplies msc4499_backoff_secs by 1x, 2x, 4x, etc. and caps at 1 hour.
 7. Possible signature-invalidation bug in the FSW patching block (if vk.key != *first_seen { vk.key = first_seen.clone(); }) — this mutates the key body after the origin's original signature was presumably already deserialized into signatures. If that field isn't cleared/re-derived, a notary serving a patched response would be bundling a key body the origin never actually signed under a signature claiming it did. I can't fully confirm this from the diff alone (don't have full visibility into sign_json/to_canonical_object semantics here) — worth a direct look if you want it chased down.
 
 Matches the current spec cleanly: active-key ceiling (50), per-response retired-key ceiling (3,000), 5-minute expired_ts future-skew check, cross-map body-collision rejection, the T < expired_ts historical-verification boundary, no purge-on-valid_until_ts-expiry, and fetch coalescing via the per-server mutex.
