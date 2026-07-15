@@ -1,9 +1,12 @@
-use std::collections::{HashSet, VecDeque};
+use std::collections::HashSet;
 
 use axum::extract::State;
-use conduwuit::{Err, Event, Result, debug, info, trace, utils::to_canonical_object, warn};
+use conduwuit::{
+	Err, Event, Result, debug, info, matrix::dag::sort_topologically, trace,
+	utils::to_canonical_object, warn,
+};
 use ruma::{OwnedEventId, api::federation::event::get_missing_events};
-use serde_json::{json, value::RawValue};
+use serde_json::value::RawValue;
 
 use super::AccessCheck;
 use crate::Ruma;
@@ -50,11 +53,11 @@ pub(crate) async fn get_missing_events_route(
 
 	let room_version = services.rooms.state.get_room_version(&body.room_id).await?;
 
-	let mut queue: VecDeque<OwnedEventId> = VecDeque::from(body.latest_events.clone());
-	let mut results: Vec<Box<RawValue>> = Vec::with_capacity(limit);
+	let mut stack: Vec<OwnedEventId> = body.latest_events.clone();
+	let mut results = Vec::with_capacity(limit);
 	let mut seen: HashSet<OwnedEventId> = HashSet::from_iter(body.earliest_events.clone());
 
-	while let Some(next_event_id) = queue.pop_front() {
+	while let Some(next_event_id) = stack.pop() {
 		if seen.contains(&next_event_id) {
 			trace!(%next_event_id, "already seen event, skipping");
 			continue;
@@ -79,45 +82,51 @@ pub(crate) async fn get_missing_events_route(
 			)));
 		}
 
-		if !services
+		let visible = services
 			.rooms
 			.state_accessor
 			.server_can_see_event(body.origin(), &body.room_id, pdu.event_id())
-			.await
-		{
-			debug!(%next_event_id, origin = %body.origin(), "redacting event origin cannot see");
-			pdu.redact(&room_version, json!({}))?;
-		}
+			.await;
 
 		trace!(
 			%next_event_id,
 			prev_events = ?pdu.prev_events().collect::<Vec<_>>(),
 			"adding event to results and queueing prev events"
 		);
-		queue.extend(pdu.prev_events.clone());
 		seen.insert(next_event_id.clone());
+		stack.extend(pdu.prev_events.iter().rev().cloned());
 		if body.latest_events.contains(&next_event_id) {
 			continue; // Don't include latest_events in results,
-			// but do include their prev_events in the queue
+			// but do include their prev_events in the stack.
 		}
-		results.push(
-			services
-				.sending
-				.convert_to_outgoing_federation_event(to_canonical_object(pdu)?)
-				.await,
-		);
+		if !visible {
+			debug!(%next_event_id, origin = %body.origin(), "skipping event origin cannot see");
+			continue;
+		}
+		results.push(pdu);
 		trace!(
 			%next_event_id,
-			queue_len = queue.len(),
+			stack_len = stack.len(),
 			seen_len = seen.len(),
 			results_len = results.len(),
 			"event added to results"
 		);
 	}
 
-	if !queue.is_empty() {
-		debug!("limit reached before queue was empty");
+	if !stack.is_empty() {
+		debug!("limit reached before stack was empty");
 	}
-	results.reverse(); // return oldest first
-	Ok(get_missing_events::v1::Response { events: results })
+
+	let mut results = sort_topologically(results);
+	let mut events = Vec::with_capacity(results.len());
+	for pdu in results.drain(..) {
+		events.push(
+			services
+				.sending
+				.convert_to_outgoing_federation_event(to_canonical_object(pdu)?)
+				.await,
+		);
+	}
+
+	Ok(get_missing_events::v1::Response { events })
 }
