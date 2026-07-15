@@ -421,10 +421,10 @@ impl Service {
 	#[inline]
 	pub fn pdus_by_timestamp<'a>(
 		&'a self,
-		room_id: &'a ruma::RoomId,
+		room_id: &'a RoomId,
 		timestamp: u64,
 		dir: ruma::api::Direction,
-	) -> impl futures::Stream<Item = conduwuit::Result<conduwuit_core::PduEvent>> + Send + 'a {
+	) -> impl Stream<Item = Result<PduEvent>> + Send + 'a {
 		self.db.pdus_by_timestamp(room_id, timestamp, dir)
 	}
 

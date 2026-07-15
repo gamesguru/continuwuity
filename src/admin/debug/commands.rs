@@ -1935,12 +1935,6 @@ pub(super) async fn trim_memory(&self) -> Result {
 }
 
 #[admin_command]
-pub(super) async fn purge_outliers(&self) -> Result {
-	self.services.rooms.outlier.clear_outliers().await;
-	write!(self, "Successfully cleared all outlier PDUs.").await
-}
-
-#[admin_command]
 pub(super) async fn backfill_timestamp_index(&self, room: Option<OwnedRoomId>) -> Result {
 	if let Some(room_id) = room {
 		self.services
