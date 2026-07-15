@@ -6,7 +6,7 @@ Results: **391 pass / 138 fail** (subtests)
 
 ## Summary
 
-Current branch fixes **46 tests** vs the dev branch (362 pass / 167 fail),
+Current branch fixes **45 subtests** vs the dev branch (362 pass / 167 fail),
 with **zero regressions**. The remaining 138 failing subtests are categorized
 below.
 
@@ -20,13 +20,14 @@ killed processes.
 
 ### `TestToDeviceMessagesOverFederation`
 
-| Subtest | Status | Notes |
-|---------|--------|-------|
-| `good_connectivity` | ✅ pass | |
-| `interrupted_connectivity` | ✅ pass | Fixed by `reschedule_flush` |
-| `stopped_server` | ✅ pass | Fixed by exponential backoff |
+| Subtest                    | Status  | Notes                        |
+| -------------------------- | ------- | ---------------------------- |
+| `good_connectivity`        | ✅ pass |                              |
+| `interrupted_connectivity` | ✅ pass | Fixed by `reschedule_flush`  |
+| `stopped_server`           | ✅ pass | Fixed by exponential backoff |
 
 **Root cause (fixed)**: Two issues combined to cause lost to-device EDUs:
+
 1. **Timer jitter**: `handle_response_err` schedules a retry Flush via
    `tokio::spawn(sleep → send)`. OS timer jitter could cause the Flush to
    arrive before the backoff expired, silently dropping it. Fixed by
@@ -42,11 +43,11 @@ killed processes.
 
 ### `TestDeviceListsUpdateOverFederation`
 
-| Subtest | Status | Notes |
-|---------|--------|-------|
-| `good_connectivity` | ❌ fail | Basic device list EDU delivery broken |
-| `interrupted_connectivity` | ❌ fail | |
-| `stopped_server` | ❌ fail | |
+| Subtest                    | Status  | Notes                                 |
+| -------------------------- | ------- | ------------------------------------- |
+| `good_connectivity`        | ❌ fail | Basic device list EDU delivery broken |
+| `interrupted_connectivity` | ❌ fail |                                       |
+| `stopped_server`           | ❌ fail |                                       |
 
 **Root cause**: All three subtests fail, including `good_connectivity`. This is
 NOT a restart race — device list update EDUs are fundamentally not being
@@ -62,10 +63,10 @@ event retrieval (backfill) and forward timeline construction.
 
 ### `TestMessagesOverFederation`
 
-| Subtest | Status | Notes |
-|---------|--------|-------|
-| `Visible shared history after re-joining room (backfill)` | ❌ fail | |
-| ↳ `messagesRequestLimit is lower than the number of messages backfilled` | ❌ fail | |
+| Subtest                                                                  | Status  | Notes |
+| ------------------------------------------------------------------------ | ------- | ----- |
+| `Visible shared history after re-joining room (backfill)`                | ❌ fail |       |
+| ↳ `messagesRequestLimit is lower than the number of messages backfilled` | ❌ fail |       |
 
 **Impact**: After leaving and re-joining a room, historical messages from the
 period of absence are not correctly backfilled from the remote server. This
@@ -84,11 +85,11 @@ silently ignored rather than causing errors.
 
 ### `TestInboundCanReturnMissingEvents`
 
-| Subtest | Status |
-|---------|--------|
-| `invited visibility` | ❌ fail |
-| `joined visibility` | ❌ fail |
-| `shared visibility` | ❌ fail |
+| Subtest                     | Status  |
+| --------------------------- | ------- |
+| `invited visibility`        | ❌ fail |
+| `joined visibility`         | ❌ fail |
+| `shared visibility`         | ❌ fail |
 | `world_readable visibility` | ❌ fail |
 
 **Impact**: The `/get_missing_events` endpoint fails across all visibility
@@ -107,26 +108,26 @@ affecting lazy-loading federation joins.
 
 ### `TestSync`
 
-| Subtest | Status | Notes |
-|---------|--------|-------|
-| `Newly joined room has correct timeline in incremental sync` | ❌ fail | |
-| `Newly joined room includes presence in incremental sync` | ❌ fail | |
-| `Get presence for newly joined members in incremental sync` | ❌ fail | |
-| `Device list tracking / User correctly listed when they leave` | ❌ fail | |
+| Subtest                                                        | Status  | Notes |
+| -------------------------------------------------------------- | ------- | ----- |
+| `Newly joined room has correct timeline in incremental sync`   | ❌ fail |       |
+| `Newly joined room includes presence in incremental sync`      | ❌ fail |       |
+| `Get presence for newly joined members in incremental sync`    | ❌ fail |       |
+| `Device list tracking / User correctly listed when they leave` | ❌ fail |       |
 
 ### `TestRoomCreationReportsEventsToMyself`
 
-| Subtest | Status |
-|---------|--------|
+| Subtest                                         | Status  |
+| ----------------------------------------------- | ------- |
 | `Room creation reports m.room.create to myself` | ❌ fail |
-| `Setting state twice is idempotent` | ❌ fail |
+| `Setting state twice is idempotent`             | ❌ fail |
 
 ### `TestArchivedRoomsHistory`
 
-| Subtest | Status |
-|---------|--------|
+| Subtest                                | Status  |
+| -------------------------------------- | ------- |
 | `timeline_has_events/incremental_sync` | ❌ fail |
-| `timeline_has_events/initial_sync` | ❌ fail |
+| `timeline_has_events/initial_sync`     | ❌ fail |
 
 ---
 
@@ -142,19 +143,19 @@ the endpoints need route registration for both stable and unstable paths.
 
 ## Other Notable Failures
 
-| Test | Category | Notes |
-|------|----------|-------|
-| `TestRestrictedRooms*Join` | Auth | Restricted room joins fail (local + remote + MSC3787) |
-| `TestFederationKeyUploadQuery` | E2EE | Remote key claim/query broken |
-| `TestMembershipOnEvents` | State | |
-| `TestRelationsPagination` | Relations | |
-| `TestSearch` | Search | Back-pagination and context around results |
-| `TestRoomForget` | Forget | Forgotten room message pagination |
-| `TestThreadSubscriptions` | Threads | All 7 subtests fail |
-| `TestDelayedEvents` | MSC | All subtests fail |
-| `TestPushRuleRoomUpgrade` | Push | Push rules not carried over on room upgrade |
-| `TestAsyncUpload` | Media | Async upload flow broken |
-| `TestRemovingAccountData` | Account | DELETE/PUT account data removal |
+| Test                           | Category  | Notes                                                 |
+| ------------------------------ | --------- | ----------------------------------------------------- |
+| `TestRestrictedRooms*Join`     | Auth      | Restricted room joins fail (local + remote + MSC3787) |
+| `TestFederationKeyUploadQuery` | E2EE      | Remote key claim/query broken                         |
+| `TestMembershipOnEvents`       | State     |                                                       |
+| `TestRelationsPagination`      | Relations |                                                       |
+| `TestSearch`                   | Search    | Back-pagination and context around results            |
+| `TestRoomForget`               | Forget    | Forgotten room message pagination                     |
+| `TestThreadSubscriptions`      | Threads   | All 7 subtests fail                                   |
+| `TestDelayedEvents`            | MSC       | All subtests fail                                     |
+| `TestPushRuleRoomUpgrade`      | Push      | Push rules not carried over on room upgrade           |
+| `TestAsyncUpload`              | Media     | Async upload flow broken                              |
+| `TestRemovingAccountData`      | Account   | DELETE/PUT account data removal                       |
 
 ---
 

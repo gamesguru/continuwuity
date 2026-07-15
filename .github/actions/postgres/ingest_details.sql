@@ -25,7 +25,7 @@ FROM ( SELECT DISTINCT
         (NULLIF ((j ->> 'arch'), '')) AS arch,
         (NULLIF ((j ->> 'os'), '')) AS os,
         (NULLIF ((j ->> 'profile'), '')) AS profile,
-        (NULLIF ((j ->> 'room_version'), '')) AS room_version,
+        (COALESCE(NULLIF ((j ->> 'room_version'), ''), '11')) AS room_version,
         (NULLIF ((j ->> 'features'), '')) AS features
     FROM
         t) nt
@@ -33,7 +33,7 @@ FROM ( SELECT DISTINCT
         AND NULLIF (r.arch, '') IS NOT DISTINCT FROM nt.arch
         AND NULLIF (r.os, '') IS NOT DISTINCT FROM nt.os
         AND NULLIF (r.profile, '') IS NOT DISTINCT FROM nt.profile
-        AND NULLIF (r.room_version, '') IS NOT DISTINCT FROM nt.room_version
+        AND COALESCE(NULLIF (r.room_version, ''), '11') IS NOT DISTINCT FROM nt.room_version
         AND COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '') IS NOT DISTINCT FROM COALESCE(regexp_replace(btrim(nt.features, ' ,'), '[,\s]+', ' ', 'g'), '');
 
 INSERT INTO run_details (run_id, test_name, status)
@@ -47,7 +47,7 @@ FROM
         AND NULLIF (r.arch, '') IS NOT DISTINCT FROM (NULLIF ((t.j ->> 'arch'), ''))
     AND NULLIF (r.os, '') IS NOT DISTINCT FROM (NULLIF ((t.j ->> 'os'), ''))
 AND NULLIF (r.profile, '') IS NOT DISTINCT FROM (NULLIF ((t.j ->> 'profile'), ''))
-AND NULLIF (r.room_version, '') IS NOT DISTINCT FROM (NULLIF ((t.j ->> 'room_version'), ''))
+AND COALESCE(NULLIF (r.room_version, ''), '11') IS NOT DISTINCT FROM (COALESCE(NULLIF ((t.j ->> 'room_version'), ''), '11'))
 AND COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '') IS NOT DISTINCT FROM COALESCE(regexp_replace(btrim((t.j ->> 'features'), ' ,'), '[,\s]+', ' ', 'g'), '')
 WHERE (t.j ->> 'Action') IN ('pass', 'fail', 'skip')
 AND r.id IN (

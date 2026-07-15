@@ -49,7 +49,7 @@ INSERT INTO runs (run_date, commit_hash, upstream_commit, branch, author_name, a
 SELECT
     (j->>'run_date')::timestamptz, (j->>'commit_hash'), (j->>'upstream_commit'), (j->>'branch'),
     (j->>'author_name'), (j->>'actor'), (j->>'provider'), NULLIF(j->>'arch', ''), NULLIF(j->>'os', ''),
-    (j->>'version_string'), COALESCE(regexp_replace(btrim(j->>'features', ' ,'), '[,\s]+', ' ', 'g'), ''), (j->>'profile'), (j->>'binary_sha256'),
+    (j->>'version_string'), COALESCE(regexp_replace(btrim(j->>'features', ' ,'), '[,\s]+', ' ', 'g'), ''), NULLIF(j->>'profile', ''), (j->>'binary_sha256'),
     (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int, COALESCE(NULLIF(j->>'room_version', ''), '11')
 FROM b
 ON CONFLICT (commit_hash, arch, os, profile, room_version, features) DO NOTHING;
@@ -59,9 +59,9 @@ EOF
 # 2. Bulk Ingest Test Details (Injecting metadata from summaries / filenames)
 echo "→ Consolidating and ingesting test details..."
 (
-	jq -r '[.commit_hash, (.arch // ""), (.os // ""), (.profile // ""), ((.room_version // "") | if length == 0 then "11" else . end), ((.features // "") | gsub("[,\\s]+"; " ") | gsub("^ | $"; ""))] | @tsv' \
+	jq -r --arg sep "$MANIFEST_SEP" '[.commit_hash, (.arch // ""), (.os // ""), (.profile // ""), ((.room_version // "") | if length == 0 then "11" else . end), ((.features // "") | gsub("[,\\s]+"; " ") | gsub("^ | $"; ""))] | join($sep)' \
 		"$LEDGER_DIR/runs.jsonl" |
-	while IFS=$'\t' read -r COMMIT ARCH OS PROFILE ROOM_VERSION FEATURES; do
+	while IFS="$MANIFEST_SEP" read -r COMMIT ARCH OS PROFILE ROOM_VERSION FEATURES; do
 		SAFE_ARCH=${ARCH//[!a-zA-Z0-9._-]/_}
 		SAFE_OS=${OS//[!a-zA-Z0-9._-]/_}
 		SAFE_PROFILE=${PROFILE//[!a-zA-Z0-9._-]/_}

@@ -38,6 +38,15 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_run_details_unique_test ON run_details (ru
 
 -- Unique index to prevent duplicate machine reports.
 -- Keep this in sync with ON CONFLICT targets in ingest scripts.
+UPDATE
+    runs
+SET
+    arch = NULLIF (arch, ''),
+    os = NULLIF (os, ''),
+    profile = NULLIF (profile, ''),
+    room_version = COALESCE(NULLIF (room_version, ''), '11'),
+    features = COALESCE(regexp_replace(btrim(features, ' ,'), '[,\s]+', ' ', 'g'), '');
+
 CREATE TEMP TABLE duplicated_runs AS
 WITH normalized_runs AS (
     SELECT
@@ -46,7 +55,7 @@ WITH normalized_runs AS (
         NULLIF (arch, '') AS arch,
         NULLIF (os, '') AS os,
         NULLIF (profile, '') AS profile,
-        NULLIF (room_version, '') AS room_version,
+        COALESCE(NULLIF (room_version, ''), '11') AS room_version,
         COALESCE(regexp_replace(btrim(features, ' ,'), '[,\s]+', ' ', 'g'), '') AS features,
         COUNT(*) OVER GROUPING AS dup_count,
             ROW_NUMBER() OVER ordered_grouping AS rn,
@@ -57,13 +66,13 @@ WINDOW GROUPING AS (PARTITION BY commit_hash,
     NULLIF (arch, ''),
     NULLIF (os, ''),
     NULLIF (profile, ''),
-    NULLIF (room_version, ''),
+    COALESCE(NULLIF (room_version, ''), '11'),
     COALESCE(regexp_replace(btrim(features, ' ,'), '[,\s]+', ' ', 'g'), '')),
 ordered_grouping AS (PARTITION BY commit_hash,
     NULLIF (arch, ''),
     NULLIF (os, ''),
     NULLIF (profile, ''),
-    NULLIF (room_version, ''),
+    COALESCE(NULLIF (room_version, ''), '11'),
     COALESCE(regexp_replace(btrim(features, ' ,'), '[,\s]+', ' ', 'g'), '')
 ORDER BY
     run_date DESC,
@@ -101,6 +110,28 @@ ORDER BY
     keep_id,
     test_name,
     rn;
+
+UPDATE
+    runs r
+SET
+    n_pass = counts.n_pass,
+    n_skip = counts.n_skip,
+    n_fail = counts.n_fail
+FROM (
+    SELECT
+        keep.keep_id,
+        COUNT(rd.test_name) FILTER (WHERE rd.status = 'pass')::integer AS n_pass,
+        COUNT(rd.test_name) FILTER (WHERE rd.status = 'skip')::integer AS n_skip,
+        COUNT(rd.test_name) FILTER (WHERE rd.status = 'fail')::integer AS n_fail
+    FROM ( SELECT DISTINCT
+            keep_id
+        FROM
+            duplicated_runs) keep
+    LEFT JOIN run_details rd ON rd.run_id = keep.keep_id
+GROUP BY
+    keep.keep_id) counts
+WHERE
+    r.id = counts.keep_id;
 
 DELETE FROM runs r USING duplicated_runs dr
 WHERE r.id = dr.run_id

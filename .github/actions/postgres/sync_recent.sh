@@ -35,6 +35,7 @@ sql_quote() {
 # Defaults to the SSH-tunneled remote psql; import_history.sh overrides this to a direct
 # local connection before sourcing this file.
 PSQL_SINK=${PSQL_SINK:-psql_remote}
+MANIFEST_SEP=$'\x1f'
 
 # Reads NDJSON on stdin (each line already tagged with commit/arch/os/profile/room_version/
 # features), streams it into a temp table, then upserts run_details + ever_passed for exactly
@@ -127,7 +128,7 @@ echo "→ Streaming last $LIMIT run summaries..."
         SELECT
           (j->>'run_date')::timestamptz, (j->>'commit_hash'), (j->>'upstream_commit'), (j->>'branch'),
           (j->>'author_name'), (j->>'actor'), (j->>'provider'), NULLIF(j->>'arch', ''), NULLIF(j->>'os', ''),
-          (j->>'version_string'), COALESCE(btrim(regexp_replace(j->>'features', '[,\s]+', ' ', 'g'), ' ,'), ''), (j->>'profile'), (j->>'binary_sha256'),
+          (j->>'version_string'), COALESCE(btrim(regexp_replace(j->>'features', '[,\s]+', ' ', 'g'), ' ,'), ''), NULLIF(j->>'profile', ''), (j->>'binary_sha256'),
           (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int, COALESCE(NULLIF(j->>'room_version', ''), '11')
         FROM b ON CONFLICT (commit_hash, arch, os, profile, room_version, features) DO NOTHING;"
 	echo "COMMIT;"
@@ -140,7 +141,7 @@ ALL_FILES=$(git ls-tree -r FETCH_HEAD:runs_data --name-only || true)
 TMPMANIFEST=$(mktemp)
 trap 'rm -f "$TMPMANIFEST"' EXIT
 git show "FETCH_HEAD:runs.jsonl" | tail -n "$LIMIT" |
-	jq -r '[.commit_hash, (.arch // ""), (.os // ""), (.profile // ""), ((.room_version // "") | if length > 0 then . else "11" end), ((.features // "") | gsub("[,\\s]+"; " ") | gsub("^ | $"; ""))] | @tsv' \
+	jq -r --arg sep "$MANIFEST_SEP" '[.commit_hash, (.arch // ""), (.os // ""), (.profile // ""), ((.room_version // "") | if length > 0 then . else "11" end), ((.features // "") | gsub("[,\\s]+"; " ") | gsub("^ | $"; ""))] | join($sep)' \
 		>"$TMPMANIFEST"
 
 # Find which of these exact $LIMIT runs already have details (to skip re-ingesting).
@@ -151,7 +152,9 @@ EXISTING_KEYS=$(
 	(
 		echo "CREATE TEMP TABLE m (commit_hash text);"
 		printf '%s\n' "\copy m FROM STDIN csv quote e'\x01' delimiter e'\x02';"
-		cut -f1 "$TMPMANIFEST" | sort -u
+		while IFS="$MANIFEST_SEP" read -r COMMIT _; do
+			printf '%s\n' "$COMMIT"
+		done <"$TMPMANIFEST" | sort -u
 		echo "\."
 		cat <<'SQL'
 SELECT r.commit_hash || '|' || COALESCE(r.arch,'') || '|' || COALESCE(r.os,'') || '|' || COALESCE(r.profile,'') || '|' || COALESCE(NULLIF(r.room_version, ''), '11') || '|' || COALESCE(regexp_replace(btrim(r.features, ' ,'), '[,\s]+', ' ', 'g'), '')
@@ -172,7 +175,7 @@ SKIP=0
 declare -a PENDING_FILES=()
 declare -a PENDING_META=()
 
-while IFS=$'\t' read -r COMMIT ARCH OS PROFILE ROOM_VERSION FEATURES; do
+while IFS="$MANIFEST_SEP" read -r COMMIT ARCH OS PROFILE ROOM_VERSION FEATURES; do
 	KEY="${COMMIT}|${ARCH}|${OS}|${PROFILE}|${ROOM_VERSION}|${FEATURES}"
 	if [[ -n "${HAS_DETAILS[$KEY]+x}" ]]; then
 		((SKIP++)) || true
@@ -187,7 +190,7 @@ while IFS=$'\t' read -r COMMIT ARCH OS PROFILE ROOM_VERSION FEATURES; do
 
 	if grep -Fqx "$BASENAME" <<<"$ALL_FILES" 2>/dev/null; then
 		PENDING_FILES+=("runs_data/${BASENAME}")
-		PENDING_META+=("${COMMIT}	${ARCH}	${OS}	${PROFILE}	${ROOM_VERSION}	${FEATURES}")
+		PENDING_META+=("${COMMIT}${MANIFEST_SEP}${ARCH}${MANIFEST_SEP}${OS}${MANIFEST_SEP}${PROFILE}${MANIFEST_SEP}${ROOM_VERSION}${MANIFEST_SEP}${FEATURES}")
 		((NEED++)) || true
 	fi
 done <"$TMPMANIFEST"
@@ -203,7 +206,7 @@ fi
 echo "→ Streaming $NEED new run detail files..."
 (
 	for i in "${!PENDING_FILES[@]}"; do
-		IFS=$'\t' read -r COMMIT ARCH OS PROFILE ROOM_VERSION FEATURES <<<"${PENDING_META[$i]}"
+		IFS="$MANIFEST_SEP" read -r COMMIT ARCH OS PROFILE ROOM_VERSION FEATURES <<<"${PENDING_META[$i]}"
 		git show "FETCH_HEAD:${PENDING_FILES[$i]}" |
 			jq -c --arg c "$COMMIT" --arg a "$ARCH" --arg o "$OS" --arg p "$PROFILE" --arg rv "$ROOM_VERSION" --arg f "$FEATURES" \
 				'. + {commit: $c, arch: $a, os: $o, profile: $p, room_version: $rv, features: $f}'
