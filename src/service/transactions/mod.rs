@@ -152,7 +152,6 @@ impl Service {
 		&self,
 		user_id: &UserId,
 		device_id: Option<&DeviceId>,
-		room_id: Option<&ruma::RoomId>,
 		txn_id: &TransactionId,
 		data: &[u8],
 	) {
@@ -160,7 +159,24 @@ impl Service {
 		key.push(0xFF);
 		key.extend_from_slice(device_id.map(DeviceId::as_bytes).unwrap_or_default());
 		key.push(0xFF);
-		key.extend_from_slice(room_id.map(ruma::RoomId::as_bytes).unwrap_or_default());
+		key.extend_from_slice(txn_id.as_bytes());
+
+		self.db.userdevicetxnid_response.insert(&key, data);
+	}
+
+	pub fn add_room_txnid(
+		&self,
+		user_id: &UserId,
+		device_id: Option<&DeviceId>,
+		room_id: &ruma::RoomId,
+		txn_id: &TransactionId,
+		data: &[u8],
+	) {
+		let mut key = user_id.as_bytes().to_vec();
+		key.push(0xFF);
+		key.extend_from_slice(device_id.map(DeviceId::as_bytes).unwrap_or_default());
+		key.push(0xFF);
+		key.extend_from_slice(room_id.as_bytes());
 		key.push(0xFF);
 		key.extend_from_slice(txn_id.as_bytes());
 
@@ -171,7 +187,17 @@ impl Service {
 		&self,
 		user_id: &UserId,
 		device_id: Option<&DeviceId>,
-		room_id: Option<&ruma::RoomId>,
+		txn_id: &TransactionId,
+	) -> Result<Handle<'_>> {
+		let key = (user_id, device_id, txn_id);
+		self.db.userdevicetxnid_response.qry(&key).await
+	}
+
+	pub async fn get_room_txn(
+		&self,
+		user_id: &UserId,
+		device_id: Option<&DeviceId>,
+		room_id: &ruma::RoomId,
 		txn_id: &TransactionId,
 	) -> Result<Handle<'_>> {
 		let key = (user_id, device_id, room_id, txn_id);

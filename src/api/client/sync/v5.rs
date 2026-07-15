@@ -478,7 +478,11 @@ where
 
 			(timeline_pdus, limited) = (VecDeque::new(), true);
 		} else {
-			TimelinePdus { pdus: timeline_pdus, limited } = match load_timeline(
+			TimelinePdus {
+				pdus: timeline_pdus,
+				limited,
+				prev_batch: _,
+			} = match load_timeline(
 				services,
 				sender_user,
 				room_id,

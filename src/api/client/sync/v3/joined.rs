@@ -336,7 +336,11 @@ async fn build_state_and_timeline(
 	)
 	.await?;
 
-	let TimelinePdus { pdus, limited: timeline_limited } = timeline;
+	let TimelinePdus {
+		pdus,
+		limited: timeline_limited,
+		prev_batch: _,
+	} = timeline;
 
 	let user_has_join_event_in_sync = pdus
 		.iter()

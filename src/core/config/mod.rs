@@ -2694,6 +2694,10 @@ pub struct ExperimentalConfig {
 	#[serde(default)]
 	pub msc3266_enabled: bool,
 
+	/// MSC3030: Jump to date
+	#[serde(default = "true_fn")]
+	pub msc3030_enabled: bool,
+
 	/// MSC4222: state_after in sync v2
 	#[serde(default)]
 	pub msc4222_enabled: bool,

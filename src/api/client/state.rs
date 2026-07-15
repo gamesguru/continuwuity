@@ -36,7 +36,7 @@ pub(crate) async fn send_state_event_for_key_route(
 	State(services): State<crate::State>,
 	ClientIp(ip): ClientIp,
 	body: Ruma<send_state_event::v3::Request>,
-) -> Result<send_state_event::v3::Response> {
+) -> Result<RumaResponse<send_state_event::v3::Response>> {
 	let sender_user = body.sender_user();
 	services
 		.users
@@ -47,7 +47,7 @@ pub(crate) async fn send_state_event_for_key_route(
 		return Err!(Request(UserSuspended("You cannot perform this action while suspended.")));
 	}
 
-	Ok(send_state_event::v3::Response {
+	Ok(RumaResponse(send_state_event::v3::Response {
 		event_id: send_state_event_for_key_helper(
 			&services,
 			sender_user,
@@ -63,7 +63,7 @@ pub(crate) async fn send_state_event_for_key_route(
 		)
 		.boxed()
 		.await?,
-	})
+	}))
 }
 
 /// # `PUT /_matrix/client/*/rooms/{roomId}/state/{eventType}`
@@ -74,10 +74,7 @@ pub(crate) async fn send_state_event_for_empty_key_route(
 	ClientIp(ip): ClientIp,
 	body: Ruma<send_state_event::v3::Request>,
 ) -> Result<RumaResponse<send_state_event::v3::Response>> {
-	send_state_event_for_key_route(State(services), ClientIp(ip), body)
-		.boxed()
-		.await
-		.map(RumaResponse)
+	send_state_event_for_key_route(State(services), ClientIp(ip), body).await
 }
 
 /// # `GET /_matrix/client/v3/rooms/{roomid}/state`

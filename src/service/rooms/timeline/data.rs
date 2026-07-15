@@ -2013,6 +2013,101 @@ fn increment(db: &Arc<Map>, key: &[u8]) {
 	db.insert(key, new);
 }
 
+pub(super) fn pdus_by_timestamp<'a>(
+	&'a self,
+	room_id: &'a RoomId,
+	timestamp: u64,
+	dir: Direction,
+) -> impl Stream<Item = Result<PduEvent>> + Send + 'a {
+	// Define rules of the stream
+	let setup = async move {
+		let short = self
+			.services
+			.short
+			.get_shortroomid(room_id)
+			.await
+			.map_err(|e| err!(Request(NotFound("Room {room_id:?} not found: {e:?}"))))?;
+
+		let (seek_ts, count) = match dir {
+			| Direction::Forward => (timestamp, PduCount::min()),
+			// Must be inclusive (at or before) according to Matrix MSC3030.
+			// Do NOT subtract 1 from timestamp (which breaks tie-breaking/pagination).
+			| Direction::Backward => (timestamp, PduCount::max()),
+		};
+
+		let key = pack_timestamp_key(short.to_be_bytes(), seek_ts, count);
+		Ok::<_, conduwuit::Error>((short, key.to_vec()))
+	};
+
+	// Main stream
+	setup
+		.map_ok(move |(short, key)| {
+			if key.is_empty() {
+				return futures::stream::empty().boxed();
+			}
+
+			let prefix = short.to_be_bytes();
+			let map = &self.db["roomid_timestamp_pducount"];
+
+			// Get stream w/ matching DB keys, in requested direction
+			let stream = match dir {
+				| Direction::Forward => map.raw_stream_from(&key).boxed(),
+				| Direction::Backward => map.rev_raw_stream_from(&key).boxed(),
+			};
+
+			stream
+					.ready_try_take_while(move |(k, _)| Ok(k.starts_with(&prefix)))
+					// Extract PDU count via key lookup (shortroomid, timestamp, count)
+					.ready_filter_map(|res| {
+						let (k, _) = match res {
+							Ok(kv) => kv,
+							Err(e) => return Some(Err(e)),
+						};
+
+						if k.len() != 25 {
+							tracing::warn!("Invalid timestamp index key length: {}", k.len());
+							return None;
+						}
+
+						let variant = k[16];
+						if variant != 0 && variant != 1 {
+							tracing::warn!("Invalid timestamp index variant byte: {}", variant);
+							return None;
+						}
+
+						let is_normal = variant == 1;
+						let c_bytes: [u8; 8] = k[17..25].try_into().expect("valid slice");
+						let count = if is_normal {
+							PduCount::Normal(u64::from_be_bytes(c_bytes))
+						} else {
+							let sortable_c = u64::from_be_bytes(c_bytes);
+							PduCount::Backfilled((sortable_c ^ (1 << 63)).cast_signed())
+						};
+
+						Some(Ok(count))
+					})
+					// Using PDU count, fetch full PDU event object
+					.filter_map(move |count| async move {
+						let count = match count {
+							Ok(c) => c,
+							Err(e) => return Some(Err(e)),
+						};
+						let pdu_id = PduId { shortroomid: short, shorteventid: count };
+						match self.get_pdu_from_id_in_room(None, &pdu_id.into()).await {
+							Ok(pdu) => Some(Ok(pdu)),
+							Err(e) if e.is_not_found() => Some(Err(err!(
+								Database(
+									"Timestamp index points to missing PDU {pdu_id:?}: {e}"
+								)
+							))),
+							Err(e) => Some(Err(e)),
+						}
+					})
+					.boxed()
+		})
+		.try_flatten_stream()
+}
+
 #[cfg(test)]
 mod tests {
 	use conduwuit_core::matrix::pdu::{Count as PduCount, Id as PduId, RawId as RawPduId};
