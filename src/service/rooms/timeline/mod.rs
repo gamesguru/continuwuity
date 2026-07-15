@@ -419,6 +419,16 @@ impl Service {
 
 impl Service {
 	#[inline]
+	pub fn pdus_by_timestamp<'a>(
+		&'a self,
+		room_id: &'a ruma::RoomId,
+		timestamp: u64,
+		dir: ruma::api::Direction,
+	) -> impl futures::Stream<Item = conduwuit::Result<conduwuit_core::PduEvent>> + Send + 'a {
+		self.db.pdus_by_timestamp(room_id, timestamp, dir)
+	}
+
+	#[inline]
 	pub async fn get_non_outlier_pdu_json(
 		&self,
 		event_id: &EventId,
