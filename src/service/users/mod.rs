@@ -78,6 +78,7 @@ struct Data {
 	userid_devicelistversion: Arc<Map>,
 	userid_displayname: Arc<Map>,
 	userid_lastonetimekeyupdate: Arc<Map>,
+	userid_lastremotedeviceliststreamid: Arc<Map>,
 	userid_masterkeyid: Arc<Map>,
 	userid_origin: Arc<Map>,
 	userid_password: Arc<Map>,
@@ -123,6 +124,9 @@ impl crate::Service for Service {
 				userid_devicelistversion: args.db["userid_devicelistversion"].clone(),
 				userid_displayname: args.db["userid_displayname"].clone(),
 				userid_lastonetimekeyupdate: args.db["userid_lastonetimekeyupdate"].clone(),
+				userid_lastremotedeviceliststreamid: args.db
+					["userid_lastremotedeviceliststreamid"]
+					.clone(),
 				userid_masterkeyid: args.db["userid_masterkeyid"].clone(),
 				userid_origin: args.db["userid_origin"].clone(),
 				userid_password: args.db["userid_password"].clone(),
@@ -848,6 +852,36 @@ impl Service {
 
 		self.db.keyid_key.put(key, Json(device_keys));
 		self.mark_device_key_update(user_id).await;
+	}
+
+	pub async fn cache_remote_device_keys(
+		&self,
+		user_id: &UserId,
+		device_id: &DeviceId,
+		device_keys: &Raw<DeviceKeys>,
+	) {
+		let key = (user_id, device_id);
+		self.db.keyid_key.put(key, Json(device_keys));
+	}
+
+	pub async fn remove_remote_device_keys(&self, user_id: &UserId, device_id: &DeviceId) {
+		let key = (user_id, device_id);
+		self.db.keyid_key.del(key);
+	}
+
+	pub async fn remote_device_list_stream_id(&self, user_id: &UserId) -> u64 {
+		self.db
+			.userid_lastremotedeviceliststreamid
+			.get(user_id)
+			.await
+			.deserialized()
+			.unwrap_or(0)
+	}
+
+	pub fn set_remote_device_list_stream_id(&self, user_id: &UserId, stream_id: u64) {
+		self.db
+			.userid_lastremotedeviceliststreamid
+			.put(user_id, Json(stream_id));
 	}
 
 	pub async fn add_cross_signing_keys(

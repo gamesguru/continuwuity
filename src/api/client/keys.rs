@@ -564,6 +564,15 @@ where
 	for (server, response) in futures {
 		match response {
 			| Ok(response) => {
+				for (user_id, devices) in &response.device_keys {
+					for (device_id, device_keys) in devices {
+						services
+							.users
+							.cache_remote_device_keys(user_id, device_id, device_keys)
+							.await;
+					}
+				}
+
 				for (user, master_key) in response.master_keys {
 					let (master_key_id, mut master_key) =
 						match parse_master_key(&user, &master_key) {

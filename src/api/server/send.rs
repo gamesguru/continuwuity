@@ -38,6 +38,7 @@ use ruma::{
 			send_transaction_message,
 		},
 	},
+	encryption::DeviceKeys,
 	events::receipt::{ReceiptEvent, ReceiptEventContent, ReceiptType},
 	int,
 	serde::Raw,
@@ -824,7 +825,15 @@ async fn handle_edu_device_list_update(
 	origin: &ServerName,
 	content: DeviceListUpdateContent,
 ) {
-	let DeviceListUpdateContent { user_id, .. } = content;
+	let DeviceListUpdateContent {
+		user_id,
+		device_id,
+		stream_id,
+		prev_id,
+		deleted,
+		keys,
+		..
+	} = content;
 
 	if user_id.server_name() != origin {
 		debug_warn!(
@@ -836,7 +845,94 @@ async fn handle_edu_device_list_update(
 
 	info!(%user_id, %origin, "Received DeviceListUpdate event");
 
-	services.users.mark_device_key_update(&user_id).await;
+	let incoming_stream_id = u64::from(stream_id);
+	let last_seen_stream_id = services.users.remote_device_list_stream_id(&user_id).await;
+
+	if incoming_stream_id <= last_seen_stream_id {
+		return;
+	}
+
+	if prev_id
+		.iter()
+		.map(|prev| u64::from(*prev))
+		.any(|prev| prev > last_seen_stream_id && prev != incoming_stream_id)
+	{
+		// TODO: Synapse keeps a richer pending-update pipeline keyed by prev_id, which
+		// lets it reconcile some out-of-order EDUs locally instead of forcing clients
+		// to refetch. We intentionally keep this lighter for now and conservatively
+		// surface a change.
+		services
+			.users
+			.set_remote_device_list_stream_id(&user_id, incoming_stream_id);
+		services.users.mark_device_key_update(&user_id).await;
+		return;
+	}
+
+	if deleted == Some(true) {
+		let had_cached_keys = services
+			.users
+			.get_device_keys(&user_id, &device_id)
+			.await
+			.is_ok();
+
+		services
+			.users
+			.remove_remote_device_keys(&user_id, &device_id)
+			.await;
+		services
+			.users
+			.set_remote_device_list_stream_id(&user_id, incoming_stream_id);
+
+		if had_cached_keys {
+			services.users.mark_device_key_update(&user_id).await;
+		}
+
+		return;
+	}
+
+	let Some(incoming_keys) = keys else {
+		// TODO: Synapse can often avoid this refetch-visible notify by maintaining a
+		// fuller remote device-list cache and replaying delta chains until they
+		// converge.
+		services
+			.users
+			.set_remote_device_list_stream_id(&user_id, incoming_stream_id);
+		services.users.mark_device_key_update(&user_id).await;
+		return;
+	};
+
+	let existing_keys = services
+		.users
+		.get_device_keys(&user_id, &device_id)
+		.await
+		.ok();
+	let keys_changed = match existing_keys {
+		| Some(existing_keys) => remote_device_keys_differ(&existing_keys, &incoming_keys),
+		| None => true,
+	};
+
+	services
+		.users
+		.cache_remote_device_keys(&user_id, &device_id, &incoming_keys)
+		.await;
+	services
+		.users
+		.set_remote_device_list_stream_id(&user_id, incoming_stream_id);
+
+	if keys_changed {
+		services.users.mark_device_key_update(&user_id).await;
+	}
+}
+
+fn remote_device_keys_differ(
+	existing_keys: &Raw<DeviceKeys>,
+	incoming_keys: &Raw<DeviceKeys>,
+) -> bool {
+	match (existing_keys.deserialize(), incoming_keys.deserialize()) {
+		| (Ok(existing_keys), Ok(incoming_keys)) =>
+			serde_json::to_value(existing_keys).ok() != serde_json::to_value(incoming_keys).ok(),
+		| _ => existing_keys.json().get() != incoming_keys.json().get(),
+	}
 }
 
 async fn handle_edu_direct_to_device(

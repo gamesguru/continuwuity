@@ -480,6 +480,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "userid_lastremotedeviceliststreamid",
+		..descriptor::RANDOM_SMALL
+	},
+	Descriptor {
 		name: "userid_origin",
 		..descriptor::RANDOM
 	},
