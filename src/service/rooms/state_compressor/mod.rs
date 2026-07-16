@@ -67,6 +67,12 @@ type LtHashLruCache = LruCache<ShortStateHash, LtHash>;
 type ShortStateInfoVec = Vec<ShortStateInfo>;
 type ParentStatesVec = Vec<ShortStateInfo>;
 
+// Chain depth here is bounded (~4 layers) by the compaction in
+// save_state_from_diff, so binary-lifting jump pointers over StateDiff.parent
+// would optimize nothing. The actual cost driver in large rooms is repeated
+// full O(state_size) clones of this BTreeSet during folds/cache misses.
+// Structural sharing (e.g. an `im::OrdSet`) would address that, but it's a
+// separate, invasive refactor — deliberately out of scope for MSC4500.
 pub type CompressedState = BTreeSet<CompressedStateEvent>;
 pub type CompressedStateEvent = [u8; 2 * size_of::<ShortId>()];
 
