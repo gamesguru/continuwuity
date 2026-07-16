@@ -30,7 +30,9 @@ use ruma::{
 	DeviceId, OwnedEventId, OwnedRoomId, RoomId, UInt, UserId,
 	api::{
 		OutgoingResponse,
+		auth_scheme::AccessToken,
 		client::sync::sync_events::{self, DeviceLists, UnreadNotificationsCount},
+		metadata, request,
 	},
 	directory::RoomTypeFilter,
 	events::{
@@ -39,9 +41,11 @@ use ruma::{
 		room::member::{MembershipState, RoomMemberEventContent},
 		typing::TypingEventContent,
 	},
+	presence::PresenceState,
 	serde::Raw,
 	uint,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::share_encrypted_room;
@@ -56,6 +60,145 @@ type SyncInfo<'a> = (&'a UserId, &'a DeviceId, u64, &'a sync_events::v5::Request
 type TodoRooms = BTreeMap<OwnedRoomId, (BTreeSet<TypeStateKey>, usize, u64)>;
 type KnownRooms = BTreeMap<String, BTreeMap<OwnedRoomId, u64>>;
 type RoomExtras = BTreeMap<OwnedRoomId, RoomExtra>;
+
+metadata! {
+	method: POST,
+	rate_limited: false,
+	authentication: AccessToken,
+	history: {
+		unstable("org.matrix.simplified_msc3575")
+			=> "/_matrix/client/unstable/org.matrix.simplified_msc3575/sync",
+		1.4 => "/_matrix/client/v5/sync",
+	}
+}
+
+#[request]
+#[derive(Default)]
+struct CompatRequest {
+	#[serde(skip_serializing_if = "Option::is_none")]
+	#[ruma_api(query)]
+	pos: Option<String>,
+
+	#[serde(skip_serializing_if = "Option::is_none")]
+	conn_id: Option<String>,
+
+	#[serde(skip_serializing_if = "Option::is_none")]
+	txn_id: Option<String>,
+
+	#[serde(
+		with = "ruma::serde::duration::opt_ms",
+		default,
+		skip_serializing_if = "Option::is_none"
+	)]
+	#[ruma_api(query)]
+	timeout: Option<Duration>,
+
+	#[serde(default, skip_serializing_if = "ruma::serde::is_default")]
+	#[ruma_api(query)]
+	set_presence: PresenceState,
+
+	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+	lists: BTreeMap<String, CompatList>,
+
+	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+	room_subscriptions: BTreeMap<OwnedRoomId, CompatRoomSubscription>,
+
+	#[serde(default, skip_serializing_if = "sync_events::v5::request::Extensions::is_empty")]
+	extensions: sync_events::v5::request::Extensions,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct CompatList {
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	ranges: Vec<(UInt, UInt)>,
+
+	#[serde(flatten)]
+	room_details: CompatRoomDetails,
+
+	#[serde(skip_serializing_if = "Option::is_none")]
+	filters: Option<CompatListFilters>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct CompatListFilters {
+	#[serde(skip_serializing_if = "Option::is_none")]
+	is_dm: Option<bool>,
+
+	#[serde(skip_serializing_if = "Option::is_none")]
+	is_encrypted: Option<bool>,
+
+	#[serde(skip_serializing_if = "Option::is_none")]
+	is_invite: Option<bool>,
+
+	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+	room_types: Vec<RoomTypeFilter>,
+
+	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+	not_room_types: Vec<RoomTypeFilter>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct CompatRoomSubscription {
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	required_state: Vec<(StateEventType, String)>,
+
+	#[serde(default, skip_serializing_if = "ruma::serde::is_default")]
+	timeline_limit: UInt,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+struct CompatRoomDetails {
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	required_state: Vec<(StateEventType, String)>,
+
+	#[serde(default, skip_serializing_if = "ruma::serde::is_default")]
+	timeline_limit: UInt,
+}
+
+impl From<CompatRequest> for sync_events::v5::Request {
+	fn from(value: CompatRequest) -> Self {
+		Self {
+			pos: value.pos,
+			conn_id: value.conn_id,
+			txn_id: value.txn_id,
+			timeout: value.timeout,
+			set_presence: value.set_presence,
+			lists: value
+				.lists
+				.into_iter()
+				.map(|(list_id, list)| {
+					(list_id, sync_events::v5::request::List {
+						ranges: list.ranges,
+						room_details: sync_events::v5::request::RoomDetails {
+							required_state: list.room_details.required_state,
+							timeline_limit: list.room_details.timeline_limit,
+						},
+						filters: list.filters.map(|filters| {
+							sync_events::v5::request::ListFilters {
+								is_dm: filters.is_dm,
+								is_encrypted: filters.is_encrypted,
+								is_invite: filters.is_invite,
+								room_types: filters.room_types,
+								not_room_types: filters.not_room_types,
+							}
+						}),
+					})
+				})
+				.collect(),
+			room_subscriptions: value
+				.room_subscriptions
+				.into_iter()
+				.map(|(room_id, room)| {
+					(room_id, sync_events::v5::request::RoomSubscription {
+						required_state: room.required_state,
+						timeline_limit: room.timeline_limit,
+					})
+				})
+				.collect(),
+			extensions: value.extensions,
+		}
+	}
+}
 
 #[derive(Default)]
 struct RoomExtra {
@@ -79,7 +222,7 @@ struct RoomExtra {
 pub(crate) async fn sync_events_v5_route(
 	State(ref services): State<crate::State>,
 	ClientIp(client_ip): ClientIp,
-	body: Ruma<sync_events::v5::Request>,
+	body: Ruma<CompatRequest>,
 ) -> Result<axum::response::Response> {
 	debug_assert!(DEFAULT_BUMP_TYPES.is_sorted(), "DEFAULT_BUMP_TYPES is not sorted");
 	let sender_user = body.sender_user.as_ref().expect("user is authenticated");
@@ -90,7 +233,7 @@ pub(crate) async fn sync_events_v5_route(
 		.update_device_last_seen(sender_user, Some(sender_device), client_ip)
 		.await;
 
-	let mut body = body.body;
+	let mut body: sync_events::v5::Request = body.body.into();
 
 	// Setup watchers, so if there's no response, we can wait for them
 	let watcher = services.sync.setup_watch(sender_user, sender_device).await;
