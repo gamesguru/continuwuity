@@ -907,6 +907,9 @@ async fn join_room_by_id_helper_remote_process(
 	// can indeed fail, in which case the local membership cache may be left in an
 	// inconsistent state (where the user appears joined in the cache but the join
 	// PDU is not persisted).
+	// TODO: unify the state write, timeline write, and membership-cache update
+	// behind a single durable operation so partial failure cannot strand cache
+	// state ahead of the persisted join event.
 	let statehash_after_join = services
 		.rooms
 		.state

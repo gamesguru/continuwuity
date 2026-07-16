@@ -96,6 +96,9 @@ pub async fn leave_room(
 
 	in cases 1 and 2, we have to update the state cache using `mark_as_left` directly.
 	otherwise `build_and_append_pdu` will take care of updating the state cache for us.
+
+	TODO: collapse these split cache update paths behind one helper which emits the
+	final persisted membership transition and then derives cache state from it.
 	*/
 
 	// `leave_pdu` is the outlier `m.room.member` event which will be synced to the

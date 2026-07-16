@@ -1233,6 +1233,9 @@ impl Service {
 		}
 
 		for room_id in joined_rooms {
+			// TODO: replace these ad hoc fanout writes with a single typed
+			// "device-key change projection" helper shared by the write path and the
+			// /sync readers so key layout drift cannot silently break updates.
 			let key = (&room_id, count);
 			self.db.keychangeid_userid.put_raw(key, user_id);
 
