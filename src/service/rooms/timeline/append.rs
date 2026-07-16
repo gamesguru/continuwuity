@@ -12,7 +12,8 @@ use conduwuit_core::{
 };
 use futures::StreamExt;
 use ruma::{
-	CanonicalJsonObject, OwnedEventId, RoomVersionId, UserId,
+	CanonicalJsonObject, OwnedEventId, OwnedUserId, RoomVersionId, UserId,
+	api::federation::device::get_devices,
 	events::{
 		GlobalAccountDataEventType, StateEventType, TimelineEventType,
 		push_rules::PushRulesEvent,
@@ -461,6 +462,15 @@ where
 								.users
 								.mark_device_key_update(target_user_id)
 								.await;
+						} else {
+							let sending = self.services.sending.clone();
+							let users = self.services.users.clone();
+							let user_id = target_user_id.to_owned();
+
+							self.services.server.runtime().spawn(async move {
+								prefetch_remote_device_list_snapshot(sending, users, user_id)
+									.await;
+							});
 						}
 					}
 				}
@@ -584,4 +594,27 @@ where
 	}
 
 	Ok(pdu_id)
+}
+
+async fn prefetch_remote_device_list_snapshot(
+	sending: crate::Dep<crate::sending::Service>,
+	users: crate::Dep<crate::users::Service>,
+	user_id: OwnedUserId,
+) {
+	let request = get_devices::v1::Request { user_id: user_id.clone() };
+
+	let Ok(response) = sending
+		.send_federation_request(user_id.server_name(), request)
+		.await
+	else {
+		return;
+	};
+
+	for device in response.devices {
+		users
+			.cache_remote_device_keys(&user_id, &device.device_id, &device.keys)
+			.await;
+	}
+
+	users.set_remote_device_list_stream_id(&user_id, u64::from(response.stream_id));
 }
