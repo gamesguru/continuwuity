@@ -1126,7 +1126,8 @@ impl Service {
 		from: Option<u64>,
 		to: Option<u64>,
 	) -> impl Stream<Item = &'a UserId> + Send + 'a {
-		self.user_keys_changed(user_id, from, to).map(|(user_id, ..)| user_id)
+		self.user_keys_changed(user_id, from, to)
+			.map(|(user_id, ..)| user_id)
 	}
 
 	#[inline]

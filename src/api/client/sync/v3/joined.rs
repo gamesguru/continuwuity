@@ -1006,7 +1006,7 @@ async fn build_device_list_updates(
 	}
 
 	// add users with changed keys to the `changed` list
-	services
+	let room_key_changes = services
 		.users
 		// Device-list updates are not tied to timeline/state counts and can land
 		// just after the sync snapshot. Leaving this unbounded avoids dropping a
@@ -1014,10 +1014,21 @@ async fn build_device_list_updates(
 		.room_keys_changed(room_id, last_sync_end_count, None)
 		.map(at!(0))
 		.map(ToOwned::to_owned)
-		.ready_for_each(|user_id| {
-			device_list_updates.changed.insert(user_id);
-		})
+		.collect::<Vec<_>>()
 		.await;
+
+	if !room_key_changes.is_empty() {
+		debug!(
+			%room_id,
+			syncing_user = %syncing_user,
+			changed_users = ?room_key_changes,
+			"build_device_list_updates: room key changes"
+		);
+	}
+
+	for user_id in room_key_changes {
+		device_list_updates.changed.insert(user_id);
+	}
 
 	// add users who now share encrypted rooms to `changed` and
 	// users who no longer share encrypted rooms to `left`
