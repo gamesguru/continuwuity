@@ -2244,13 +2244,13 @@
 #
 #msc3266_enabled = false
 
+# MSC3030: Jump to date
+#
+#msc3030_enabled = true
+
 # MSC4222: state_after in sync v2
 #
 #msc4222_enabled = false
-
-# MSC3030: timestamp to event
-#
-#msc3030_enabled = true
 
 #[global.smtp]
 
