@@ -993,7 +993,7 @@ async fn build_device_list_updates(
 	ShortStateHashes { .. }: ShortStateHashes,
 	timeline: &TimelinePdus,
 	state_events: &[PduEvent],
-	_joined_since_last_sync: bool,
+	joined_since_last_sync: bool,
 ) -> Result<DeviceListUpdates> {
 	// initial syncs don't include device updates, so return early
 	if last_sync_end_count.is_none() {
@@ -1001,6 +1001,17 @@ async fn build_device_list_updates(
 	}
 
 	let mut device_list_updates = DeviceListUpdates::new();
+
+	if joined_since_last_sync {
+		services
+			.rooms
+			.state_cache
+			.room_members(room_id)
+			.ready_for_each(|user_id| {
+				device_list_updates.changed.insert(user_id.to_owned());
+			})
+			.await;
+	}
 
 	// add users with changed keys to the `changed` list
 	services
@@ -1023,7 +1034,6 @@ async fn build_device_list_updates(
 		.filter(|event| event.kind == RoomMember);
 
 	for state_event in mem_events {
-		tracing::error!("TEST_DEBUG: Found mem_event for room {}: {:?}", room_id, state_event);
 		let Some(content): Option<RoomMemberEventContent> = state_event.get_content().ok() else {
 			continue;
 		};
@@ -1047,11 +1057,6 @@ async fn build_device_list_updates(
 						device_list_updates.left.insert(user_id);
 					},
 					| Join => {
-						tracing::error!(
-							"TEST_DEBUG: Inserting user {} to changed for room {}",
-							user_id,
-							room_id
-						);
 						device_list_updates.changed.insert(user_id);
 					},
 					| _ => (),
