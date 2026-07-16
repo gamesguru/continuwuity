@@ -469,7 +469,7 @@ pub(crate) async fn build_sync_events(
 	let (joined_rooms, left_rooms, invited_rooms, knocked_rooms) =
 		join4(joined_rooms, left_rooms, invited_rooms, knocked_rooms).await;
 
-	let (joined_rooms, joined_state_after, device_list_updates) = joined_rooms;
+	let (joined_rooms, joined_state_after, mut device_list_updates) = joined_rooms;
 	let (left_rooms, left_state_after) = left_rooms;
 
 	let presence_updates: OptionFuture<_> = services
@@ -520,7 +520,6 @@ pub(crate) async fn build_sync_events(
 
 	let (ephemeral, device_one_time_keys_count, keys_changed) = top;
 	let ((), to_device_events, presence_updates) = ephemeral;
-	let mut device_list_updates: DeviceLists = device_list_updates.into();
 	device_list_updates.changed.extend(keys_changed);
 
 	// For rooms the user has left, add members to device_lists.left if the
@@ -545,7 +544,7 @@ pub(crate) async fn build_sync_events(
 				if !device_list_updates.left.contains(&member)
 					&& !shares_a_room(services, syncing_user, &member, None).await
 				{
-					device_list_updates.left.push(member);
+					device_list_updates.left.insert(member);
 				}
 			}
 		}
@@ -581,7 +580,7 @@ pub(crate) async fn build_sync_events(
 		},
 		account_data: GlobalAccountData { events: account_data },
 		to_device: ToDevice { events: to_device_events },
-		device_lists: device_list_updates,
+		device_lists: device_list_updates.into(),
 		device_one_time_keys_count,
 		device_unused_fallback_key_types: None,
 	};
