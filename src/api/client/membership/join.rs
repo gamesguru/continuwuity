@@ -782,6 +782,14 @@ async fn join_room_by_id_helper_remote_process(
 		}
 	}
 
+	info!("Reconciling membership cache for new room");
+	services
+		.rooms
+		.state_cache
+		.reconcile_membership(room_id)
+		.boxed()
+		.await;
+
 	info!("Updating joined counts for new room");
 	services
 		.rooms
