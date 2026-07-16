@@ -1,5 +1,0 @@
-<<<<<<< HEAD
-{"Action":"pass","Test":"TestMSC4297StateResolutionV2_1_starts_from_empty_set"}
-=======
-{"Action":"fail","Test":"TestMSC4297StateResolutionV2_1_starts_from_empty_set"}
->>>>>>> guru/hotfix/new-features-tests-complement-fails
