@@ -1126,8 +1126,7 @@ impl Service {
 		from: Option<u64>,
 		to: Option<u64>,
 	) -> impl Stream<Item = &'a UserId> + Send + 'a {
-		self.keys_changed_user_or_room(user_id.as_str(), from, to)
-			.map(|(user_id, ..)| user_id)
+		self.user_keys_changed(user_id, from, to).map(|(user_id, ..)| user_id)
 	}
 
 	#[inline]
@@ -1137,7 +1136,19 @@ impl Service {
 		from: Option<u64>,
 		to: Option<u64>,
 	) -> impl Stream<Item = (&'a UserId, u64)> + Send + 'a {
-		self.keys_changed_user_or_room(user_id.as_str(), from, to)
+		type KeyVal<'a> = ((&'a UserId, u64), &'a UserId);
+
+		let from = from.unwrap_or(0);
+		let to = to.unwrap_or(u64::MAX);
+		let prefix = (user_id, Interfix);
+
+		self.db
+			.keychangeid_userid
+			.stream_prefix(&prefix)
+			.ignore_err()
+			.ready_filter_map(move |((_, count), changed_user): KeyVal<'_>| {
+				(count > from && count <= to).then_some((changed_user, count))
+			})
 	}
 
 	#[inline]
@@ -1147,29 +1158,19 @@ impl Service {
 		from: Option<u64>,
 		to: Option<u64>,
 	) -> impl Stream<Item = (&'a UserId, u64)> + Send + 'a {
-		self.keys_changed_user_or_room(room_id.as_str(), from, to)
-	}
-
-	fn keys_changed_user_or_room<'a>(
-		&'a self,
-		user_or_room_id: &'a str,
-		from: Option<u64>,
-		to: Option<u64>,
-	) -> impl Stream<Item = (&'a UserId, u64)> + Send + 'a {
-		type KeyVal<'a> = ((&'a str, u64), &'a UserId);
+		type KeyVal<'a> = ((&'a RoomId, u64), &'a UserId);
 
 		let from = from.unwrap_or(0);
 		let to = to.unwrap_or(u64::MAX);
-		let start = (user_or_room_id, from.saturating_add(1));
+		let prefix = (room_id, Interfix);
 
 		self.db
 			.keychangeid_userid
-			.stream_from(&start)
+			.stream_prefix(&prefix)
 			.ignore_err()
-			.ready_take_while(move |((prefix, count), _): &KeyVal<'_>| {
-				*prefix == user_or_room_id && *count <= to
+			.ready_filter_map(move |((_, count), changed_user): KeyVal<'_>| {
+				(count > from && count <= to).then_some((changed_user, count))
 			})
-			.map(|((_, count), user_id): KeyVal<'_>| (user_id, count))
 	}
 
 	pub async fn mark_device_key_update(&self, user_id: &UserId) {
