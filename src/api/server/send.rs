@@ -29,13 +29,16 @@ use ruma::{
 	RoomId, ServerName, UInt, UserId,
 	api::{
 		client::error::{ErrorKind, ErrorKind::LimitExceeded},
-		federation::transactions::{
-			edu::{
-				DeviceListUpdateContent, DirectDeviceContent, Edu, PresenceContent,
-				PresenceUpdate, ReceiptContent, ReceiptData, ReceiptMap, SigningKeyUpdateContent,
-				TypingContent,
+		federation::{
+			device::get_devices,
+			transactions::{
+				edu::{
+					DeviceListUpdateContent, DirectDeviceContent, Edu, PresenceContent,
+					PresenceUpdate, ReceiptContent, ReceiptData, ReceiptMap,
+					SigningKeyUpdateContent, TypingContent,
+				},
+				send_transaction_message,
 			},
-			send_transaction_message,
 		},
 	},
 	encryption::DeviceKeys,
@@ -891,13 +894,57 @@ async fn handle_edu_device_list_update(
 	}
 
 	let Some(incoming_keys) = keys else {
-		// TODO: Synapse can often avoid this refetch-visible notify by maintaining a
-		// fuller remote device-list cache and replaying delta chains until they
-		// converge.
+		let request = get_devices::v1::Request { user_id: user_id.clone() };
+
+		let Ok(response) = services
+			.sending
+			.send_federation_request(user_id.server_name(), request)
+			.await
+		else {
+			services
+				.users
+				.set_remote_device_list_stream_id(&user_id, incoming_stream_id);
+			services.users.mark_device_key_update(&user_id).await;
+			return;
+		};
+
+		let fetched_stream_id = u64::from(response.stream_id);
+		if fetched_stream_id <= last_seen_stream_id {
+			return;
+		}
+
+		// TODO: Synapse tracks and replays prev_id chains locally, which lets it avoid
+		// some of these fallback /user/devices fetches and save federation bandwidth.
+		let mut actually_changed = false;
+		for device in response.devices {
+			let existing_keys = services
+				.users
+				.get_device_keys(&user_id, &device.device_id)
+				.await
+				.ok();
+			let keys_changed = match existing_keys {
+				| Some(existing_keys) => remote_device_keys_differ(&existing_keys, &device.keys),
+				| None => true,
+			};
+
+			if keys_changed {
+				actually_changed = true;
+			}
+
+			services
+				.users
+				.cache_remote_device_keys(&user_id, &device.device_id, &device.keys)
+				.await;
+		}
+
 		services
 			.users
-			.set_remote_device_list_stream_id(&user_id, incoming_stream_id);
-		services.users.mark_device_key_update(&user_id).await;
+			.set_remote_device_list_stream_id(&user_id, fetched_stream_id);
+
+		if actually_changed {
+			services.users.mark_device_key_update(&user_id).await;
+		}
+
 		return;
 	};
 
