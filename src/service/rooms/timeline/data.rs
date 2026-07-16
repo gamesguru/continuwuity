@@ -1555,7 +1555,7 @@ impl Data {
 			Ok(self
 				.parse_topo_stream(raw_stream, prefix)
 				.ready_try_filter_map(move |item| match count_ceiling {
-					| Some(ceiling) if item.0.pdu_count > ceiling => Ok(None),
+					| Some(ceiling) if item.0.pdu_count >= ceiling => Ok(None),
 					| _ => Ok(Some(item)),
 				}))
 		};
@@ -1605,10 +1605,17 @@ impl Data {
 				Self::topo_pducount_key(&current, from.depth)
 			};
 
+			let count_floor = from.is_legacy().then_some(from.pdu_count);
+
 			let raw_stream = self
 				.roomid_topologicalorder_pducount
 				.raw_stream_from(&topo_key);
-			Ok(self.parse_topo_stream(raw_stream, prefix))
+			Ok(self
+				.parse_topo_stream(raw_stream, prefix)
+				.ready_try_filter_map(move |item| match count_floor {
+					| Some(floor) if item.0.pdu_count <= floor => Ok(None),
+					| _ => Ok(Some(item)),
+				}))
 		};
 		stream.try_flatten_stream()
 	}
