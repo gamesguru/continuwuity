@@ -55,11 +55,36 @@ use crate::{
 };
 
 type SyncInfo<'a> = (&'a UserId, &'a DeviceId, u64, &'a sync_events::v5::Request);
-type TodoRooms = BTreeMap<OwnedRoomId, (BTreeSet<TypeStateKey>, usize, u64)>;
+type TodoRooms = BTreeMap<OwnedRoomId, (RequiredStateSelection, usize, u64)>;
 type KnownRooms = BTreeMap<String, BTreeMap<OwnedRoomId, u64>>;
 type RoomExtras = BTreeMap<OwnedRoomId, RoomExtra>;
-type CompatRequiredState = Vec<(StateEventType, String)>;
 type CompatRanges = Vec<(UInt, UInt)>;
+
+#[derive(Clone, Debug, Default, Serialize)]
+struct CompatRequiredState {
+	include: Vec<(StateEventType, String)>,
+	exclude: Vec<(StateEventType, String)>,
+}
+
+impl CompatRequiredState {
+	fn is_empty(&self) -> bool { self.include.is_empty() && self.exclude.is_empty() }
+}
+
+#[derive(Debug, Default)]
+struct RequiredStateSelection {
+	include: BTreeSet<TypeStateKey>,
+	exclude: BTreeSet<TypeStateKey>,
+}
+
+impl RequiredStateSelection {
+	fn is_empty(&self) -> bool { self.include.is_empty() }
+}
+
+#[derive(Default)]
+struct CompatRequiredStateExcludes {
+	lists: BTreeMap<String, Vec<(StateEventType, String)>>,
+	room_subscriptions: BTreeMap<OwnedRoomId, Vec<(StateEventType, String)>>,
+}
 
 #[derive(Clone, Copy)]
 enum SyncEndpoint {
@@ -81,6 +106,7 @@ struct BuildContext<'a> {
 	globalsince: u64,
 	body: &'a sync_events::v5::Request,
 	list_filters: Option<&'a BTreeMap<String, CompatListFilters>>,
+	required_state_excludes: Option<&'a CompatRequiredStateExcludes>,
 	known_rooms: &'a KnownRooms,
 	timeline_limits: &'a BTreeMap<OwnedRoomId, usize>,
 	endpoint: SyncEndpoint,
@@ -144,7 +170,7 @@ struct CompatListFilters {
 struct CompatRoomSubscription {
 	#[serde(
 		default,
-		skip_serializing_if = "Vec::is_empty",
+		skip_serializing_if = "CompatRequiredState::is_empty",
 		deserialize_with = "deserialize_required_state"
 	)]
 	required_state: CompatRequiredState,
@@ -160,7 +186,7 @@ struct CompatRoomSubscription {
 struct CompatRoomDetails {
 	#[serde(
 		default,
-		skip_serializing_if = "Vec::is_empty",
+		skip_serializing_if = "CompatRequiredState::is_empty",
 		deserialize_with = "deserialize_required_state"
 	)]
 	required_state: CompatRequiredState,
@@ -195,7 +221,7 @@ impl From<CompatRequest> for sync_events::v5::Request {
 					(list_id, sync_events::v5::request::List {
 						ranges: list.ranges,
 						room_details: sync_events::v5::request::RoomDetails {
-							required_state: list.room_details.required_state,
+							required_state: list.room_details.required_state.include,
 							timeline_limit: list.room_details.timeline_limit,
 						},
 						include_heroes: list.include_heroes,
@@ -213,7 +239,7 @@ impl From<CompatRequest> for sync_events::v5::Request {
 				.into_iter()
 				.map(|(room_id, room)| {
 					(room_id, sync_events::v5::request::RoomSubscription {
-						required_state: room.required_state,
+						required_state: room.required_state.include,
 						timeline_limit: room.timeline_limit,
 						include_heroes: room.include_heroes,
 					})
@@ -298,7 +324,7 @@ where
 		Object(CompatRequiredStateObject),
 	}
 
-	let entries = match CompatRequiredStateRepr::deserialize(deserializer)? {
+	let include = match CompatRequiredStateRepr::deserialize(deserializer)? {
 		| CompatRequiredStateRepr::List(entries) => entries
 			.into_iter()
 			.map(compat_required_state_entry_into_tuple)
@@ -318,40 +344,32 @@ where
 			})
 			.collect(),
 		| CompatRequiredStateRepr::Object(object) =>
-			compat_required_state_object_into_tuples(object),
+			return Ok(compat_required_state_object_into_tuples(object)),
 	};
 
-	Ok(entries)
+	Ok(CompatRequiredState { include, exclude: Vec::new() })
 }
 
 fn compat_required_state_object_into_tuples(
 	object: CompatRequiredStateObject,
 ) -> CompatRequiredState {
-	let mut entries = object
+	let mut include = object
 		.include
 		.into_iter()
 		.map(compat_required_state_entry_into_tuple)
 		.collect::<Vec<_>>();
 
 	if object.lazy_members {
-		entries.push((StateEventType::RoomMember, "$LAZY".to_owned()));
+		include.push((StateEventType::RoomMember, "$LAZY".to_owned()));
 	}
 
-	let excluded = object
+	let exclude = object
 		.exclude
 		.into_iter()
 		.map(compat_required_state_entry_into_tuple)
 		.collect::<Vec<_>>();
 
-	if !excluded.is_empty() {
-		entries.retain(|entry| {
-			!excluded
-				.iter()
-				.any(|excluded| required_state_entry_matches(entry, excluded))
-		});
-	}
-
-	entries
+	CompatRequiredState { include, exclude }
 }
 
 fn compat_required_state_entry_into_tuple(
@@ -363,17 +381,20 @@ fn compat_required_state_entry_into_tuple(
 	}
 }
 
-fn required_state_entry_matches(
+fn required_state_excludes(
 	entry: &(StateEventType, String),
-	filter: &(StateEventType, String),
+	excludes: &BTreeSet<TypeStateKey>,
 ) -> bool {
-	(filter.0.to_string() == "*" || filter.0 == entry.0)
-		&& (filter.1 == "*" || filter.1 == entry.1)
+	excludes.iter().any(|(event_type, state_key)| {
+		(event_type.to_string() == "*" || *event_type == entry.0)
+			&& (state_key.as_str() == "*" || state_key.as_str() == entry.1)
+	})
 }
 
 pub(crate) struct CompatSyncRequest {
 	request: sync_events::v5::Request,
 	list_filters: BTreeMap<String, CompatListFilters>,
+	required_state_excludes: CompatRequiredStateExcludes,
 }
 
 impl IncomingRequest for CompatSyncRequest {
@@ -392,8 +413,12 @@ impl IncomingRequest for CompatSyncRequest {
 	{
 		let (parts, body) = req.into_parts();
 		let body = body.as_ref();
-		let (request, list_filters) = if body.is_empty() {
-			(sync_events::v5::Request::default(), BTreeMap::new())
+		let (request, list_filters, required_state_excludes) = if body.is_empty() {
+			(
+				sync_events::v5::Request::default(),
+				BTreeMap::new(),
+				CompatRequiredStateExcludes::default(),
+			)
 		} else {
 			let compat = serde_json::from_slice::<CompatRequest>(body)?;
 			let list_filters = compat
@@ -405,7 +430,26 @@ impl IncomingRequest for CompatSyncRequest {
 						.map(|filters| (list_id.clone(), filters))
 				})
 				.collect();
-			(sync_events::v5::Request::from(compat), list_filters)
+			let required_state_excludes = CompatRequiredStateExcludes {
+				lists: compat
+					.lists
+					.iter()
+					.filter_map(|(list_id, list)| {
+						(!list.room_details.required_state.exclude.is_empty()).then(|| {
+							(list_id.clone(), list.room_details.required_state.exclude.clone())
+						})
+					})
+					.collect(),
+				room_subscriptions: compat
+					.room_subscriptions
+					.iter()
+					.filter_map(|(room_id, room)| {
+						(!room.required_state.exclude.is_empty())
+							.then(|| (room_id.clone(), room.required_state.exclude.clone()))
+					})
+					.collect(),
+			};
+			(sync_events::v5::Request::from(compat), list_filters, required_state_excludes)
 		};
 
 		let req = http::Request::from_parts(parts, bytes::Bytes::from_static(b"{}"));
@@ -419,7 +463,11 @@ impl IncomingRequest for CompatSyncRequest {
 		parsed.room_subscriptions = request.room_subscriptions;
 		parsed.extensions = request.extensions;
 
-		Ok(Self { request: parsed, list_filters })
+		Ok(Self {
+			request: parsed,
+			list_filters,
+			required_state_excludes,
+		})
 	}
 }
 
@@ -479,7 +527,11 @@ async fn sync_events_v5_route_inner(
 		.update_device_last_seen(sender_user, Some(sender_device), client_ip)
 		.await;
 
-	let CompatSyncRequest { mut request, list_filters } = body.body;
+	let CompatSyncRequest {
+		mut request,
+		list_filters,
+		required_state_excludes,
+	} = body.body;
 
 	if endpoint.enforces_stable_limits() && request.lists.len() > 100 {
 		return Err!(Request(Unknown("More than 100 lists are not supported.")));
@@ -528,12 +580,16 @@ async fn sync_events_v5_route_inner(
 	let list_filters = endpoint
 		.stores_connection_without_id()
 		.then_some(&list_filters);
+	let required_state_excludes = endpoint
+		.stores_connection_without_id()
+		.then_some(&required_state_excludes);
 	let context = BuildContext {
 		sender_user,
 		sender_device,
 		globalsince,
 		body: &request,
 		list_filters,
+		required_state_excludes,
 		known_rooms: &known_rooms,
 		timeline_limits: &timeline_limits,
 		endpoint,
@@ -578,6 +634,7 @@ async fn build_sync_events_v5(
 		globalsince,
 		body,
 		list_filters,
+		required_state_excludes,
 		known_rooms,
 		timeline_limits,
 		endpoint,
@@ -681,6 +738,7 @@ async fn build_sync_events_v5(
 		all_joined_rooms.clone(),
 		all_rooms,
 		list_filters,
+		required_state_excludes,
 		endpoint,
 		&mut todo_rooms,
 		known_rooms,
@@ -689,8 +747,16 @@ async fn build_sync_events_v5(
 	)
 	.await;
 
-	fetch_subscriptions(services, sync_info, next_batch, known_rooms, endpoint, &mut todo_rooms)
-		.await;
+	fetch_subscriptions(
+		services,
+		sync_info,
+		next_batch,
+		known_rooms,
+		endpoint,
+		required_state_excludes,
+		&mut todo_rooms,
+	)
+	.await;
 
 	response.rooms = process_rooms(
 		services,
@@ -729,6 +795,7 @@ async fn fetch_subscriptions(
 	next_batch: u64,
 	known_rooms: &KnownRooms,
 	endpoint: SyncEndpoint,
+	required_state_excludes: Option<&CompatRequiredStateExcludes>,
 	todo_rooms: &mut TodoRooms,
 ) {
 	let mut known_subscription_rooms = BTreeSet::new();
@@ -744,18 +811,28 @@ async fn fetch_subscriptions(
 			continue;
 		}
 
-		let todo_room =
-			todo_rooms
-				.entry(room_id.clone())
-				.or_insert((BTreeSet::new(), 0_usize, u64::MAX));
+		let todo_room = todo_rooms.entry(room_id.clone()).or_insert((
+			RequiredStateSelection::default(),
+			0_usize,
+			u64::MAX,
+		));
 
 		let limit: UInt = room.timeline_limit;
 
-		todo_room.0.extend(
+		todo_room.0.include.extend(
 			room.required_state
 				.iter()
 				.map(|(ty, sk)| (ty.clone(), sk.as_str().into())),
 		);
+		if let Some(excludes) =
+			required_state_excludes.and_then(|excludes| excludes.room_subscriptions.get(room_id))
+		{
+			todo_room.0.exclude.extend(
+				excludes
+					.iter()
+					.map(|(ty, sk)| (ty.clone(), sk.as_str().into())),
+			);
+		}
 		todo_room.1 = todo_room.1.max(usize_from_ruma(limit));
 		// 0 means unknown because it got out of date
 		todo_room.2 = todo_room.2.min(
@@ -793,6 +870,7 @@ async fn handle_lists<'a, Rooms, AllRooms>(
 	all_joined_rooms: Rooms,
 	all_rooms: AllRooms,
 	list_filters: Option<&BTreeMap<String, CompatListFilters>>,
+	required_state_excludes: Option<&CompatRequiredStateExcludes>,
 	endpoint: SyncEndpoint,
 	todo_rooms: &'a mut TodoRooms,
 	known_rooms: &'a KnownRooms,
@@ -883,19 +961,28 @@ where
 					.insert(list_id.clone());
 
 				let todo_room = todo_rooms.entry(room_id.to_owned()).or_insert((
-					BTreeSet::new(),
+					RequiredStateSelection::default(),
 					0_usize,
 					u64::MAX,
 				));
 
 				let limit: usize = usize_from_ruma(list.room_details.timeline_limit).min(100);
 
-				todo_room.0.extend(
+				todo_room.0.include.extend(
 					list.room_details
 						.required_state
 						.iter()
 						.map(|(ty, sk)| (ty.clone(), sk.as_str().into())),
 				);
+				if let Some(excludes) =
+					required_state_excludes.and_then(|excludes| excludes.lists.get(list_id))
+				{
+					todo_room.0.exclude.extend(
+						excludes
+							.iter()
+							.map(|(ty, sk)| (ty.clone(), sk.as_str().into())),
+					);
+				}
 
 				todo_room.1 = todo_room.1.max(limit);
 				// 0 means unknown because it got out of date
@@ -918,7 +1005,7 @@ where
 				room_extras.entry(room_id.clone()).or_default().force_update = true;
 
 				let todo_room = todo_rooms.entry(room_id.clone()).or_insert((
-					BTreeSet::new(),
+					RequiredStateSelection::default(),
 					0_usize,
 					u64::MAX,
 				));
@@ -1114,11 +1201,14 @@ where
 		)
 		.await;
 
-		let room_name_requested = required_state_request
-			.iter()
-			.any(|(event_type, state_key)| {
-				*event_type == StateEventType::RoomName && matches!(state_key.as_str(), "" | "*")
-			});
+		let room_name_requested =
+			required_state_request
+				.include
+				.iter()
+				.any(|(event_type, state_key)| {
+					*event_type == StateEventType::RoomName
+						&& matches!(state_key.as_str(), "" | "*")
+				});
 		let include_stable_room_fields = body.pos.is_none()
 			|| room_name_requested
 			|| timeline_pdus
@@ -1377,7 +1467,7 @@ async fn collect_required_state(
 	services: &Services,
 	sender_user: &UserId,
 	room_id: &RoomId,
-	required_state_request: &BTreeSet<TypeStateKey>,
+	required_state_request: &RequiredStateSelection,
 	timeline_pdus: &VecDeque<(PduCount, impl Event + Sync)>,
 ) -> Vec<Raw<AnySyncStateEvent>> {
 	let mut required_state = Vec::new();
@@ -1385,11 +1475,37 @@ async fn collect_required_state(
 	let mut fetched: HashSet<(StateEventType, String)> = HashSet::new();
 
 	let lazy = required_state_request
+		.include
 		.iter()
 		.any(|(ty, sk)| *ty == StateEventType::RoomMember && sk.as_str() == "$LAZY");
 
-	for (event_type, state_key) in required_state_request {
+	for (event_type, state_key) in &required_state_request.include {
 		if wildcard_types.contains(event_type) {
+			continue;
+		}
+
+		if event_type.to_string() == "*" {
+			let state_key_filter = state_key.as_str();
+			let full_state = services.rooms.state_accessor.room_state_full(room_id);
+			pin_mut!(full_state);
+			while let Some(Ok(((state_event_type, full_state_key), event))) =
+				full_state.next().await
+			{
+				let full_state_key = full_state_key.to_string();
+				if state_key_filter != "*" && state_key_filter != full_state_key {
+					continue;
+				}
+				if required_state_excludes(
+					&(state_event_type.clone(), full_state_key.clone()),
+					&required_state_request.exclude,
+				) {
+					continue;
+				}
+				if !fetched.insert((state_event_type, full_state_key)) {
+					continue;
+				}
+				required_state.push(Event::into_format(event));
+			}
 			continue;
 		}
 
@@ -1403,6 +1519,12 @@ async fn collect_required_state(
 					.await
 				{
 					for key in keys {
+						if required_state_excludes(
+							&(event_type.clone(), key.clone()),
+							&required_state_request.exclude,
+						) {
+							continue;
+						}
 						if !fetched.insert((event_type.clone(), key.clone())) {
 							continue;
 						}
@@ -1421,6 +1543,12 @@ async fn collect_required_state(
 			| "$LAZY" if *event_type == StateEventType::RoomMember => {},
 			| "$ME" => {
 				let resolved_key = sender_user.as_str();
+				if required_state_excludes(
+					&(event_type.clone(), resolved_key.to_owned()),
+					&required_state_request.exclude,
+				) {
+					continue;
+				}
 				if !fetched.insert((event_type.clone(), resolved_key.to_owned())) {
 					continue;
 				}
@@ -1434,6 +1562,12 @@ async fn collect_required_state(
 				}
 			},
 			| _ => {
+				if required_state_excludes(
+					&(event_type.clone(), state_key.to_string()),
+					&required_state_request.exclude,
+				) {
+					continue;
+				}
 				if !fetched.insert((event_type.clone(), state_key.to_string())) {
 					continue;
 				}
@@ -1460,6 +1594,12 @@ async fn collect_required_state(
 			}
 		}
 		for member in lazy_members {
+			if required_state_excludes(
+				&(StateEventType::RoomMember, member.clone()),
+				&required_state_request.exclude,
+			) {
+				continue;
+			}
 			if !fetched.insert((StateEventType::RoomMember, member.clone())) {
 				continue;
 			}
@@ -1927,10 +2067,11 @@ mod tests {
 		)
 		.expect("event-type keyed required_state should deserialize");
 
-		assert_eq!(fixture.required_state, vec![
+		assert_eq!(fixture.required_state.include, vec![
 			(StateEventType::RoomMember, "$LAZY".to_owned()),
 			(StateEventType::RoomName, String::new()),
 		]);
+		assert!(fixture.required_state.exclude.is_empty());
 	}
 
 	#[test]
@@ -1940,20 +2081,25 @@ mod tests {
 		)
 		.expect("stable include/lazy_members required_state should deserialize");
 
-		assert_eq!(fixture.required_state, vec![
+		assert_eq!(fixture.required_state.include, vec![
 			(StateEventType::RoomName, String::new()),
 			(StateEventType::RoomMember, "$LAZY".to_owned()),
 		]);
+		assert!(fixture.required_state.exclude.is_empty());
 	}
 
 	#[test]
 	fn required_state_accepts_stable_exclude_object() {
 		let fixture: RequiredStateFixture = serde_json::from_str(
-			r#"{"required_state":{"include":[{"type":"m.room.name","state_key":""},{"type":"m.room.member","state_key":"*"}],"exclude":[{"type":"m.room.member","state_key":"*"}]}}"#,
+			r#"{"required_state":{"include":[{"type":"*","state_key":"*"}],"exclude":[{"type":"m.room.member","state_key":"*"}]}}"#,
 		)
 		.expect("stable exclude required_state should deserialize");
 
-		assert_eq!(fixture.required_state, vec![(StateEventType::RoomName, String::new())]);
+		assert_eq!(fixture.required_state.include, vec![("*".into(), "*".to_owned())]);
+		assert_eq!(fixture.required_state.exclude, vec![(
+			StateEventType::RoomMember,
+			"*".to_owned()
+		)]);
 	}
 
 	#[test]
