@@ -1,7 +1,7 @@
 {"Action":"pass","Test":"TestKnockRestrictedRoomsLocalJoinNoCreatorsUsesPowerLevelsV11"}
 {"Action":"pass","Test":"TestKnockRestrictedRoomsLocalJoinNoCreatorsUsesPowerLevelsV12"}
-{"Action":"fail","Test":"TestKnockRoomsInPublicRoomsDirectory"}
-{"Action":"fail","Test":"TestKnockRoomsInPublicRoomsDirectoryInMSC3787Room"}
+{"Action":"pass","Test":"TestKnockRoomsInPublicRoomsDirectory"}
+{"Action":"pass","Test":"TestKnockRoomsInPublicRoomsDirectoryInMSC3787Room"}
 {"Action":"fail","Test":"TestKnocking"}
 {"Action":"fail","Test":"TestKnocking/A_user_can_knock_on_a_room_without_a_reason"}
 {"Action":"fail","Test":"TestKnocking/A_user_can_knock_on_a_room_without_a_reason#01"}

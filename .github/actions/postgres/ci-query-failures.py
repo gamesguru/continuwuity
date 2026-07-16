@@ -71,9 +71,6 @@ if new_passes_match:
         new_passes = False
     args_str = args_str.replace(new_passes_match.group(0), "")
 
-super_mode = bool(re.search(r"(^|\s)--super(\s|$)", args_str))
-args_str = re.sub(r"(^|\s)--super(\s|$)", " ", args_str).strip()
-
 # Extract order (it takes whatever is left if it starts with order=)
 order_match = re.search(
     r"order=(.+?)(?:$| like=| limit=| new_passes=)", args_str + " ", re.IGNORECASE
