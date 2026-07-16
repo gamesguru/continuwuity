@@ -147,8 +147,8 @@ async fn load_timeline(
 	let mut limited = pdus.len() > limit || pdu_stream.next().await.is_some();
 
 	// If we didn't hit the limit, check if there is a topological gap.
-	// A topological gap exists if the oldest returned event has a prev_event that
-	// is not in the timeline.
+	// A topological gap exists if the oldest returned event references a
+	// prev_event that is not stored in the local timeline.
 	if !limited && starting_count.is_some() {
 		if let Some((_, oldest_pdu)) = pdus.front() {
 			for prev_id in oldest_pdu.prev_events() {
