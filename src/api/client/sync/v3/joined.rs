@@ -1023,6 +1023,7 @@ async fn build_device_list_updates(
 		.filter(|event| event.kind == RoomMember);
 
 	for state_event in mem_events {
+		tracing::error!("TEST_DEBUG: Found mem_event for room {}: {:?}", room_id, state_event);
 		let Some(content): Option<RoomMemberEventContent> = state_event.get_content().ok() else {
 			continue;
 		};
@@ -1046,6 +1047,11 @@ async fn build_device_list_updates(
 						device_list_updates.left.insert(user_id);
 					},
 					| Join => {
+						tracing::error!(
+							"TEST_DEBUG: Inserting user {} to changed for room {}",
+							user_id,
+							room_id
+						);
 						device_list_updates.changed.insert(user_id);
 					},
 					| _ => (),
