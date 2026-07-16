@@ -839,7 +839,12 @@ async fn build_sync_events_v5(
 		let snake_key = into_snake_key(sender_user, sender_device, body.conn_id.clone());
 		let next_limits: BTreeMap<OwnedRoomId, usize> = todo_rooms
 			.iter()
-			.map(|(room_id, (_, limit, _))| (room_id.clone(), *limit))
+			.map(|(room_id, (_, limit, roomsince))| {
+				(
+					room_id.clone(),
+					effective_timeline_limit(room_id, *limit, *roomsince, timeline_limits),
+				)
+			})
 			.collect();
 		services
 			.sync
@@ -1111,9 +1116,11 @@ where
 	let mut rooms = BTreeMap::new();
 	for (room_id, (required_state_request, timeline_limit, roomsince)) in todo_rooms {
 		let roomsincecount = PduCount::Normal(*roomsince);
+		let timeline_limit =
+			effective_timeline_limit(room_id, *timeline_limit, *roomsince, timeline_limits);
 
 		let is_expanded_timeline =
-			is_expanded_timeline(timeline_limits.get(room_id).copied(), *timeline_limit);
+			is_expanded_timeline(timeline_limits.get(room_id).copied(), timeline_limit);
 
 		let mut timestamp: Option<_> = None;
 		let mut invite_state = None;
@@ -1136,7 +1143,7 @@ where
 				room_id,
 				Some(roomsincecount),
 				Some(PduCount::from(next_batch)),
-				*timeline_limit,
+				timeline_limit,
 				is_expanded_timeline,
 			)
 			.await
@@ -1403,6 +1410,22 @@ where
 
 fn is_expanded_timeline(old_limit: Option<usize>, timeline_limit: usize) -> bool {
 	old_limit.is_some_and(|old| timeline_limit > old)
+}
+
+fn effective_timeline_limit(
+	room_id: &RoomId,
+	timeline_limit: usize,
+	roomsince: u64,
+	timeline_limits: &BTreeMap<OwnedRoomId, usize>,
+) -> usize {
+	if roomsince == 0 || timeline_limit > 0 {
+		return timeline_limit;
+	}
+
+	timeline_limits
+		.get(room_id)
+		.copied()
+		.unwrap_or(timeline_limit)
 }
 
 fn sync_events_v5_json_response(
