@@ -29,10 +29,9 @@ use futures::{
 use ruma::{
 	DeviceId, OwnedEventId, OwnedRoomId, RoomId, UInt, UserId,
 	api::{
-		OutgoingResponse,
-		auth_scheme::AccessToken,
+		IncomingRequest, Metadata, OutgoingResponse,
 		client::sync::sync_events::{self, DeviceLists, UnreadNotificationsCount},
-		metadata, request,
+		error::FromHttpRequestError,
 	},
 	directory::RoomTypeFilter,
 	events::{
@@ -41,7 +40,6 @@ use ruma::{
 		room::member::{MembershipState, RoomMemberEventContent},
 		typing::TypingEventContent,
 	},
-	presence::PresenceState,
 	serde::Raw,
 	uint,
 };
@@ -61,59 +59,37 @@ type TodoRooms = BTreeMap<OwnedRoomId, (BTreeSet<TypeStateKey>, usize, u64)>;
 type KnownRooms = BTreeMap<String, BTreeMap<OwnedRoomId, u64>>;
 type RoomExtras = BTreeMap<OwnedRoomId, RoomExtra>;
 
-metadata! {
-	method: POST,
-	rate_limited: false,
-	authentication: AccessToken,
-	history: {
-		unstable("org.matrix.simplified_msc3575")
-			=> "/_matrix/client/unstable/org.matrix.simplified_msc3575/sync",
-		1.4 => "/_matrix/client/v5/sync",
-	}
-}
-
-#[request]
-#[derive(Default)]
+#[derive(Default, Deserialize)]
 struct CompatRequest {
-	#[serde(skip_serializing_if = "Option::is_none")]
-	#[ruma_api(query)]
 	pos: Option<String>,
 
-	#[serde(skip_serializing_if = "Option::is_none")]
 	conn_id: Option<String>,
 
-	#[serde(skip_serializing_if = "Option::is_none")]
 	txn_id: Option<String>,
 
-	#[serde(
-		with = "ruma::serde::duration::opt_ms",
-		default,
-		skip_serializing_if = "Option::is_none"
-	)]
-	#[ruma_api(query)]
+	#[serde(with = "ruma::serde::duration::opt_ms", default)]
 	timeout: Option<Duration>,
 
-	#[serde(default, skip_serializing_if = "ruma::serde::is_default")]
-	#[ruma_api(query)]
-	set_presence: PresenceState,
-
-	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+	#[serde(default)]
 	lists: BTreeMap<String, CompatList>,
 
-	#[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+	#[serde(default)]
 	room_subscriptions: BTreeMap<OwnedRoomId, CompatRoomSubscription>,
 
-	#[serde(default, skip_serializing_if = "sync_events::v5::request::Extensions::is_empty")]
+	#[serde(default)]
 	extensions: sync_events::v5::request::Extensions,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct CompatList {
-	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	#[serde(default)]
 	ranges: Vec<(UInt, UInt)>,
 
 	#[serde(flatten)]
 	room_details: CompatRoomDetails,
+
+	#[serde(skip_serializing_if = "Option::is_none")]
+	include_heroes: Option<bool>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
 	filters: Option<CompatListFilters>,
@@ -122,16 +98,7 @@ struct CompatList {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct CompatListFilters {
 	#[serde(skip_serializing_if = "Option::is_none")]
-	is_dm: Option<bool>,
-
-	#[serde(skip_serializing_if = "Option::is_none")]
-	is_encrypted: Option<bool>,
-
-	#[serde(skip_serializing_if = "Option::is_none")]
 	is_invite: Option<bool>,
-
-	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
-	room_types: Vec<RoomTypeFilter>,
 
 	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
 	not_room_types: Vec<RoomTypeFilter>,
@@ -144,6 +111,9 @@ struct CompatRoomSubscription {
 
 	#[serde(default, skip_serializing_if = "ruma::serde::is_default")]
 	timeline_limit: UInt,
+
+	#[serde(skip_serializing_if = "Option::is_none")]
+	include_heroes: Option<bool>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -162,7 +132,6 @@ impl From<CompatRequest> for sync_events::v5::Request {
 			conn_id: value.conn_id,
 			txn_id: value.txn_id,
 			timeout: value.timeout,
-			set_presence: value.set_presence,
 			lists: value
 				.lists
 				.into_iter()
@@ -173,12 +142,10 @@ impl From<CompatRequest> for sync_events::v5::Request {
 							required_state: list.room_details.required_state,
 							timeline_limit: list.room_details.timeline_limit,
 						},
+						include_heroes: list.include_heroes,
 						filters: list.filters.map(|filters| {
 							sync_events::v5::request::ListFilters {
-								is_dm: filters.is_dm,
-								is_encrypted: filters.is_encrypted,
 								is_invite: filters.is_invite,
-								room_types: filters.room_types,
 								not_room_types: filters.not_room_types,
 							}
 						}),
@@ -192,11 +159,52 @@ impl From<CompatRequest> for sync_events::v5::Request {
 					(room_id, sync_events::v5::request::RoomSubscription {
 						required_state: room.required_state,
 						timeline_limit: room.timeline_limit,
+						include_heroes: room.include_heroes,
 					})
 				})
 				.collect(),
 			extensions: value.extensions,
 		}
+	}
+}
+
+pub(crate) struct CompatSyncRequest(sync_events::v5::Request);
+
+impl IncomingRequest for CompatSyncRequest {
+	type EndpointError = <sync_events::v5::Request as IncomingRequest>::EndpointError;
+	type OutgoingResponse = <sync_events::v5::Request as IncomingRequest>::OutgoingResponse;
+
+	const METADATA: Metadata = <sync_events::v5::Request as IncomingRequest>::METADATA;
+
+	fn try_from_http_request<B, S>(
+		req: http::Request<B>,
+		path_args: &[S],
+	) -> std::result::Result<Self, FromHttpRequestError>
+	where
+		B: AsRef<[u8]>,
+		S: AsRef<str>,
+	{
+		let (parts, body) = req.into_parts();
+		let body = body.as_ref();
+		let request = if body.is_empty() {
+			sync_events::v5::Request::default()
+		} else {
+			let compat = serde_json::from_slice::<CompatRequest>(body)?;
+			sync_events::v5::Request::from(compat)
+		};
+
+		let req = http::Request::from_parts(parts, bytes::Bytes::from_static(b"{}"));
+		let mut parsed = sync_events::v5::Request::try_from_http_request(req, path_args)?;
+
+		parsed.pos = request.pos;
+		parsed.conn_id = request.conn_id;
+		parsed.txn_id = request.txn_id;
+		parsed.timeout = request.timeout;
+		parsed.lists = request.lists;
+		parsed.room_subscriptions = request.room_subscriptions;
+		parsed.extensions = request.extensions;
+
+		Ok(Self(parsed))
 	}
 }
 
@@ -222,7 +230,7 @@ struct RoomExtra {
 pub(crate) async fn sync_events_v5_route(
 	State(ref services): State<crate::State>,
 	ClientIp(client_ip): ClientIp,
-	body: Ruma<CompatRequest>,
+	body: Ruma<CompatSyncRequest>,
 ) -> Result<axum::response::Response> {
 	debug_assert!(DEFAULT_BUMP_TYPES.is_sorted(), "DEFAULT_BUMP_TYPES is not sorted");
 	let sender_user = body.sender_user.as_ref().expect("user is authenticated");
@@ -233,7 +241,7 @@ pub(crate) async fn sync_events_v5_route(
 		.update_device_last_seen(sender_user, Some(sender_device), client_ip)
 		.await;
 
-	let mut body: sync_events::v5::Request = body.body.into();
+	let mut body = body.body.0;
 
 	// Setup watchers, so if there's no response, we can wait for them
 	let watcher = services.sync.setup_watch(sender_user, sender_device).await;
