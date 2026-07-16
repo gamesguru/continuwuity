@@ -498,7 +498,7 @@
 # the minimum delay before the first retry after a failed transaction.
 # Subsequent retries use exponential backoff: base × 2^(tries-1).
 #
-#sender_retry_backoff_base = 2
+#sender_retry_backoff_base = 5
 
 # Federation sender transaction retry backoff limit (seconds).
 #
