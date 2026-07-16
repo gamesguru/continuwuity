@@ -67,9 +67,7 @@ struct CompatRequiredState {
 }
 
 impl CompatRequiredState {
-	fn is_empty(&self) -> bool {
-		self.include.is_empty() && self.exclude.is_empty()
-	}
+	fn is_empty(&self) -> bool { self.include.is_empty() && self.exclude.is_empty() }
 }
 
 #[derive(Debug, Default)]
@@ -79,9 +77,7 @@ struct RequiredStateSelection {
 }
 
 impl RequiredStateSelection {
-	fn is_empty(&self) -> bool {
-		self.include.is_empty()
-	}
+	fn is_empty(&self) -> bool { self.include.is_empty() }
 }
 
 #[derive(Default)]
@@ -97,17 +93,11 @@ enum SyncEndpoint {
 }
 
 impl SyncEndpoint {
-	fn stores_connection_without_id(self) -> bool {
-		matches!(self, Self::StableV5)
-	}
+	fn stores_connection_without_id(self) -> bool { matches!(self, Self::StableV5) }
 
-	fn validates_exact_pos(self) -> bool {
-		matches!(self, Self::StableV5)
-	}
+	fn validates_exact_pos(self) -> bool { matches!(self, Self::StableV5) }
 
-	fn enforces_stable_limits(self) -> bool {
-		matches!(self, Self::StableV5)
-	}
+	fn enforces_stable_limits(self) -> bool { matches!(self, Self::StableV5) }
 }
 
 struct BuildContext<'a> {
@@ -145,7 +135,7 @@ struct CompatRequest {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct CompatList {
-	#[serde(default, deserialize_with = "deserialize_ranges")]
+	#[serde(default, alias = "range", deserialize_with = "deserialize_ranges")]
 	ranges: CompatRanges,
 
 	#[serde(flatten)]
@@ -228,37 +218,31 @@ impl From<CompatRequest> for sync_events::v5::Request {
 				.lists
 				.into_iter()
 				.map(|(list_id, list)| {
-					(
-						list_id,
-						sync_events::v5::request::List {
-							ranges: list.ranges,
-							room_details: sync_events::v5::request::RoomDetails {
-								required_state: list.room_details.required_state.include,
-								timeline_limit: list.room_details.timeline_limit,
-							},
-							include_heroes: list.include_heroes,
-							filters: list.filters.map(|filters| {
-								sync_events::v5::request::ListFilters {
-									is_invite: filters.is_invite,
-									not_room_types: filters.not_room_types,
-								}
-							}),
+					(list_id, sync_events::v5::request::List {
+						ranges: list.ranges,
+						room_details: sync_events::v5::request::RoomDetails {
+							required_state: list.room_details.required_state.include,
+							timeline_limit: list.room_details.timeline_limit,
 						},
-					)
+						include_heroes: list.include_heroes,
+						filters: list.filters.map(|filters| {
+							sync_events::v5::request::ListFilters {
+								is_invite: filters.is_invite,
+								not_room_types: filters.not_room_types,
+							}
+						}),
+					})
 				})
 				.collect(),
 			room_subscriptions: value
 				.room_subscriptions
 				.into_iter()
 				.map(|(room_id, room)| {
-					(
-						room_id,
-						sync_events::v5::request::RoomSubscription {
-							required_state: room.required_state.include,
-							timeline_limit: room.timeline_limit,
-							include_heroes: room.include_heroes,
-						},
-					)
+					(room_id, sync_events::v5::request::RoomSubscription {
+						required_state: room.required_state.include,
+						timeline_limit: room.timeline_limit,
+						include_heroes: room.include_heroes,
+					})
 				})
 				.collect(),
 			extensions: value.extensions,
@@ -549,11 +533,13 @@ async fn sync_events_v5_route_inner(
 	} = body.body;
 
 	if endpoint.enforces_stable_limits() && request.lists.len() > 100 {
-		return Err!(Request(Unknown("More than 100 lists are not supported.")));
+		return Err!(Request(InvalidParam("More than 100 lists are not supported.")));
 	}
 
 	if endpoint.enforces_stable_limits() && request.room_subscriptions.len() > 100 {
-		return Err!(Request(Unknown("More than 100 room subscriptions are not supported.")));
+		return Err!(Request(InvalidParam(
+			"More than 100 room subscriptions are not supported."
+		)));
 	}
 
 	// Setup watchers, so if there's no response, we can wait for them
@@ -826,11 +812,9 @@ async fn fetch_subscriptions(
 			continue;
 		}
 
-		let todo_room = todo_rooms.entry(room_id.clone()).or_insert_with(|| (
-			RequiredStateSelection::default(),
-			0_usize,
-			u64::MAX,
-		));
+		let todo_room = todo_rooms
+			.entry(room_id.clone())
+			.or_insert_with(|| (RequiredStateSelection::default(), 0_usize, u64::MAX));
 
 		let limit: UInt = room.timeline_limit;
 
@@ -975,11 +959,9 @@ where
 					.lists
 					.insert(list_id.clone());
 
-				let todo_room = todo_rooms.entry(room_id.to_owned()).or_insert_with(|| (
-					RequiredStateSelection::default(),
-					0_usize,
-					u64::MAX,
-				));
+				let todo_room = todo_rooms
+					.entry(room_id.to_owned())
+					.or_insert_with(|| (RequiredStateSelection::default(), 0_usize, u64::MAX));
 
 				let limit: usize = usize_from_ruma(list.room_details.timeline_limit).min(100);
 
@@ -1019,21 +1001,18 @@ where
 
 				room_extras.entry(room_id.clone()).or_default().force_update = true;
 
-				let todo_room = todo_rooms.entry(room_id.clone()).or_insert_with(|| (
-					RequiredStateSelection::default(),
-					0_usize,
-					u64::MAX,
-				));
+				let todo_room = todo_rooms
+					.entry(room_id.clone())
+					.or_insert_with(|| (RequiredStateSelection::default(), 0_usize, u64::MAX));
 				todo_room.2 = todo_room.2.min(*roomsince);
 			}
 		}
 
-		response.lists.insert(
-			list_id.clone(),
-			sync_events::v5::response::List {
+		response
+			.lists
+			.insert(list_id.clone(), sync_events::v5::response::List {
 				count: ruma_from_usize(active_rooms.len()),
-			},
-		);
+			});
 
 		if endpoint.stores_connection_without_id() || body.conn_id.is_some() {
 			let snake_key = into_snake_key(sender_user, sender_device, body.conn_id.clone());
@@ -1312,80 +1291,77 @@ where
 			None
 		};
 
-		rooms.insert(
-			room_id.clone(),
-			sync_events::v5::response::Room {
-				name: if include_stable_room_fields {
-					services
-						.rooms
-						.state_accessor
-						.get_name(room_id)
-						.await
-						.ok()
-						.or(name)
-				} else {
-					None
-				},
-				avatar: match heroes_avatar {
-					| Some(heroes_avatar) => ruma::JsOption::Some(heroes_avatar),
-					| _ => match services.rooms.state_accessor.get_avatar(room_id).await {
-						| ruma::JsOption::Some(avatar) => ruma::JsOption::from_option(avatar.url),
-						| ruma::JsOption::Null => ruma::JsOption::Null,
-						| ruma::JsOption::Undefined => ruma::JsOption::Undefined,
-					},
-				},
-				initial: (body.pos.is_none() && roomsince == &0).then_some(true),
-				is_dm: None,
-				invite_state,
-				unread_notifications: UnreadNotificationsCount {
-					highlight_count: Some(
-						services
-							.rooms
-							.user
-							.highlight_count(sender_user, room_id)
-							.await
-							.try_into()
-							.expect("notification count can't go that high"),
-					),
-					notification_count: Some(
-						services
-							.rooms
-							.user
-							.notification_count(sender_user, room_id)
-							.await
-							.try_into()
-							.expect("notification count can't go that high"),
-					),
-				},
-				timeline: room_events,
-				required_state,
-				prev_batch,
-				limited,
-				joined_count: Some(
-					services
-						.rooms
-						.state_cache
-						.room_joined_count(room_id)
-						.await
-						.unwrap_or(0)
-						.try_into()
-						.unwrap_or_else(|_| uint!(0)),
-				),
-				invited_count: Some(
-					services
-						.rooms
-						.state_cache
-						.room_invited_count(room_id)
-						.await
-						.unwrap_or(0)
-						.try_into()
-						.unwrap_or_else(|_| uint!(0)),
-				),
-				num_live,
-				bump_stamp: timestamp,
-				heroes: Some(heroes),
+		rooms.insert(room_id.clone(), sync_events::v5::response::Room {
+			name: if include_stable_room_fields {
+				services
+					.rooms
+					.state_accessor
+					.get_name(room_id)
+					.await
+					.ok()
+					.or(name)
+			} else {
+				None
 			},
-		);
+			avatar: match heroes_avatar {
+				| Some(heroes_avatar) => ruma::JsOption::Some(heroes_avatar),
+				| _ => match services.rooms.state_accessor.get_avatar(room_id).await {
+					| ruma::JsOption::Some(avatar) => ruma::JsOption::from_option(avatar.url),
+					| ruma::JsOption::Null => ruma::JsOption::Null,
+					| ruma::JsOption::Undefined => ruma::JsOption::Undefined,
+				},
+			},
+			initial: (body.pos.is_none() && roomsince == &0).then_some(true),
+			is_dm: None,
+			invite_state,
+			unread_notifications: UnreadNotificationsCount {
+				highlight_count: Some(
+					services
+						.rooms
+						.user
+						.highlight_count(sender_user, room_id)
+						.await
+						.try_into()
+						.expect("notification count can't go that high"),
+				),
+				notification_count: Some(
+					services
+						.rooms
+						.user
+						.notification_count(sender_user, room_id)
+						.await
+						.try_into()
+						.expect("notification count can't go that high"),
+				),
+			},
+			timeline: room_events,
+			required_state,
+			prev_batch,
+			limited,
+			joined_count: Some(
+				services
+					.rooms
+					.state_cache
+					.room_joined_count(room_id)
+					.await
+					.unwrap_or(0)
+					.try_into()
+					.unwrap_or_else(|_| uint!(0)),
+			),
+			invited_count: Some(
+				services
+					.rooms
+					.state_cache
+					.room_invited_count(room_id)
+					.await
+					.unwrap_or(0)
+					.try_into()
+					.unwrap_or_else(|_| uint!(0)),
+			),
+			num_live,
+			bump_stamp: timestamp,
+			heroes: Some(heroes),
+		});
 	}
 	Ok(rooms)
 }
@@ -2086,13 +2062,10 @@ mod tests {
 		)
 		.expect("event-type keyed required_state should deserialize");
 
-		assert_eq!(
-			fixture.required_state.include,
-			vec![
-				(StateEventType::RoomMember, "$LAZY".to_owned()),
-				(StateEventType::RoomName, String::new()),
-			]
-		);
+		assert_eq!(fixture.required_state.include, vec![
+			(StateEventType::RoomMember, "$LAZY".to_owned()),
+			(StateEventType::RoomName, String::new()),
+		]);
 		assert!(fixture.required_state.exclude.is_empty());
 	}
 
@@ -2103,13 +2076,10 @@ mod tests {
 		)
 		.expect("stable include/lazy_members required_state should deserialize");
 
-		assert_eq!(
-			fixture.required_state.include,
-			vec![
-				(StateEventType::RoomName, String::new()),
-				(StateEventType::RoomMember, "$LAZY".to_owned()),
-			]
-		);
+		assert_eq!(fixture.required_state.include, vec![
+			(StateEventType::RoomName, String::new()),
+			(StateEventType::RoomMember, "$LAZY".to_owned()),
+		]);
 		assert!(fixture.required_state.exclude.is_empty());
 	}
 
@@ -2121,10 +2091,20 @@ mod tests {
 		.expect("stable exclude required_state should deserialize");
 
 		assert_eq!(fixture.required_state.include, vec![("*".into(), "*".to_owned())]);
-		assert_eq!(
-			fixture.required_state.exclude,
-			vec![(StateEventType::RoomMember, "*".to_owned())]
-		);
+		assert_eq!(fixture.required_state.exclude, vec![(
+			StateEventType::RoomMember,
+			"*".to_owned()
+		)]);
+	}
+
+	#[test]
+	fn stable_list_accepts_singular_range() {
+		let request: CompatRequest = serde_json::from_str(
+			r#"{"lists":{"all":{"timeline_limit":1,"required_state":{"include":[]},"range":[0,0]}}}"#,
+		)
+		.expect("stable singular range should deserialize");
+
+		assert_eq!(request.lists["all"].ranges, vec![(uint!(0), uint!(0))]);
 	}
 
 	#[test]
