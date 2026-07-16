@@ -433,16 +433,7 @@ async fn knock_room_helper_local(
 		PduEvent::from_id_val(&event_id, knock_event.clone(), Some(room_id))
 			.map_err(|e| err!(BadServerResponse("Invalid knock event PDU: {e:?}")))?;
 
-	info!("Updating membership locally to knock state with provided stripped state events");
-	// TODO: this call does not appear to do anything because `update_membership`
-	// doesn't call `mark_as_knock`. investigate further, ideally with the aim of
-	// removing this call entirely -- Ginger thinks `update_membership` should only
-	// be called from `force_state` and `append_pdu`.
-	services
-		.rooms
-		.state_cache
-		.update_membership(room_id, sender_user, &parsed_knock_pdu, false)
-		.await?;
+	// update_membership is handled automatically by append_pdu
 
 	info!("Appending room knock event locally");
 	services
@@ -632,13 +623,7 @@ async fn knock_room_helper_remote(
 		.append_to_state(&parsed_knock_pdu, room_id)
 		.await?;
 
-	info!("Updating membership locally to knock state with provided stripped state events");
-	// TODO: see TODO on the other call to `update_membership`
-	services
-		.rooms
-		.state_cache
-		.update_membership(room_id, sender_user, &parsed_knock_pdu, false)
-		.await?;
+	// update_membership is handled automatically by append_to_state and append_pdu
 
 	info!("Appending room knock event locally");
 	services

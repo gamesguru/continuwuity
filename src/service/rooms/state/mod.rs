@@ -162,6 +162,8 @@ impl Service {
 			return Ok(());
 		}
 
+		self.set_room_state(room_id, shortstatehash, state_lock);
+
 		let new_event_ids = statediffnew
 			.iter()
 			.stream()
@@ -269,13 +271,13 @@ impl Service {
 				if event_type == StateEventType::RoomMember {
 					if let Ok(user_id) = UserId::parse(&*state_key) {
 						// Re-sync membership from the NEW state to update cache correctly.
-						// NB: Must use state_get(shortstatehash) NOT room_state_get —
-						// the new state has not been committed yet via set_room_state.
+						// The new state has already been committed via `set_room_state`,
+						// so we can use `room_state_get`.
 						if let Ok(new_pdu) = self
 							.services
 							.state_accessor
-							.state_get(
-								shortstatehash,
+							.room_state_get(
+								room_id,
 								&StateEventType::RoomMember,
 								user_id.as_str(),
 							)
@@ -323,8 +325,6 @@ impl Service {
 		}
 		info!(target: "force_state", "removed events done, updating joined count");
 		self.services.state_cache.update_joined_count(room_id).await;
-
-		self.set_room_state(room_id, shortstatehash, state_lock);
 
 		info!(target: "force_state", "complete for {room_id}");
 		Ok(())
