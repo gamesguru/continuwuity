@@ -4,6 +4,7 @@ mod state;
 
 use std::{
 	collections::{BTreeMap, HashMap, HashSet},
+	sync::atomic::Ordering,
 	time::Duration,
 };
 
@@ -304,7 +305,12 @@ pub(crate) async fn build_sync_events(
 ) -> Result<serde_json::Value, RumaResponse<UiaaResponse>> {
 	let (syncing_user, syncing_device) = body.sender();
 
-	let current_count = services.globals.current_count()?;
+	let current_count = services.globals.current_count()?.max(
+		services
+			.users
+			.last_device_key_update_count
+			.load(Ordering::Relaxed),
+	);
 
 	// the `since` token is the last sync end count stringified
 	let last_sync_end_count = body
@@ -503,7 +509,10 @@ pub(crate) async fn build_sync_events(
 	// Look for device list updates of this account
 	let keys_changed = services
 		.users
-		.keys_changed(syncing_user, last_sync_end_count, Some(current_count))
+		// Device-list updates can arrive after the sync snapshot is taken but
+		// before the long-poll wakes. Do not cap these by current_count or an
+		// otherwise-empty incremental sync can miss the wakeup entirely.
+		.keys_changed(syncing_user, last_sync_end_count, None)
 		.map(ToOwned::to_owned)
 		.collect::<HashSet<_>>();
 
