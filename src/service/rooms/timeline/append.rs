@@ -184,10 +184,17 @@ where
 
 	let insert_lock = self.mutex_insert.lock(room_id).await;
 
-	let count1 = self.services.globals.next_count().unwrap();
+	self.services
+		.user
+		.reset_notification_counts(pdu.sender(), room_id);
 
-	// Mark as read first so the sending client doesn't get a notification even if
-	// appending fails
+	let count2_raw = self.services.globals.next_count().unwrap();
+	let count2 = PduCount::Normal(count2_raw);
+	let pdu_id: RawPduId = PduId { shortroomid, shorteventid: count2 }.into();
+
+	// Insert pdu
+	self.db.append_pdu(&pdu_id, pdu, &pdu_json, count2).await;
+
 	let receipt_content = BTreeMap::from_iter([(
 		pdu.event_id().to_owned(),
 		BTreeMap::from_iter([(
@@ -203,19 +210,13 @@ where
 		room_id: room_id.to_owned(),
 	};
 
-	self.services
-		.read_receipt
-		.private_read_set(room_id, pdu.sender(), count1, &receipt_event)?;
-
-	self.services
-		.user
-		.reset_notification_counts(pdu.sender(), room_id);
-
-	let count2 = PduCount::Normal(self.services.globals.next_count().unwrap());
-	let pdu_id: RawPduId = PduId { shortroomid, shorteventid: count2 }.into();
-
-	// Insert pdu
-	self.db.append_pdu(&pdu_id, pdu, &pdu_json, count2).await;
+	// Wake sync only after the event is visible in the room timeline.
+	self.services.read_receipt.private_read_set(
+		room_id,
+		pdu.sender(),
+		count2_raw,
+		&receipt_event,
+	)?;
 
 	drop(insert_lock);
 

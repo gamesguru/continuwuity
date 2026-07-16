@@ -20,7 +20,7 @@
 {"Action":"pass","Test":"TestMSC4186SlidingSyncLists"}
 {"Action":"pass","Test":"TestMSC4186SlidingSyncLists/Incremental_sync_only_returns_rooms_with_updates"}
 {"Action":"pass","Test":"TestMSC4186SlidingSyncLists/Initial_list_returns_count_and_room_metadata"}
-{"Action":"fail","Test":"TestMSC4186SlidingSyncLongPolling"}
+{"Action":"pass","Test":"TestMSC4186SlidingSyncLongPolling"}
 {"Action":"pass","Test":"TestMSC4186SlidingSyncMaxLimits"}
 {"Action":"pass","Test":"TestMSC4186SlidingSyncMaxLimits/More_than_100_lists_is_rejected"}
 {"Action":"pass","Test":"TestMSC4186SlidingSyncMaxLimits/More_than_100_room_subscriptions_is_rejected"}
