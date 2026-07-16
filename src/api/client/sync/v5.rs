@@ -266,9 +266,22 @@ where
 enum CompatRequiredStateEntry {
 	Tuple((StateEventType, String)),
 	Map {
+		#[serde(rename = "type", alias = "event_type")]
 		event_type: StateEventType,
 		state_key: String,
 	},
+}
+
+#[derive(Deserialize)]
+struct CompatRequiredStateObject {
+	#[serde(default)]
+	include: Vec<CompatRequiredStateEntry>,
+
+	#[serde(default)]
+	exclude: Vec<CompatRequiredStateEntry>,
+
+	#[serde(default)]
+	lazy_members: bool,
 }
 
 fn deserialize_required_state<'de, D>(deserializer: D) -> Result<CompatRequiredState, D::Error>
@@ -281,21 +294,81 @@ where
 		List(Vec<CompatRequiredStateEntry>),
 		Single(CompatRequiredStateEntry),
 		Keyed(BTreeMap<String, CompatRequiredStateEntry>),
+		ByEventType(BTreeMap<StateEventType, Vec<String>>),
+		Object(CompatRequiredStateObject),
 	}
 
 	let entries = match CompatRequiredStateRepr::deserialize(deserializer)? {
-		| CompatRequiredStateRepr::List(entries) => entries,
-		| CompatRequiredStateRepr::Single(entry) => vec![entry],
-		| CompatRequiredStateRepr::Keyed(entries) => entries.into_values().collect(),
+		| CompatRequiredStateRepr::List(entries) => entries
+			.into_iter()
+			.map(compat_required_state_entry_into_tuple)
+			.collect(),
+		| CompatRequiredStateRepr::Single(entry) =>
+			vec![compat_required_state_entry_into_tuple(entry)],
+		| CompatRequiredStateRepr::Keyed(entries) => entries
+			.into_values()
+			.map(compat_required_state_entry_into_tuple)
+			.collect(),
+		| CompatRequiredStateRepr::ByEventType(entries) => entries
+			.into_iter()
+			.flat_map(|(event_type, state_keys)| {
+				state_keys
+					.into_iter()
+					.map(move |state_key| (event_type.clone(), state_key))
+			})
+			.collect(),
+		| CompatRequiredStateRepr::Object(object) =>
+			compat_required_state_object_into_tuples(object),
 	};
 
-	Ok(entries
+	Ok(entries)
+}
+
+fn compat_required_state_object_into_tuples(
+	object: CompatRequiredStateObject,
+) -> CompatRequiredState {
+	let mut entries = object
+		.include
 		.into_iter()
-		.map(|entry| match entry {
-			| CompatRequiredStateEntry::Tuple(state) => state,
-			| CompatRequiredStateEntry::Map { event_type, state_key } => (event_type, state_key),
-		})
-		.collect())
+		.map(compat_required_state_entry_into_tuple)
+		.collect::<Vec<_>>();
+
+	if object.lazy_members {
+		entries.push((StateEventType::RoomMember, "$LAZY".to_owned()));
+	}
+
+	let excluded = object
+		.exclude
+		.into_iter()
+		.map(compat_required_state_entry_into_tuple)
+		.collect::<Vec<_>>();
+
+	if !excluded.is_empty() {
+		entries.retain(|entry| {
+			!excluded
+				.iter()
+				.any(|excluded| required_state_entry_matches(entry, excluded))
+		});
+	}
+
+	entries
+}
+
+fn compat_required_state_entry_into_tuple(
+	entry: CompatRequiredStateEntry,
+) -> (StateEventType, String) {
+	match entry {
+		| CompatRequiredStateEntry::Tuple(state) => state,
+		| CompatRequiredStateEntry::Map { event_type, state_key } => (event_type, state_key),
+	}
+}
+
+fn required_state_entry_matches(
+	entry: &(StateEventType, String),
+	filter: &(StateEventType, String),
+) -> bool {
+	(filter.0.to_string() == "*" || filter.0 == entry.0)
+		&& (filter.1 == "*" || filter.1 == entry.1)
 }
 
 pub(crate) struct CompatSyncRequest {
@@ -1840,6 +1913,48 @@ async fn direct_rooms_for_user(
 #[cfg(test)]
 mod tests {
 	use super::*;
+
+	#[derive(Deserialize)]
+	struct RequiredStateFixture {
+		#[serde(deserialize_with = "deserialize_required_state")]
+		required_state: CompatRequiredState,
+	}
+
+	#[test]
+	fn required_state_accepts_event_type_map() {
+		let fixture: RequiredStateFixture = serde_json::from_str(
+			r#"{"required_state":{"m.room.name":[""],"m.room.member":["$LAZY"]}}"#,
+		)
+		.expect("event-type keyed required_state should deserialize");
+
+		assert_eq!(fixture.required_state, vec![
+			(StateEventType::RoomMember, "$LAZY".to_owned()),
+			(StateEventType::RoomName, String::new()),
+		]);
+	}
+
+	#[test]
+	fn required_state_accepts_stable_include_object() {
+		let fixture: RequiredStateFixture = serde_json::from_str(
+			r#"{"required_state":{"include":[{"type":"m.room.name","state_key":""}],"lazy_members":true}}"#,
+		)
+		.expect("stable include/lazy_members required_state should deserialize");
+
+		assert_eq!(fixture.required_state, vec![
+			(StateEventType::RoomName, String::new()),
+			(StateEventType::RoomMember, "$LAZY".to_owned()),
+		]);
+	}
+
+	#[test]
+	fn required_state_accepts_stable_exclude_object() {
+		let fixture: RequiredStateFixture = serde_json::from_str(
+			r#"{"required_state":{"include":[{"type":"m.room.name","state_key":""},{"type":"m.room.member","state_key":"*"}],"exclude":[{"type":"m.room.member","state_key":"*"}]}}"#,
+		)
+		.expect("stable exclude required_state should deserialize");
+
+		assert_eq!(fixture.required_state, vec![(StateEventType::RoomName, String::new())]);
+	}
 
 	#[test]
 	fn expanded_timeline_requires_a_previous_limit() {
