@@ -144,7 +144,27 @@ async fn load_timeline(
 
 	// The timeline is limited if there are still more PDUs in the stream or if we
 	// fetched more than `limit`
-	let limited = pdus.len() > limit || pdu_stream.next().await.is_some();
+	let mut limited = pdus.len() > limit || pdu_stream.next().await.is_some();
+
+	// If we didn't hit the limit, check if there is a topological gap.
+	// A topological gap exists if the oldest returned event has a prev_event that
+	// is not in the timeline.
+	if !limited && starting_count.is_some() {
+		if let Some((_, oldest_pdu)) = pdus.front() {
+			for prev_id in oldest_pdu.prev_events() {
+				if services
+					.rooms
+					.timeline
+					.get_pdu_count(prev_id)
+					.await
+					.is_err()
+				{
+					limited = true;
+					break;
+				}
+			}
+		}
+	}
 
 	// capture the count of the absolute earliest PDU we will return as the
 	// prev_batch token. This must be determined before topological sort changes
