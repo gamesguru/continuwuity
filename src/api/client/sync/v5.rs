@@ -102,6 +102,18 @@ impl SyncEndpoint {
 	fn enforces_stable_limits(self) -> bool { matches!(self, Self::StableV5) }
 }
 
+#[derive(Clone, Copy)]
+struct CachePolicy {
+	endpoint: SyncEndpoint,
+	persist: bool,
+}
+
+impl CachePolicy {
+	fn should_store(self, conn_id: Option<&String>) -> bool {
+		self.persist && (self.endpoint.stores_connection_without_id() || conn_id.is_some())
+	}
+}
+
 struct BuildContext<'a> {
 	sender_user: &'a UserId,
 	sender_device: &'a DeviceId,
@@ -800,9 +812,8 @@ async fn build_sync_events_v5(
 		sync_info,
 		next_batch,
 		known_rooms,
-		endpoint,
 		required_state_excludes,
-		persist_cache,
+		CachePolicy { endpoint, persist: persist_cache },
 		&mut todo_rooms,
 	)
 	.await;
@@ -843,9 +854,8 @@ async fn fetch_subscriptions(
 	(sender_user, sender_device, _, body): SyncInfo<'_>,
 	next_batch: u64,
 	known_rooms: &KnownRooms,
-	endpoint: SyncEndpoint,
 	required_state_excludes: Option<&CompatRequiredStateExcludes>,
-	persist_cache: bool,
+	cache_policy: CachePolicy,
 	todo_rooms: &mut TodoRooms,
 ) {
 	let mut known_subscription_rooms = BTreeSet::new();
@@ -898,7 +908,7 @@ async fn fetch_subscriptions(
 	//	body.room_subscriptions.remove(&r);
 	//}
 
-	if persist_cache && (endpoint.stores_connection_without_id() || body.conn_id.is_some()) {
+	if cache_policy.should_store(body.conn_id.as_ref()) {
 		let snake_key = into_snake_key(sender_user, sender_device, body.conn_id.clone());
 		services.sync.update_snake_sync_known_rooms(
 			&snake_key,
