@@ -1148,7 +1148,7 @@ impl Service {
 			.stream_prefix(&prefix)
 			.ignore_err()
 			.ready_filter_map(move |((_, count), changed_user): KeyVal<'_>| {
-				(count > from && count <= to).then_some((changed_user, count))
+				(count >= from && count <= to).then_some((changed_user, count))
 			})
 	}
 
@@ -1170,7 +1170,7 @@ impl Service {
 			.stream_prefix(&prefix)
 			.ignore_err()
 			.ready_filter_map(move |((_, count), changed_user): KeyVal<'_>| {
-				let in_range = count > from && count <= to;
+				let in_range = count >= from && count <= to;
 
 				tracing::info!(
 					%room_id,

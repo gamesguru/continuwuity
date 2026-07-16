@@ -62,6 +62,7 @@ use crate::{
 const DEFAULT_TIMELINE_LIMIT: usize = 10;
 
 /// A collection of updates to users' device lists, used for E2EE.
+#[derive(Clone)]
 struct DeviceListUpdates {
 	changed: HashSet<OwnedUserId>,
 	left: HashSet<OwnedUserId>,
@@ -580,6 +581,13 @@ pub(crate) async fn build_sync_events(
 		.await;
 	}
 
+	let device_lists_json = (!device_list_updates.is_empty()).then(|| {
+		serde_json::json!({
+			"changed": device_list_updates.changed.iter().collect::<Vec<_>>(),
+			"left": device_list_updates.left.iter().collect::<Vec<_>>(),
+		})
+	});
+
 	let ruma_response = sync_events::v3::Response {
 		next_batch: current_count.to_string(),
 		rooms: Rooms {
@@ -665,6 +673,27 @@ pub(crate) async fn build_sync_events(
 			if let Some(rooms) = rooms_obj {
 				rooms.insert("knock".to_owned(), knock_val);
 			}
+		}
+	}
+
+	// Ruma may omit non-empty device_lists during serialization in some edge
+	// cases. Re-inject the computed payload so /sync cannot lose a one-shot
+	// device-list update between internal assembly and the final JSON body.
+	if let Some(device_lists_json) = device_lists_json {
+		tracing::info!(
+			changed = device_lists_json
+				.get("changed")
+				.and_then(|v| v.as_array())
+				.map_or(0, Vec::len),
+			left = device_lists_json
+				.get("left")
+				.and_then(|v| v.as_array())
+				.map_or(0, Vec::len),
+			"sync response device_lists"
+		);
+
+		if let Some(obj) = val.as_object_mut() {
+			obj.insert("device_lists".to_owned(), device_lists_json);
 		}
 	}
 
