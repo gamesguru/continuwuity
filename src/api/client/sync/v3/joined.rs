@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use conduwuit::{
-	Error, Result, at, debug, debug_warn, extract_variant,
+	Error, Result, at, debug, debug_warn, extract_variant, info,
 	matrix::{
 		Event,
 		event::Matches,
@@ -1018,7 +1018,7 @@ async fn build_device_list_updates(
 		.await;
 
 	if !room_key_changes.is_empty() {
-		debug!(
+		info!(
 			%room_id,
 			syncing_user = %syncing_user,
 			changed_users = ?room_key_changes,

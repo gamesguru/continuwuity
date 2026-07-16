@@ -1170,7 +1170,19 @@ impl Service {
 			.stream_prefix(&prefix)
 			.ignore_err()
 			.ready_filter_map(move |((_, count), changed_user): KeyVal<'_>| {
-				(count > from && count <= to).then_some((changed_user, count))
+				let in_range = count > from && count <= to;
+
+				tracing::info!(
+					%room_id,
+					%changed_user,
+					count,
+					from,
+					to,
+					in_range,
+					"room_keys_changed: scanned row"
+				);
+
+				in_range.then_some((changed_user, count))
 			})
 	}
 
@@ -1223,6 +1235,15 @@ impl Service {
 		for room_id in joined_rooms {
 			let key = (&room_id, count);
 			self.db.keychangeid_userid.put_raw(key, user_id);
+
+			self.services
+				.state_cache
+				.local_users_in_room(&room_id)
+				.ready_for_each(|local_user_id| {
+					let key = (local_user_id, count);
+					self.db.keychangeid_userid.put_raw(key, user_id);
+				})
+				.await;
 
 			tracing::info!(%user_id, %room_id, "Flushing room for device key update");
 
