@@ -114,8 +114,12 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		.ruma_route(&client::invite_user_route)
 		.ruma_route(&client::set_room_visibility_route)
 		.ruma_route(&client::get_room_visibility_route)
-		.ruma_route(&client::get_public_rooms_route)
-		.ruma_route(&client::get_public_rooms_filtered_route)
+		.merge(
+			Router::new()
+				.ruma_route(&client::get_public_rooms_route)
+				.ruma_route(&client::get_public_rooms_filtered_route)
+				.layer(axum::middleware::map_response(inject_public_join_rule)),
+		)
 		.ruma_route(&client::search_users_route)
 		.ruma_route(&client::get_member_events_route)
 		.ruma_route(&client::get_protocols_route)
@@ -262,8 +266,12 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 				"/_matrix/key/v2/server/{key_id}",
 				get(server::get_server_keys_deprecated_route),
 			)
-			.ruma_route(&server::get_public_rooms_route)
-			.ruma_route(&server::get_public_rooms_filtered_route)
+			.merge(
+			Router::new()
+				.ruma_route(&server::get_public_rooms_route)
+				.ruma_route(&server::get_public_rooms_filtered_route)
+				.layer(axum::middleware::map_response(inject_public_join_rule)),
+		)
 			.ruma_route(&server::send_transaction_message_route)
 			.ruma_route(&server::get_event_route)
 			.ruma_route(&server::get_backfill_route)
@@ -394,4 +402,32 @@ async fn legacy_media_disabled() -> impl IntoResponse {
 
 async fn federation_disabled() -> impl IntoResponse {
 	err!(Request(Forbidden("Federation is disabled.")))
+}
+
+async fn inject_public_join_rule(res: axum::response::Response) -> axum::response::Response {
+	use axum::body::to_bytes;
+
+	let (parts, body) = res.into_parts();
+
+	let Ok(bytes) = to_bytes(body, usize::MAX).await else {
+		return axum::response::Response::from_parts(parts, axum::body::Body::empty());
+	};
+
+	if let Ok(mut json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+		if let Some(chunk) = json.get_mut("chunk").and_then(|c| c.as_array_mut()) {
+			for room in chunk {
+				if room.get("join_rule").is_none() {
+					room["join_rule"] = serde_json::json!("public");
+				}
+			}
+		}
+		if let Ok(modified_bytes) = serde_json::to_vec(&json) {
+			return axum::response::Response::from_parts(
+				parts,
+				axum::body::Body::from(modified_bytes),
+			);
+		}
+	}
+
+	axum::response::Response::from_parts(parts, axum::body::Body::from(bytes))
 }
