@@ -115,8 +115,8 @@ pub async fn append_pdu<'a, Leaves>(
 where
 	Leaves: Iterator<Item = &'a EventId> + Send + 'a,
 {
-	// Coalesce database writes for the remainder of this scope.
-	let _cork = self.db.db.cork();
+	// Coalesce timeline writes; flush before pub'ing receipt changes / waking sync.
+	let cork = self.db.db.cork_and_flush();
 
 	let shortroomid = self
 		.services
@@ -194,6 +194,7 @@ where
 
 	// Insert pdu
 	self.db.append_pdu(&pdu_id, pdu, &pdu_json, count2).await;
+	drop(cork);
 
 	let receipt_content = BTreeMap::from_iter([(
 		pdu.event_id().to_owned(),
