@@ -112,7 +112,7 @@ if [[ "$RUN_TESTS" =~ ^\^?(Test[[:alnum:]_]+)(/.*)?\$?$ ]]; then
     test_name="${BASH_REMATCH[1]}"
     mapfile -t matched_packages < <(
         cd "$COMPLEMENT_SRC"
-        rg -l --glob '*_test.go' "^func[[:space:]]+${test_name}\\(" tests \
+        rg -l --glob '*_test.go' "^func[[:space:]]+${test_name}" tests \
             | xargs -r -n1 dirname \
             | sed 's#^#./#' \
             | sort -u
