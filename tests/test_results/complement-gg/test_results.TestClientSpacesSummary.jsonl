@@ -1,6 +1,6 @@
 {"Action":"fail","Test":"TestClientSpacesSummary"}
 {"Action":"pass","Test":"TestClientSpacesSummary/max_depth"}
-{"Action":"fail","Test":"TestClientSpacesSummary/pagination"}
+{"Action":"pass","Test":"TestClientSpacesSummary/pagination"}
 {"Action":"pass","Test":"TestClientSpacesSummary/query_whole_graph"}
 {"Action":"pass","Test":"TestClientSpacesSummary/redact_link"}
 {"Action":"fail","Test":"TestClientSpacesSummary/suggested_only"}
