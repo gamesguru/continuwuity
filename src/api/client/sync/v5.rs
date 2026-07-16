@@ -192,7 +192,20 @@ fn deserialize_ranges<'de, D>(deserializer: D) -> Result<CompatRanges, D::Error>
 where
 	D: serde::Deserializer<'de>,
 {
-	let entries = Vec::<CompatRangeEntry>::deserialize(deserializer)?;
+	#[derive(Deserialize)]
+	#[serde(untagged)]
+	enum CompatRangesRepr {
+		List(Vec<CompatRangeEntry>),
+		Single(CompatRangeEntry),
+		Keyed(BTreeMap<String, CompatRangeEntry>),
+	}
+
+	let entries = match CompatRangesRepr::deserialize(deserializer)? {
+		| CompatRangesRepr::List(entries) => entries,
+		| CompatRangesRepr::Single(entry) => vec![entry],
+		| CompatRangesRepr::Keyed(entries) => entries.into_values().collect(),
+	};
+
 	Ok(entries
 		.into_iter()
 		.map(|entry| match entry {
@@ -216,7 +229,20 @@ fn deserialize_required_state<'de, D>(deserializer: D) -> Result<CompatRequiredS
 where
 	D: serde::Deserializer<'de>,
 {
-	let entries = Vec::<CompatRequiredStateEntry>::deserialize(deserializer)?;
+	#[derive(Deserialize)]
+	#[serde(untagged)]
+	enum CompatRequiredStateRepr {
+		List(Vec<CompatRequiredStateEntry>),
+		Single(CompatRequiredStateEntry),
+		Keyed(BTreeMap<String, CompatRequiredStateEntry>),
+	}
+
+	let entries = match CompatRequiredStateRepr::deserialize(deserializer)? {
+		| CompatRequiredStateRepr::List(entries) => entries,
+		| CompatRequiredStateRepr::Single(entry) => vec![entry],
+		| CompatRequiredStateRepr::Keyed(entries) => entries.into_values().collect(),
+	};
+
 	Ok(entries
 		.into_iter()
 		.map(|entry| match entry {
