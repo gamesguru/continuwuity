@@ -1409,33 +1409,46 @@ pub(crate) fn build_receipt_map(
 			.next()
 			.expect("we only use one event per read receipt");
 
-		let receipt = receipt
-			.remove(&ReceiptType::Read)
-			.expect("our read receipts always set this")
-			.remove(&user_id)
-			.expect("our read receipts always have the user here");
+		let Some(mut users) = receipt.remove(&ReceiptType::Read) else {
+			continue;
+		};
+		let Some(receipt) = users.remove(&user_id) else {
+			continue;
+		};
 
+		let is_unthreaded =
+			matches!(receipt.thread, ruma::events::receipt::ReceiptThread::Unthreaded);
 		let receipt_data = ReceiptData {
 			data: receipt,
 			event_ids: vec![event_id.clone()],
 		};
 
 		match read.entry(user_id) {
-			| Entry::Vacant(v) => {
-				v.insert(receipt_data);
-				if num.fetch_add(1, Ordering::Relaxed) >= limit.saturating_sub(1) {
+			| Entry::Vacant(e) => {
+				let mut current = num.load(Ordering::Relaxed);
+				loop {
+					if current >= limit {
+						break;
+					}
+					match num.compare_exchange_weak(
+						current,
+						current.saturating_add(1),
+						Ordering::Relaxed,
+						Ordering::Relaxed,
+					) {
+						| Ok(_) => break,
+						| Err(observed) => current = observed,
+					}
+				}
+				if current >= limit {
 					break;
 				}
+				e.insert(receipt_data);
 			},
-			| Entry::Occupied(mut o) => {
-				let is_unthreaded = matches!(
-					receipt_data.data.thread,
-					ruma::events::receipt::ReceiptThread::Unthreaded
-				);
+			| Entry::Occupied(mut e) =>
 				if is_unthreaded {
-					o.insert(receipt_data);
-				}
-			},
+					e.insert(receipt_data);
+				},
 		}
 	}
 

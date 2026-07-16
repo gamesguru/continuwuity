@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests;
-use axum::extract::State;
+use axum::{extract::State, response::IntoResponse};
 use axum_client_ip::ClientIp;
 use conduwuit::{
 	Err, Result, RoomVersion, err, info,
@@ -36,7 +36,7 @@ pub(crate) async fn send_state_event_for_key_route(
 	State(services): State<crate::State>,
 	ClientIp(ip): ClientIp,
 	body: Ruma<send_state_event::v3::Request>,
-) -> Result<RumaResponse<send_state_event::v3::Response>> {
+) -> Result<axum::response::Response> {
 	let sender_user = body.sender_user();
 	services
 		.users
@@ -47,23 +47,48 @@ pub(crate) async fn send_state_event_for_key_route(
 		return Err!(Request(UserSuspended("You cannot perform this action while suspended.")));
 	}
 
-	Ok(RumaResponse(send_state_event::v3::Response {
-		event_id: send_state_event_for_key_helper(
-			&services,
-			sender_user,
-			&body.room_id,
-			&body.event_type,
-			&body.body.body,
-			&body.state_key,
-			if body.appservice_info.is_some() {
-				body.timestamp
-			} else {
-				None
-			},
-		)
-		.boxed()
-		.await?,
-	}))
+	if let Some(delay) = body.delay {
+		if std::time::SystemTime::now().checked_add(delay).is_none() {
+			return Err!(Request(InvalidParam("org.matrix.msc4140.delay is too large.")));
+		}
+		let event = conduwuit_service::rooms::delayed_events::ScheduledDelayedEvent {
+			event_type: body.event_type.clone().into(),
+			state_key: Some(body.state_key.clone()),
+			content: body.body.body.cast_ref().clone(),
+			user_id: sender_user.to_owned(),
+			room_id: body.room_id.clone(),
+			running_since: std::time::SystemTime::now(),
+			delay,
+		};
+		let delay_id = services
+			.rooms
+			.delayed_events
+			.queue_delayed_event(event)
+			.await?;
+
+		return Ok(axum::Json(serde_json::json!({
+			"delay_id": delay_id,
+		}))
+		.into_response());
+	}
+
+	let event_id = send_state_event_for_key_helper(
+		&services,
+		sender_user,
+		&body.room_id,
+		&body.event_type,
+		&body.body.body,
+		&body.state_key,
+		if body.appservice_info.is_some() {
+			body.timestamp
+		} else {
+			None
+		},
+	)
+	.boxed()
+	.await?;
+
+	Ok(RumaResponse(send_state_event::v3::Response { event_id }).into_response())
 }
 
 /// # `PUT /_matrix/client/*/rooms/{roomId}/state/{eventType}`
@@ -73,7 +98,7 @@ pub(crate) async fn send_state_event_for_empty_key_route(
 	State(services): State<crate::State>,
 	ClientIp(ip): ClientIp,
 	body: Ruma<send_state_event::v3::Request>,
-) -> Result<RumaResponse<send_state_event::v3::Response>> {
+) -> Result<axum::response::Response> {
 	send_state_event_for_key_route(State(services), ClientIp(ip), body).await
 }
 

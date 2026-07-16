@@ -205,15 +205,18 @@ async fn build_ephemeral(
 				.await;
 
 			if let Ok(event) = event {
-				// Synapse and Dendrite omit m.typing events on initial sync if the user list is
-				// empty.
-				if !event.content.user_ids.is_empty() || last_sync_end_count.is_some() {
-					return Some(
-						Raw::new(&event)
-							.expect("typing event should be valid")
-							.cast(),
-					);
+				// only suppress an empty typing list on a fresh (initial) sync; if the
+				// list changed since the last sync, an empty list means typing was
+				// explicitly stopped and clients need to observe that transition
+				if event.content.user_ids.is_empty() && last_sync_end_count.is_none() {
+					return None;
 				}
+
+				return Some(
+					Raw::new(&event)
+						.expect("typing event should be valid")
+						.cast(),
+				);
 			}
 		}
 

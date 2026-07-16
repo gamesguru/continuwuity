@@ -624,7 +624,7 @@ pub struct Config {
 	/// the minimum delay before the first retry after a failed transaction.
 	/// Subsequent retries use exponential backoff: base × 2^(tries-1).
 	///
-	/// default: 2
+	/// default: 5
 	#[serde(default = "default_sender_retry_backoff_base")]
 	pub sender_retry_backoff_base: u64,
 
@@ -2683,7 +2683,7 @@ pub struct DraupnirConfig {
 	pub secret: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, Default)]
+#[derive(Clone, Debug, Deserialize)]
 #[config_example_generator(
 	filename = "conduwuit-example.toml",
 	section = "global.experimental_features",
@@ -2701,6 +2701,16 @@ pub struct ExperimentalConfig {
 	/// MSC4222: state_after in sync v2
 	#[serde(default)]
 	pub msc4222_enabled: bool,
+}
+
+impl Default for ExperimentalConfig {
+	fn default() -> Self {
+		Self {
+			msc3266_enabled: false,
+			msc4222_enabled: false,
+			msc3030_enabled: true,
+		}
+	}
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -3007,7 +3017,7 @@ fn default_sender_timeout() -> u64 { 180 }
 
 fn default_sender_idle_timeout() -> u64 { 180 }
 
-fn default_sender_retry_backoff_base() -> u64 { 2 }
+fn default_sender_retry_backoff_base() -> u64 { 5 }
 
 fn default_sender_retry_backoff_limit() -> u64 { 86400 }
 
