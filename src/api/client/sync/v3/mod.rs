@@ -4,7 +4,6 @@ mod state;
 
 use std::{
 	collections::{BTreeMap, HashMap, HashSet},
-	sync::atomic::Ordering,
 	time::Duration,
 };
 
@@ -305,12 +304,7 @@ pub(crate) async fn build_sync_events(
 ) -> Result<serde_json::Value, RumaResponse<UiaaResponse>> {
 	let (syncing_user, syncing_device) = body.sender();
 
-	let current_count = services.globals.current_count()?.max(
-		services
-			.users
-			.last_device_key_update_count
-			.load(Ordering::Relaxed),
-	);
+	let current_count = services.globals.current_count()?;
 
 	// the `since` token is the last sync end count stringified
 	let last_sync_end_count = body
