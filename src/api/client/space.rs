@@ -143,7 +143,7 @@ where
 					.collect();
 
 				if populate {
-					rooms.push(summary_to_chunk(summary.clone()));
+					rooms.push(summary_to_chunk(summary.clone(), suggested_only));
 				} else {
 					let mut s_ids = short_room_ids.clone();
 					let target = s_ids.nth(depth);
