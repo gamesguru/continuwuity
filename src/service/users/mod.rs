@@ -1179,22 +1179,56 @@ impl Service {
 
 		tracing::info!(%user_id, "mark_device_key_update called");
 
-		self.services
+		let mut joined_rooms = self
+			.services
 			.state_cache
 			.rooms_joined(user_id)
-			.ready_for_each(|room_id| {
-				let key = (room_id, count);
-				self.db.keychangeid_userid.put_raw(key, user_id);
-
-				tracing::info!(%user_id, %room_id, "Flushing room for device key update");
-
-				let sending = self.services.sending.clone();
-				let room_id = room_id.to_owned();
-				self.services.server.runtime().spawn(async move {
-					let _ = sending.flush_room(&room_id).await;
-				});
-			})
+			.map(ToOwned::to_owned)
+			.collect::<Vec<_>>()
 			.await;
+
+		if joined_rooms.is_empty() && !self.services.globals.user_is_local(user_id) {
+			let mut server_rooms = self
+				.services
+				.state_cache
+				.server_rooms(user_id.server_name())
+				.map(ToOwned::to_owned)
+				.collect::<Vec<_>>()
+				.await;
+
+			while let Some(room_id) = server_rooms.pop() {
+				let is_member = self
+					.services
+					.state_cache
+					.room_members(&room_id)
+					.any(|member_id| async move { member_id == user_id })
+					.await;
+
+				if is_member {
+					joined_rooms.push(room_id);
+				}
+			}
+
+			if !joined_rooms.is_empty() {
+				tracing::warn!(
+					%user_id,
+					rooms = joined_rooms.len(),
+					"Recovered remote device-key update rooms via server-room fallback"
+				);
+			}
+		}
+
+		for room_id in joined_rooms {
+			let key = (&room_id, count);
+			self.db.keychangeid_userid.put_raw(key, user_id);
+
+			tracing::info!(%user_id, %room_id, "Flushing room for device key update");
+
+			let sending = self.services.sending.clone();
+			self.services.server.runtime().spawn(async move {
+				let _ = sending.flush_room(&room_id).await;
+			});
+		}
 
 		let key = (user_id, count);
 		self.db.keychangeid_userid.put_raw(key, user_id);
