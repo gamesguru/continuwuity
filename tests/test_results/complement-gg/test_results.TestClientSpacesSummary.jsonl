@@ -1,0 +1,7 @@
+{"Action":"fail","Test":"TestClientSpacesSummary"}
+{"Action":"pass","Test":"TestClientSpacesSummary/max_depth"}
+{"Action":"fail","Test":"TestClientSpacesSummary/pagination"}
+{"Action":"fail","Test":"TestClientSpacesSummary/query_whole_graph"}
+{"Action":"fail","Test":"TestClientSpacesSummary/redact_link"}
+{"Action":"fail","Test":"TestClientSpacesSummary/suggested_only"}
+{"Action":"pass","Test":"TestClientSpacesSummaryJoinRules"}
