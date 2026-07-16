@@ -67,6 +67,20 @@ fi
 toplevel="$(git rev-parse --show-toplevel)"
 pushd "$toplevel" > /dev/null
 
+# Namespace Complement's generated containers, networks, and localhost/complement
+# blueprint images per branch/worktree. The prefix is stable so local blueprint
+# caches remain useful, but different checkouts/branches do not clobber each other.
+if [ -z "${COMPLEMENT_PACKAGE_NAMESPACE_PREFIX:-}" ]; then
+    branch_slug=$( (git branch --show-current 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo detached) \
+        | tr '[:upper:]/:@ ' '[:lower:]----' \
+        | tr -cs 'a-z0-9_.-' '-' \
+        | sed 's/^-//;s/-$//' \
+        | cut -c1-48)
+    branch_slug="${branch_slug:-detached}"
+    workspace_hash=$(printf '%s' "$toplevel" | sha1sum | awk '{print substr($1, 1, 8)}')
+    export COMPLEMENT_PACKAGE_NAMESPACE_PREFIX="${branch_slug}_${workspace_hash}"
+fi
+
 # Mark homeserver containers spawned by this wrapper run so cleanup never
 # guesses based on timing or broad complement_ container names.
 COMPLEMENT_WRAPPER_TOKEN="${COMPLEMENT_WRAPPER_TOKEN:-"complement-$$-$(date +%s%N)"}"
@@ -79,7 +93,7 @@ export COMPLEMENT_SHARE_ENV_PREFIX="$COMPLEMENT_WRAPPER_ENV_PREFIX"
 # Cleanup only Complement containers spawned by this wrapper run.
 cleanup_complement_containers() {
     local containers container ours=()
-    mapfile -t containers < <(docker ps -aq --filter "name=complement_")
+    mapfile -t containers < <(docker ps -aq --filter "name=complement")
 
     for container in "${containers[@]}"; do
         if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container" 2>/dev/null \
