@@ -67,13 +67,30 @@ fi
 toplevel="$(git rev-parse --show-toplevel)"
 pushd "$toplevel" > /dev/null
 
-# Cleanup leftover Complement containers and images
+# Mark homeserver containers spawned by this wrapper run so cleanup never
+# guesses based on timing or broad complement_ container names.
+COMPLEMENT_WRAPPER_TOKEN="${COMPLEMENT_WRAPPER_TOKEN:-"complement-$$-$(date +%s%N)"}"
+COMPLEMENT_WRAPPER_ENV_PREFIX="${COMPLEMENT_SHARE_ENV_PREFIX:-COMPLEMENT_WRAPPER_}"
+COMPLEMENT_WRAPPER_ENV_NAME="${COMPLEMENT_WRAPPER_ENV_PREFIX}COMPLEMENT_WRAPPER_TOKEN"
+printf -v "$COMPLEMENT_WRAPPER_ENV_NAME" '%s' "$COMPLEMENT_WRAPPER_TOKEN"
+export "$COMPLEMENT_WRAPPER_ENV_NAME"
+export COMPLEMENT_SHARE_ENV_PREFIX="$COMPLEMENT_WRAPPER_ENV_PREFIX"
+
+# Cleanup only Complement containers spawned by this wrapper run.
 cleanup_complement_containers() {
-    local containers
-    containers=$(docker ps -a --filter "name=complement_" -q)
-    if [ -n "$containers" ]; then
-        echo "Cleaning up leftover Complement containers..."
-        echo "$containers" | xargs -r docker rm -f
+    local containers container ours=()
+    mapfile -t containers < <(docker ps -aq --filter "name=complement_")
+
+    for container in "${containers[@]}"; do
+        if docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$container" 2>/dev/null \
+            | grep -Fxq "COMPLEMENT_WRAPPER_TOKEN=$COMPLEMENT_WRAPPER_TOKEN"; then
+            ours+=("$container")
+        fi
+    done
+
+    if [ "${#ours[@]}" -gt 0 ]; then
+        echo "Cleaning up Complement containers spawned by this run..."
+        printf '%s\n' "${ours[@]}" | xargs -r docker rm -f
     fi
 
     # TODO: perhaps also prune images here?

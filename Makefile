@@ -317,7 +317,7 @@ build-docs:     ##H Regenerate docs (admin commands, etc.)
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 COMPLEMENT_DIR ?=
-COMPLEMENT_IMAGE ?= continuwuity:complement
+COMPLEMENT_IMAGE ?= continuwuity:complement-$(shell (git branch --show-current 2>/dev/null || git rev-parse --short HEAD 2>/dev/null || echo detached) | tr '[:upper:]/:@ ' '[:lower:]----' | tr -cs 'a-z0-9_.-' '-' | sed 's/^-//;s/-$$//' | cut -c1-96)
 COMPLEMENT_BASE_IMAGE ?= ubuntu:latest
 
 .PHONY: complement/build
