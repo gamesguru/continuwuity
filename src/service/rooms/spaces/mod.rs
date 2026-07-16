@@ -595,6 +595,14 @@ pub fn get_parent_children_via(
 	parent: &SpaceHierarchyParentSummary,
 	suggested_only: bool,
 ) -> Vec<(OwnedRoomId, Vec<OwnedServerName>)> {
+	let is_space = parent
+		.room_type
+		.as_ref()
+		.is_some_and(|rt| rt.as_str() == "m.space");
+	if !is_space {
+		return Vec::new();
+	}
+
 	let mut children: Vec<_> = parent
 		.children_state
 		.iter()
