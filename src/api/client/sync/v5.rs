@@ -58,6 +58,8 @@ type SyncInfo<'a> = (&'a UserId, &'a DeviceId, u64, &'a sync_events::v5::Request
 type TodoRooms = BTreeMap<OwnedRoomId, (BTreeSet<TypeStateKey>, usize, u64)>;
 type KnownRooms = BTreeMap<String, BTreeMap<OwnedRoomId, u64>>;
 type RoomExtras = BTreeMap<OwnedRoomId, RoomExtra>;
+type CompatRequiredState = Vec<(StateEventType, String)>;
+type CompatRanges = Vec<(UInt, UInt)>;
 
 #[derive(Default, Deserialize)]
 struct CompatRequest {
@@ -82,8 +84,8 @@ struct CompatRequest {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct CompatList {
-	#[serde(default)]
-	ranges: Vec<(UInt, UInt)>,
+	#[serde(default, deserialize_with = "deserialize_ranges")]
+	ranges: CompatRanges,
 
 	#[serde(flatten)]
 	room_details: CompatRoomDetails,
@@ -106,8 +108,12 @@ struct CompatListFilters {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct CompatRoomSubscription {
-	#[serde(default, skip_serializing_if = "Vec::is_empty")]
-	required_state: Vec<(StateEventType, String)>,
+	#[serde(
+		default,
+		skip_serializing_if = "Vec::is_empty",
+		deserialize_with = "deserialize_required_state"
+	)]
+	required_state: CompatRequiredState,
 
 	#[serde(default, skip_serializing_if = "ruma::serde::is_default")]
 	timeline_limit: UInt,
@@ -118,8 +124,12 @@ struct CompatRoomSubscription {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct CompatRoomDetails {
-	#[serde(default, skip_serializing_if = "Vec::is_empty")]
-	required_state: Vec<(StateEventType, String)>,
+	#[serde(
+		default,
+		skip_serializing_if = "Vec::is_empty",
+		deserialize_with = "deserialize_required_state"
+	)]
+	required_state: CompatRequiredState,
 
 	#[serde(default, skip_serializing_if = "ruma::serde::is_default")]
 	timeline_limit: UInt,
@@ -166,6 +176,54 @@ impl From<CompatRequest> for sync_events::v5::Request {
 			extensions: value.extensions,
 		}
 	}
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum CompatRangeEntry {
+	Tuple((UInt, UInt)),
+	Map {
+		start: UInt,
+		end: UInt,
+	},
+}
+
+fn deserialize_ranges<'de, D>(deserializer: D) -> Result<CompatRanges, D::Error>
+where
+	D: serde::Deserializer<'de>,
+{
+	let entries = Vec::<CompatRangeEntry>::deserialize(deserializer)?;
+	Ok(entries
+		.into_iter()
+		.map(|entry| match entry {
+			| CompatRangeEntry::Tuple(range) => range,
+			| CompatRangeEntry::Map { start, end } => (start, end),
+		})
+		.collect())
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum CompatRequiredStateEntry {
+	Tuple((StateEventType, String)),
+	Map {
+		event_type: StateEventType,
+		state_key: String,
+	},
+}
+
+fn deserialize_required_state<'de, D>(deserializer: D) -> Result<CompatRequiredState, D::Error>
+where
+	D: serde::Deserializer<'de>,
+{
+	let entries = Vec::<CompatRequiredStateEntry>::deserialize(deserializer)?;
+	Ok(entries
+		.into_iter()
+		.map(|entry| match entry {
+			| CompatRequiredStateEntry::Tuple(state) => state,
+			| CompatRequiredStateEntry::Map { event_type, state_key } => (event_type, state_key),
+		})
+		.collect())
 }
 
 pub(crate) struct CompatSyncRequest(sync_events::v5::Request);
