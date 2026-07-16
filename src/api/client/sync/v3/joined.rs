@@ -459,13 +459,10 @@ async fn fetch_shortstatehashes(
 	// the room state as of the end of the last sync.
 	let next_hash = async {
 		let hash = match last_sync_end_count {
-			| Some(last_sync_end_count) => services
+			| Some(count) => services
 				.rooms
 				.timeline
-				.prev_shortstatehash(
-					room_id,
-					PduCount::Normal(last_sync_end_count.saturating_add(1)),
-				)
+				.next_shortstatehash(room_id, PduCount::Normal(count))
 				.await
 				.ok(),
 			| None => None,
@@ -476,10 +473,10 @@ async fn fetch_shortstatehashes(
 	let (current_shortstatehash, next_hash) = try_join(current_hash, next_hash).await?;
 
 	// the room state as of the end of the last sync. if next_shortstatehash
-	// returned None (no events after last_sync_end_count), we fall back to
-	// current_shortstatehash IF the room actually existed at that count.
-	// if the room is brand new to this sync stream, we keep it as None so
-	// that we correctly trigger an initial state sync.
+	// returned None (because the room doesn't exist or an error occurred),
+	// we keep it as None so that we correctly trigger an initial state sync.
+	// note: next_shortstatehash correctly falls back to current_shortstatehash
+	// if there are no events after the count.
 	let last_sync_end_shortstatehash = next_hash;
 
 	trace!(
