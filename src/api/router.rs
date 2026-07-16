@@ -169,7 +169,7 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		.route("/_matrix/client/v5/sync", post(client::sync_events_v5_route))
 		.route(
 			"/_matrix/client/unstable/org.matrix.simplified_msc3575/sync",
-			post(client::sync_events_v5_route),
+			post(client::sync_events_unstable_msc3575_route),
 		)
 		.ruma_route(&client::get_context_route)
 		.ruma_route(&client::get_message_events_route)

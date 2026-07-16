@@ -18,7 +18,10 @@ use ruma::{
 	},
 };
 
-pub(crate) use self::{v3::sync_events_route, v5::sync_events_v5_route};
+pub(crate) use self::{
+	v3::sync_events_route,
+	v5::{sync_events_unstable_msc3575_route, sync_events_v5_route},
+};
 
 pub(crate) const DEFAULT_BUMP_TYPES: &[TimelineEventType; 6] =
 	&[CallInvite, PollStart, Beacon, RoomEncrypted, RoomMessage, Sticker];

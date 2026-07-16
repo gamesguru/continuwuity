@@ -61,6 +61,31 @@ type RoomExtras = BTreeMap<OwnedRoomId, RoomExtra>;
 type CompatRequiredState = Vec<(StateEventType, String)>;
 type CompatRanges = Vec<(UInt, UInt)>;
 
+#[derive(Clone, Copy)]
+enum SyncEndpoint {
+	StableV5,
+	UnstableMsc3575,
+}
+
+impl SyncEndpoint {
+	fn stores_connection_without_id(self) -> bool { matches!(self, Self::StableV5) }
+
+	fn validates_exact_pos(self) -> bool { matches!(self, Self::StableV5) }
+
+	fn enforces_stable_limits(self) -> bool { matches!(self, Self::StableV5) }
+}
+
+struct BuildContext<'a> {
+	sender_user: &'a UserId,
+	sender_device: &'a DeviceId,
+	globalsince: u64,
+	body: &'a sync_events::v5::Request,
+	list_filters: Option<&'a BTreeMap<String, CompatListFilters>>,
+	known_rooms: &'a KnownRooms,
+	timeline_limits: &'a BTreeMap<OwnedRoomId, usize>,
+	endpoint: SyncEndpoint,
+}
+
 #[derive(Default, Deserialize)]
 struct CompatRequest {
 	pos: Option<String>,
@@ -349,6 +374,29 @@ pub(crate) async fn sync_events_v5_route(
 	ClientIp(client_ip): ClientIp,
 	body: Ruma<CompatSyncRequest>,
 ) -> Result<axum::response::Response> {
+	Box::pin(sync_events_v5_route_inner(services, client_ip, body, SyncEndpoint::StableV5)).await
+}
+
+pub(crate) async fn sync_events_unstable_msc3575_route(
+	State(ref services): State<crate::State>,
+	ClientIp(client_ip): ClientIp,
+	body: Ruma<CompatSyncRequest>,
+) -> Result<axum::response::Response> {
+	Box::pin(sync_events_v5_route_inner(
+		services,
+		client_ip,
+		body,
+		SyncEndpoint::UnstableMsc3575,
+	))
+	.await
+}
+
+async fn sync_events_v5_route_inner(
+	services: &Services,
+	client_ip: std::net::IpAddr,
+	body: Ruma<CompatSyncRequest>,
+	endpoint: SyncEndpoint,
+) -> Result<axum::response::Response> {
 	debug_assert!(DEFAULT_BUMP_TYPES.is_sorted(), "DEFAULT_BUMP_TYPES is not sorted");
 	let sender_user = body.sender_user.as_ref().expect("user is authenticated");
 	let sender_device = body.sender_device.as_ref().expect("user is authenticated");
@@ -360,11 +408,11 @@ pub(crate) async fn sync_events_v5_route(
 
 	let CompatSyncRequest { mut request, list_filters } = body.body;
 
-	if request.lists.len() > 100 {
+	if endpoint.enforces_stable_limits() && request.lists.len() > 100 {
 		return Err!(Request(Unknown("More than 100 lists are not supported.")));
 	}
 
-	if request.room_subscriptions.len() > 100 {
+	if endpoint.enforces_stable_limits() && request.room_subscriptions.len() > 100 {
 		return Err!(Request(Unknown("More than 100 room subscriptions are not supported.")));
 	}
 
@@ -381,11 +429,15 @@ pub(crate) async fn sync_events_v5_route(
 
 	let snake_key = into_snake_key(sender_user, sender_device, conn_id);
 
-	if globalsince != 0
-		&& !services
+	let known_connection = if endpoint.validates_exact_pos() {
+		services
 			.sync
 			.snake_connection_token_valid(&snake_key, globalsince)
-	{
+	} else {
+		services.sync.snake_connection_cached(&snake_key)
+	};
+
+	if globalsince != 0 && !known_connection {
 		return Err!(Request(UnknownPos(
 			"Connection data unknown to server; restarting sync stream."
 		)));
@@ -400,18 +452,21 @@ pub(crate) async fn sync_events_v5_route(
 	let (known_rooms, timeline_limits) = services
 		.sync
 		.update_snake_sync_request_with_cache(&snake_key, &mut request);
-
-	let (mut response, mut room_extras) = build_sync_events_v5(
-		services,
+	let list_filters = endpoint
+		.stores_connection_without_id()
+		.then_some(&list_filters);
+	let context = BuildContext {
 		sender_user,
 		sender_device,
 		globalsince,
-		&request,
-		&list_filters,
-		&known_rooms,
-		&timeline_limits,
-	)
-	.await?;
+		body: &request,
+		list_filters,
+		known_rooms: &known_rooms,
+		timeline_limits: &timeline_limits,
+		endpoint,
+	};
+
+	let (mut response, mut room_extras) = build_sync_events_v5(services, &context).await?;
 
 	if response.rooms.is_empty() && response.extensions.is_empty() {
 		// Hang until new info arrives, or the client's timeout expires
@@ -421,17 +476,7 @@ pub(crate) async fn sync_events_v5_route(
 
 				// Rebuild the response after waking up to avoid returning advanced tokens
 				// without their associated events.
-				(response, room_extras) = build_sync_events_v5(
-					services,
-					sender_user,
-					sender_device,
-					globalsince,
-					&request,
-					&list_filters,
-					&known_rooms,
-					&timeline_limits,
-				)
-				.await?;
+				(response, room_extras) = build_sync_events_v5(services, &context).await?;
 			}
 		}
 	}
@@ -442,22 +487,28 @@ pub(crate) async fn sync_events_v5_route(
 		receipts = ?response.extensions.receipts.rooms.len(),
 		"responding to request with"
 	);
-	services
-		.sync
-		.update_snake_sync_pos(&snake_key, response.pos.parse().unwrap_or(globalsince));
+	if endpoint.validates_exact_pos() {
+		services
+			.sync
+			.update_snake_sync_pos(&snake_key, response.pos.parse().unwrap_or(globalsince));
+	}
 	sync_events_v5_json_response(response, room_extras)
 }
 
 async fn build_sync_events_v5(
 	services: &Services,
-	sender_user: &UserId,
-	sender_device: &DeviceId,
-	globalsince: u64,
-	body: &sync_events::v5::Request,
-	list_filters: &BTreeMap<String, CompatListFilters>,
-	known_rooms: &KnownRooms,
-	timeline_limits: &BTreeMap<OwnedRoomId, usize>,
+	context: &BuildContext<'_>,
 ) -> Result<(sync_events::v5::Response, RoomExtras)> {
+	let BuildContext {
+		sender_user,
+		sender_device,
+		globalsince,
+		body,
+		list_filters,
+		known_rooms,
+		timeline_limits,
+		endpoint,
+	} = *context;
 	let next_batch = services.globals.current_count()?;
 
 	let all_joined_rooms = services
@@ -557,6 +608,7 @@ async fn build_sync_events_v5(
 		all_joined_rooms.clone(),
 		all_rooms,
 		list_filters,
+		endpoint,
 		&mut todo_rooms,
 		known_rooms,
 		&mut response,
@@ -564,7 +616,8 @@ async fn build_sync_events_v5(
 	)
 	.await;
 
-	fetch_subscriptions(services, sync_info, next_batch, known_rooms, &mut todo_rooms).await;
+	fetch_subscriptions(services, sync_info, next_batch, known_rooms, endpoint, &mut todo_rooms)
+		.await;
 
 	response.rooms = process_rooms(
 		services,
@@ -582,15 +635,17 @@ async fn build_sync_events_v5(
 	let typing = collect_typing_events(services, sender_user, body, &todo_rooms).await?;
 	response.extensions.typing = typing;
 
-	// Save the current timeline limits back into our snake connections cache.
-	let snake_key = into_snake_key(sender_user, sender_device, body.conn_id.clone());
-	let next_limits: BTreeMap<OwnedRoomId, usize> = todo_rooms
-		.iter()
-		.map(|(room_id, (_, limit, _))| (room_id.clone(), *limit))
-		.collect();
-	services
-		.sync
-		.update_snake_sync_timeline_limits(&snake_key, next_limits);
+	if endpoint.stores_connection_without_id() || body.conn_id.is_some() {
+		// Save the current timeline limits back into our snake connections cache.
+		let snake_key = into_snake_key(sender_user, sender_device, body.conn_id.clone());
+		let next_limits: BTreeMap<OwnedRoomId, usize> = todo_rooms
+			.iter()
+			.map(|(room_id, (_, limit, _))| (room_id.clone(), *limit))
+			.collect();
+		services
+			.sync
+			.update_snake_sync_timeline_limits(&snake_key, next_limits);
+	}
 
 	Ok((response, room_extras))
 }
@@ -600,6 +655,7 @@ async fn fetch_subscriptions(
 	(sender_user, sender_device, _, body): SyncInfo<'_>,
 	next_batch: u64,
 	known_rooms: &KnownRooms,
+	endpoint: SyncEndpoint,
 	todo_rooms: &mut TodoRooms,
 ) {
 	let mut known_subscription_rooms = BTreeSet::new();
@@ -644,13 +700,15 @@ async fn fetch_subscriptions(
 	//	body.room_subscriptions.remove(&r);
 	//}
 
-	let snake_key = into_snake_key(sender_user, sender_device, body.conn_id.clone());
-	services.sync.update_snake_sync_known_rooms(
-		&snake_key,
-		"subscriptions".to_owned(),
-		known_subscription_rooms,
-		next_batch,
-	);
+	if endpoint.stores_connection_without_id() || body.conn_id.is_some() {
+		let snake_key = into_snake_key(sender_user, sender_device, body.conn_id.clone());
+		services.sync.update_snake_sync_known_rooms(
+			&snake_key,
+			"subscriptions".to_owned(),
+			known_subscription_rooms,
+			next_batch,
+		);
+	}
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -661,7 +719,8 @@ async fn handle_lists<'a, Rooms, AllRooms>(
 	all_invited_rooms: Rooms,
 	all_joined_rooms: Rooms,
 	all_rooms: AllRooms,
-	list_filters: &BTreeMap<String, CompatListFilters>,
+	list_filters: Option<&BTreeMap<String, CompatListFilters>>,
+	endpoint: SyncEndpoint,
 	todo_rooms: &'a mut TodoRooms,
 	known_rooms: &'a KnownRooms,
 	response: &'_ mut sync_events::v5::Response,
@@ -679,7 +738,8 @@ where
 			| Some(true) => all_invited_rooms.clone().collect(),
 			| Some(false) => all_joined_rooms.clone().collect(),
 		};
-		let merged_filters = merge_list_filters(list.filters.as_ref(), list_filters.get(list_id));
+		let merged_filters =
+			merge_list_filters(list.filters.as_ref(), list_filters.and_then(|f| f.get(list_id)));
 
 		let active_rooms =
 			filter_active_rooms(services, merged_filters.as_ref(), &direct_rooms, active_rooms)
@@ -799,13 +859,15 @@ where
 				count: ruma_from_usize(active_rooms.len()),
 			});
 
-		let snake_key = into_snake_key(sender_user, sender_device, body.conn_id.clone());
-		services.sync.update_snake_sync_known_rooms(
-			&snake_key,
-			list_id.clone(),
-			new_known_rooms,
-			next_batch,
-		);
+		if endpoint.stores_connection_without_id() || body.conn_id.is_some() {
+			let snake_key = into_snake_key(sender_user, sender_device, body.conn_id.clone());
+			services.sync.update_snake_sync_known_rooms(
+				&snake_key,
+				list_id.clone(),
+				new_known_rooms,
+				next_batch,
+			);
+		}
 	}
 
 	BTreeMap::default()
