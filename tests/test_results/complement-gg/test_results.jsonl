@@ -75,7 +75,7 @@
 {"Action":"pass","Test":"TestChangePasswordPushers/Pushers_created_with_the_same_access_token_are_not_deleted_on_password_change"}
 {"Action":"fail","Test":"TestClientSpacesSummary"}
 {"Action":"pass","Test":"TestClientSpacesSummary/max_depth"}
-{"Action":"fail","Test":"TestClientSpacesSummary/pagination"}
+{"Action":"pass","Test":"TestClientSpacesSummary/pagination"}
 {"Action":"pass","Test":"TestClientSpacesSummary/query_whole_graph"}
 {"Action":"pass","Test":"TestClientSpacesSummary/redact_link"}
 {"Action":"fail","Test":"TestClientSpacesSummary/suggested_only"}
@@ -124,8 +124,8 @@
 {"Action":"pass","Test":"TestDeviceListUpdates/when_remote_user_joins_a_room"}
 {"Action":"pass","Test":"TestDeviceListUpdates/when_remote_user_leaves_a_room"}
 {"Action":"pass","Test":"TestDeviceListUpdates/when_remote_user_rejoins_a_room"}
-{"Action":"fail","Test":"TestDeviceListsUpdateOverFederation"}
-{"Action":"fail","Test":"TestDeviceListsUpdateOverFederation/good_connectivity"}
+{"Action":"pass","Test":"TestDeviceListsUpdateOverFederation"}
+{"Action":"pass","Test":"TestDeviceListsUpdateOverFederation/good_connectivity"}
 {"Action":"pass","Test":"TestDeviceListsUpdateOverFederation/interrupted_connectivity"}
 {"Action":"pass","Test":"TestDeviceListsUpdateOverFederation/stopped_server"}
 {"Action":"pass","Test":"TestDeviceListsUpdateOverFederationOnRoomJoin"}
@@ -152,9 +152,9 @@
 {"Action":"fail","Test":"TestEventRelationships"}
 {"Action":"pass","Test":"TestFederatedClientSpaces"}
 {"Action":"fail","Test":"TestFederatedEventRelationships"}
-{"Action":"pass","Test":"TestFederationKeyUploadQuery"}
+{"Action":"fail","Test":"TestFederationKeyUploadQuery"}
 {"Action":"pass","Test":"TestFederationKeyUploadQuery/Can_claim_remote_one_time_key_using_POST"}
-{"Action":"pass","Test":"TestFederationKeyUploadQuery/Can_query_remote_device_keys_using_POST"}
+{"Action":"fail","Test":"TestFederationKeyUploadQuery/Can_query_remote_device_keys_using_POST"}
 {"Action":"pass","Test":"TestFederationRedactSendsWithoutEvent"}
 {"Action":"pass","Test":"TestFederationRejectInvite"}
 {"Action":"pass","Test":"TestFederationRoomsInvite"}
