@@ -1,7 +1,6 @@
 use std::{
 	cmp::Ordering,
 	collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
-	ops::Deref,
 	time::Duration,
 };
 
@@ -22,7 +21,7 @@ use conduwuit::{
 };
 use conduwuit_service::{Services, rooms::read_receipt::pack_receipts, sync::into_snake_key};
 use futures::{
-	FutureExt, Stream, StreamExt, TryFutureExt,
+	FutureExt, StreamExt, TryFutureExt,
 	future::{OptionFuture, join3, try_join4},
 	pin_mut,
 };
@@ -35,8 +34,9 @@ use ruma::{
 	},
 	directory::RoomTypeFilter,
 	events::{
-		AnyRawAccountDataEvent, AnySyncEphemeralRoomEvent, AnySyncStateEvent, StateEventType,
-		TimelineEventType,
+		AnyRawAccountDataEvent, AnySyncEphemeralRoomEvent, AnySyncStateEvent,
+		GlobalAccountDataEventType, StateEventType, TimelineEventType,
+		direct::DirectEvent,
 		room::member::{MembershipState, RoomMemberEventContent},
 		typing::TypingEventContent,
 	},
@@ -100,7 +100,16 @@ struct CompatList {
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct CompatListFilters {
 	#[serde(skip_serializing_if = "Option::is_none")]
+	is_dm: Option<bool>,
+
+	#[serde(skip_serializing_if = "Option::is_none")]
+	is_encrypted: Option<bool>,
+
+	#[serde(skip_serializing_if = "Option::is_none")]
 	is_invite: Option<bool>,
+
+	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+	room_types: Vec<RoomTypeFilter>,
 
 	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
 	not_room_types: Vec<RoomTypeFilter>,
@@ -133,6 +142,18 @@ struct CompatRoomDetails {
 
 	#[serde(default, skip_serializing_if = "ruma::serde::is_default")]
 	timeline_limit: UInt,
+}
+
+impl From<&sync_events::v5::request::ListFilters> for CompatListFilters {
+	fn from(value: &sync_events::v5::request::ListFilters) -> Self {
+		Self {
+			is_dm: None,
+			is_encrypted: None,
+			is_invite: value.is_invite,
+			room_types: Vec::new(),
+			not_room_types: value.not_room_types.clone(),
+		}
+	}
 }
 
 impl From<CompatRequest> for sync_events::v5::Request {
@@ -252,7 +273,10 @@ where
 		.collect())
 }
 
-pub(crate) struct CompatSyncRequest(sync_events::v5::Request);
+pub(crate) struct CompatSyncRequest {
+	request: sync_events::v5::Request,
+	list_filters: BTreeMap<String, CompatListFilters>,
+}
 
 impl IncomingRequest for CompatSyncRequest {
 	type EndpointError = <sync_events::v5::Request as IncomingRequest>::EndpointError;
@@ -270,11 +294,20 @@ impl IncomingRequest for CompatSyncRequest {
 	{
 		let (parts, body) = req.into_parts();
 		let body = body.as_ref();
-		let request = if body.is_empty() {
-			sync_events::v5::Request::default()
+		let (request, list_filters) = if body.is_empty() {
+			(sync_events::v5::Request::default(), BTreeMap::new())
 		} else {
 			let compat = serde_json::from_slice::<CompatRequest>(body)?;
-			sync_events::v5::Request::from(compat)
+			let list_filters = compat
+				.lists
+				.iter()
+				.filter_map(|(list_id, list)| {
+					list.filters
+						.clone()
+						.map(|filters| (list_id.clone(), filters))
+				})
+				.collect();
+			(sync_events::v5::Request::from(compat), list_filters)
 		};
 
 		let req = http::Request::from_parts(parts, bytes::Bytes::from_static(b"{}"));
@@ -288,7 +321,7 @@ impl IncomingRequest for CompatSyncRequest {
 		parsed.room_subscriptions = request.room_subscriptions;
 		parsed.extensions = request.extensions;
 
-		Ok(Self(parsed))
+		Ok(Self { request: parsed, list_filters })
 	}
 }
 
@@ -325,14 +358,22 @@ pub(crate) async fn sync_events_v5_route(
 		.update_device_last_seen(sender_user, Some(sender_device), client_ip)
 		.await;
 
-	let mut body = body.body.0;
+	let CompatSyncRequest { mut request, list_filters } = body.body;
+
+	if request.lists.len() > 100 {
+		return Err!(Request(Unknown("More than 100 lists are not supported.")));
+	}
+
+	if request.room_subscriptions.len() > 100 {
+		return Err!(Request(Unknown("More than 100 room subscriptions are not supported.")));
+	}
 
 	// Setup watchers, so if there's no response, we can wait for them
 	let watcher = services.sync.setup_watch(sender_user, sender_device).await;
 
-	let conn_id = body.conn_id.clone();
+	let conn_id = request.conn_id.clone();
 
-	let globalsince = body
+	let globalsince = request
 		.pos
 		.as_ref()
 		.and_then(|string| string.parse().ok())
@@ -340,7 +381,11 @@ pub(crate) async fn sync_events_v5_route(
 
 	let snake_key = into_snake_key(sender_user, sender_device, conn_id);
 
-	if globalsince != 0 && !services.sync.snake_connection_cached(&snake_key) {
+	if globalsince != 0
+		&& !services
+			.sync
+			.snake_connection_token_valid(&snake_key, globalsince)
+	{
 		return Err!(Request(UnknownPos(
 			"Connection data unknown to server; restarting sync stream."
 		)));
@@ -354,14 +399,15 @@ pub(crate) async fn sync_events_v5_route(
 	// Get sticky parameters from cache
 	let (known_rooms, timeline_limits) = services
 		.sync
-		.update_snake_sync_request_with_cache(&snake_key, &mut body);
+		.update_snake_sync_request_with_cache(&snake_key, &mut request);
 
 	let (mut response, mut room_extras) = build_sync_events_v5(
 		services,
 		sender_user,
 		sender_device,
 		globalsince,
-		&body,
+		&request,
+		&list_filters,
 		&known_rooms,
 		&timeline_limits,
 	)
@@ -369,7 +415,7 @@ pub(crate) async fn sync_events_v5_route(
 
 	if response.rooms.is_empty() && response.extensions.is_empty() {
 		// Hang until new info arrives, or the client's timeout expires
-		if let Some(timeout) = body.timeout {
+		if let Some(timeout) = request.timeout {
 			if timeout > Duration::from_secs(0) {
 				_ = tokio::time::timeout(timeout, watcher).await;
 
@@ -380,7 +426,8 @@ pub(crate) async fn sync_events_v5_route(
 					sender_user,
 					sender_device,
 					globalsince,
-					&body,
+					&request,
+					&list_filters,
 					&known_rooms,
 					&timeline_limits,
 				)
@@ -395,6 +442,9 @@ pub(crate) async fn sync_events_v5_route(
 		receipts = ?response.extensions.receipts.rooms.len(),
 		"responding to request with"
 	);
+	services
+		.sync
+		.update_snake_sync_pos(&snake_key, response.pos.parse().unwrap_or(globalsince));
 	sync_events_v5_json_response(response, room_extras)
 }
 
@@ -404,6 +454,7 @@ async fn build_sync_events_v5(
 	sender_device: &DeviceId,
 	globalsince: u64,
 	body: &sync_events::v5::Request,
+	list_filters: &BTreeMap<String, CompatListFilters>,
 	known_rooms: &KnownRooms,
 	timeline_limits: &BTreeMap<OwnedRoomId, usize>,
 ) -> Result<(sync_events::v5::Response, RoomExtras)> {
@@ -505,6 +556,7 @@ async fn build_sync_events_v5(
 		all_invited_rooms.clone(),
 		all_joined_rooms.clone(),
 		all_rooms,
+		list_filters,
 		&mut todo_rooms,
 		known_rooms,
 		&mut response,
@@ -530,17 +582,15 @@ async fn build_sync_events_v5(
 	let typing = collect_typing_events(services, sender_user, body, &todo_rooms).await?;
 	response.extensions.typing = typing;
 
-	// Save the current timeline limits back into our snake connections cache
-	if let Some(ref conn_id) = body.conn_id {
-		let snake_key = into_snake_key(sender_user, sender_device, conn_id.clone());
-		let next_limits: BTreeMap<OwnedRoomId, usize> = todo_rooms
-			.iter()
-			.map(|(room_id, (_, limit, _))| (room_id.clone(), *limit))
-			.collect();
-		services
-			.sync
-			.update_snake_sync_timeline_limits(&snake_key, next_limits);
-	}
+	// Save the current timeline limits back into our snake connections cache.
+	let snake_key = into_snake_key(sender_user, sender_device, body.conn_id.clone());
+	let next_limits: BTreeMap<OwnedRoomId, usize> = todo_rooms
+		.iter()
+		.map(|(room_id, (_, limit, _))| (room_id.clone(), *limit))
+		.collect();
+	services
+		.sync
+		.update_snake_sync_timeline_limits(&snake_key, next_limits);
 
 	Ok((response, room_extras))
 }
@@ -594,15 +644,13 @@ async fn fetch_subscriptions(
 	//	body.room_subscriptions.remove(&r);
 	//}
 
-	if let Some(conn_id) = body.conn_id.clone() {
-		let snake_key = into_snake_key(sender_user, sender_device, conn_id);
-		services.sync.update_snake_sync_known_rooms(
-			&snake_key,
-			"subscriptions".to_owned(),
-			known_subscription_rooms,
-			next_batch,
-		);
-	}
+	let snake_key = into_snake_key(sender_user, sender_device, body.conn_id.clone());
+	services.sync.update_snake_sync_known_rooms(
+		&snake_key,
+		"subscriptions".to_owned(),
+		known_subscription_rooms,
+		next_batch,
+	);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -613,6 +661,7 @@ async fn handle_lists<'a, Rooms, AllRooms>(
 	all_invited_rooms: Rooms,
 	all_joined_rooms: Rooms,
 	all_rooms: AllRooms,
+	list_filters: &BTreeMap<String, CompatListFilters>,
 	todo_rooms: &'a mut TodoRooms,
 	known_rooms: &'a KnownRooms,
 	response: &'_ mut sync_events::v5::Response,
@@ -622,8 +671,7 @@ where
 	Rooms: Iterator<Item = &'a RoomId> + Clone + Send + 'a,
 	AllRooms: Iterator<Item = &'a RoomId> + Clone + Send + 'a,
 {
-	// TODO MSC4186: Implement remaining list filters: is_dm, is_encrypted,
-	// room_types.
+	let direct_rooms = direct_rooms_for_user(services, sender_user).await;
 	let mut bump_timestamps = HashMap::new();
 	for (list_id, list) in &body.lists {
 		let active_rooms: Vec<_> = match list.filters.as_ref().and_then(|f| f.is_invite) {
@@ -631,21 +679,11 @@ where
 			| Some(true) => all_invited_rooms.clone().collect(),
 			| Some(false) => all_joined_rooms.clone().collect(),
 		};
+		let merged_filters = merge_list_filters(list.filters.as_ref(), list_filters.get(list_id));
 
-		// Filter by room type FIRST to minimize DB lookups
-		let active_rooms = match list.filters.as_ref().map(|f| &f.not_room_types) {
-			| None => active_rooms,
-			| Some(filter) if filter.is_empty() => active_rooms,
-			| Some(value) =>
-				filter_rooms(
-					services,
-					value,
-					&true,
-					active_rooms.iter().stream().map(Deref::deref),
-				)
-				.collect()
-				.await,
-		};
+		let active_rooms =
+			filter_active_rooms(services, merged_filters.as_ref(), &direct_rooms, active_rooms)
+				.await;
 
 		let missing_rooms: Vec<_> = active_rooms
 			.iter()
@@ -761,15 +799,13 @@ where
 				count: ruma_from_usize(active_rooms.len()),
 			});
 
-		if let Some(conn_id) = body.conn_id.clone() {
-			let snake_key = into_snake_key(sender_user, sender_device, conn_id);
-			services.sync.update_snake_sync_known_rooms(
-				&snake_key,
-				list_id.clone(),
-				new_known_rooms,
-				next_batch,
-			);
-		}
+		let snake_key = into_snake_key(sender_user, sender_device, body.conn_id.clone());
+		services.sync.update_snake_sync_known_rooms(
+			&snake_key,
+			list_id.clone(),
+			new_known_rooms,
+			next_batch,
+		);
 	}
 
 	BTreeMap::default()
@@ -1624,32 +1660,119 @@ async fn collect_receipts(_services: &Services) -> sync_events::v5::response::Re
 	// TODO: get explicitly requested read receipts
 }
 
-fn filter_rooms<'a, Rooms>(
+async fn filter_active_rooms<'a>(
 	services: &'a Services,
-	filter: &'a [RoomTypeFilter],
-	negate: &'a bool,
-	rooms: Rooms,
-) -> impl Stream<Item = &'a RoomId> + Send + 'a
-where
-	Rooms: Stream<Item = &'a RoomId> + Send + 'a,
-{
-	rooms.filter_map(async |room_id| {
-		let room_type = services.rooms.state_accessor.get_room_type(room_id).await;
+	filters: Option<&'a CompatListFilters>,
+	direct_rooms: &'a HashSet<OwnedRoomId>,
+	mut active_rooms: Vec<&'a RoomId>,
+) -> Vec<&'a RoomId> {
+	let Some(filters) = filters else {
+		return active_rooms;
+	};
 
-		if room_type.as_ref().is_err_and(|e| !e.is_not_found()) {
-			return None;
+	if let Some(is_dm) = filters.is_dm {
+		active_rooms.retain(|room_id| direct_rooms.contains(*room_id) == is_dm);
+	}
+
+	if let Some(is_encrypted) = filters.is_encrypted {
+		active_rooms = active_rooms
+			.into_iter()
+			.stream()
+			.filter_map(|room_id| async move {
+				(services
+					.rooms
+					.state_accessor
+					.is_encrypted_room(room_id)
+					.await == is_encrypted)
+					.then_some(room_id)
+			})
+			.collect()
+			.await;
+	}
+
+	if !filters.room_types.is_empty() {
+		let mut filtered = Vec::with_capacity(active_rooms.len());
+		for room_id in active_rooms {
+			if room_matches_type_filter(services, room_id, &filters.room_types, false).await {
+				filtered.push(room_id);
+			}
 		}
+		active_rooms = filtered;
+	}
 
-		let room_type_filter = RoomTypeFilter::from(room_type.ok());
+	if !filters.not_room_types.is_empty() {
+		let mut filtered = Vec::with_capacity(active_rooms.len());
+		for room_id in active_rooms {
+			if room_matches_type_filter(services, room_id, &filters.not_room_types, true).await {
+				filtered.push(room_id);
+			}
+		}
+		active_rooms = filtered;
+	}
 
-		let include = if *negate {
-			!filter.contains(&room_type_filter)
-		} else {
-			filter.is_empty() || filter.contains(&room_type_filter)
-		};
+	active_rooms
+}
 
-		include.then_some(room_id)
-	})
+async fn room_matches_type_filter(
+	services: &Services,
+	room_id: &RoomId,
+	filter: &[RoomTypeFilter],
+	negate: bool,
+) -> bool {
+	let room_type = services.rooms.state_accessor.get_room_type(room_id).await;
+
+	if room_type.as_ref().is_err_and(|e| !e.is_not_found()) {
+		return false;
+	}
+
+	let room_type_filter = RoomTypeFilter::from(room_type.ok());
+
+	if negate {
+		!filter.contains(&room_type_filter)
+	} else {
+		filter.is_empty() || filter.contains(&room_type_filter)
+	}
+}
+
+fn merge_list_filters(
+	base: Option<&sync_events::v5::request::ListFilters>,
+	extra: Option<&CompatListFilters>,
+) -> Option<CompatListFilters> {
+	match (base, extra) {
+		| (None, None) => None,
+		| (Some(base), None) => Some(CompatListFilters::from(base)),
+		| (None, Some(extra)) => Some(extra.clone()),
+		| (Some(base), Some(extra)) => Some(CompatListFilters {
+			is_dm: extra.is_dm,
+			is_encrypted: extra.is_encrypted,
+			is_invite: extra.is_invite.or(base.is_invite),
+			room_types: extra.room_types.clone(),
+			not_room_types: if extra.not_room_types.is_empty() {
+				base.not_room_types.clone()
+			} else {
+				extra.not_room_types.clone()
+			},
+		}),
+	}
+}
+
+async fn direct_rooms_for_user(
+	services: &Services,
+	sender_user: &UserId,
+) -> HashSet<OwnedRoomId> {
+	services
+		.account_data
+		.get_global::<DirectEvent>(sender_user, GlobalAccountDataEventType::Direct)
+		.await
+		.map(|direct_event| {
+			direct_event
+				.content
+				.0
+				.into_values()
+				.flatten()
+				.collect::<HashSet<_>>()
+		})
+		.unwrap_or_default()
 }
 
 #[cfg(test)]

@@ -65,6 +65,7 @@ struct SnakeSyncCache {
 	extensions: v5_request::Extensions,
 	known_rooms: BTreeMap<String, BTreeMap<OwnedRoomId, u64>>,
 	timeline_limits: BTreeMap<OwnedRoomId, usize>,
+	last_pos: Option<u64>,
 }
 
 type DbConnections<K, V> = Cache<K, V>;
@@ -110,6 +111,12 @@ impl crate::Service for Service {
 impl Service {
 	pub fn snake_connection_cached(&self, key: &SnakeConnectionsKey) -> bool {
 		self.snake_connections.contains_key(key)
+	}
+
+	pub fn snake_connection_token_valid(&self, key: &SnakeConnectionsKey, pos: u64) -> bool {
+		self.snake_connections
+			.get(key)
+			.is_some_and(|cached| cached.lock().last_pos == Some(pos))
 	}
 
 	pub fn forget_snake_sync_connection(&self, key: &SnakeConnectionsKey) {
@@ -328,7 +335,6 @@ impl Service {
 		new_cached_rooms: BTreeSet<OwnedRoomId>,
 		globalsince: u64,
 	) {
-		assert!(key.2.is_some(), "Some(conn_id) required for this call");
 		let cached_arc = self
 			.snake_connections
 			.get_with(key.clone(), || Arc::new(SyncMutex::new(SnakeSyncCache::default())));
@@ -348,6 +354,13 @@ impl Service {
 		for room_id in new_cached_rooms {
 			list.insert(room_id, globalsince);
 		}
+	}
+
+	pub fn update_snake_sync_pos(&self, key: &SnakeConnectionsKey, pos: u64) {
+		let cached_arc = self
+			.snake_connections
+			.get_with(key.clone(), || Arc::new(SyncMutex::new(SnakeSyncCache::default())));
+		cached_arc.lock().last_pos = Some(pos);
 	}
 
 	pub fn update_snake_sync_timeline_limits(

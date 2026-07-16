@@ -166,6 +166,7 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		)
 		.route("/_matrix/client/r0/sync", get(client::sync_events_route))
 		.route("/_matrix/client/v3/sync", get(client::sync_events_route))
+		.route("/_matrix/client/v5/sync", post(client::sync_events_v5_route))
 		.route(
 			"/_matrix/client/unstable/org.matrix.simplified_msc3575/sync",
 			post(client::sync_events_v5_route),
