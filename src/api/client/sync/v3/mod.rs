@@ -259,8 +259,23 @@ fn is_sync_response_empty(val: &serde_json::Value) -> bool {
 		return true;
 	};
 
-	if obj.contains_key("rooms")
-		|| obj.contains_key("presence")
+	// ruma's Rooms::is_empty() omits the `knock` field, so when only knock rooms
+	// exist the "rooms" key is absent from the serialized JSON. Check rooms.knock
+	// explicitly so we don't treat a knock-only response as empty.
+	if let Some(rooms) = obj.get("rooms") {
+		if let Some(rooms_obj) = rooms.as_object() {
+			let knock_non_empty = rooms_obj
+				.get("knock")
+				.and_then(|k| k.as_object())
+				.is_some_and(|k| !k.is_empty());
+			if knock_non_empty {
+				return false;
+			}
+		}
+		return false;
+	}
+
+	if obj.contains_key("presence")
 		|| obj.contains_key("account_data")
 		|| obj.contains_key("to_device")
 	{
@@ -568,7 +583,7 @@ pub(crate) async fn build_sync_events(
 			leave: left_rooms,
 			join: joined_rooms,
 			invite: invited_rooms,
-			knock: knocked_rooms,
+			knock: knocked_rooms.clone(),
 		},
 		presence: Presence {
 			events: presence_updates
@@ -630,6 +645,22 @@ pub(crate) async fn build_sync_events(
 				room.as_object_mut()
 					.unwrap()
 					.insert("org.matrix.msc4222.state_after".to_owned(), state_after_obj);
+			}
+		}
+	}
+
+	// ruma's Rooms::is_empty() ignores knock, so when only knocked rooms exist the
+	// entire "rooms" key is omitted from the serialized output. Manually inject it
+	// so clients receive rooms.knock and the sync token advances.
+	if !knocked_rooms.is_empty() && val.get("rooms").is_none_or(|r| r.get("knock").is_none()) {
+		if let Ok(knock_val) = serde_json::to_value(&knocked_rooms) {
+			let rooms_obj = val.as_object_mut().and_then(|o| {
+				o.entry("rooms")
+					.or_insert_with(|| serde_json::json!({}))
+					.as_object_mut()
+			});
+			if let Some(rooms) = rooms_obj {
+				rooms.insert("knock".to_owned(), knock_val);
 			}
 		}
 	}
