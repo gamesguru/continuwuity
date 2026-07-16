@@ -119,8 +119,11 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		.ruma_route(&client::search_users_route)
 		.ruma_route(&client::get_member_events_route)
 		.ruma_route(&client::get_protocols_route)
-		.route("/_matrix/client/unstable/thirdparty/protocols",
-			get(client::get_protocols_route_unstable))
+		.route(
+			"/_matrix/client/unstable/thirdparty/protocols",
+			get(client::get_protocols_route_unstable),
+		)
+		.route("/_matrix/client/v5/sync", post(client::sync_events_v5_route))
 		.route(
 			"/_matrix/client/v3/rooms/{room_id}/send/{event_type}/{txn_id}",
 			put(client::send_message_event_route),

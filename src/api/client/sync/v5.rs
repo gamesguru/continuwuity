@@ -65,6 +65,7 @@ struct RoomExtra {
 	force_update: bool,
 }
 
+/// `POST /_matrix/client/v5/sync`
 /// `POST /_matrix/client/unstable/org.matrix.simplified_msc3575/sync`
 /// ([MSC4186])
 ///
