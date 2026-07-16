@@ -112,6 +112,7 @@ struct BuildContext<'a> {
 	known_rooms: &'a KnownRooms,
 	timeline_limits: &'a BTreeMap<OwnedRoomId, usize>,
 	endpoint: SyncEndpoint,
+	persist_cache: bool,
 }
 
 #[derive(Default, Deserialize)]
@@ -622,7 +623,10 @@ async fn sync_events_v5_route_inner(
 	let required_state_excludes = endpoint
 		.stores_connection_without_id()
 		.then_some(&required_state_excludes);
-	let context = BuildContext {
+	let waits_for_updates = request
+		.timeout
+		.is_some_and(|timeout| timeout > Duration::from_secs(0));
+	let mut context = BuildContext {
 		sender_user,
 		sender_device,
 		globalsince,
@@ -632,21 +636,24 @@ async fn sync_events_v5_route_inner(
 		known_rooms: &known_rooms,
 		timeline_limits: &timeline_limits,
 		endpoint,
+		persist_cache: !waits_for_updates,
 	};
 
 	let (mut response, mut room_extras) = build_sync_events_v5(services, &context).await?;
 
-	if response.rooms.is_empty() && response.extensions.is_empty() {
-		// Hang until new info arrives, or the client's timeout expires
-		if let Some(timeout) = request.timeout {
-			if timeout > Duration::from_secs(0) {
+	if waits_for_updates {
+		if response.rooms.is_empty() && response.extensions.is_empty() {
+			if let Some(timeout) = request.timeout {
+				// Hang until new info arrives, or the client's timeout expires.
 				_ = tokio::time::timeout(timeout, watcher).await;
-
-				// Rebuild the response after waking up to avoid returning advanced tokens
-				// without their associated events.
-				(response, room_extras) = build_sync_events_v5(services, &context).await?;
 			}
 		}
+
+		context.persist_cache = true;
+		// Rebuild the response after waking up to avoid returning advanced tokens
+		// without their associated events. The probe above intentionally did not
+		// update sticky room state because no response had been delivered yet.
+		(response, room_extras) = build_sync_events_v5(services, &context).await?;
 	}
 
 	trace!(
@@ -677,6 +684,7 @@ async fn build_sync_events_v5(
 		known_rooms,
 		timeline_limits,
 		endpoint,
+		persist_cache,
 	} = *context;
 	let next_batch = services.globals.current_count()?;
 
@@ -779,6 +787,7 @@ async fn build_sync_events_v5(
 		list_filters,
 		required_state_excludes,
 		endpoint,
+		persist_cache,
 		&mut todo_rooms,
 		known_rooms,
 		&mut response,
@@ -793,6 +802,7 @@ async fn build_sync_events_v5(
 		known_rooms,
 		endpoint,
 		required_state_excludes,
+		persist_cache,
 		&mut todo_rooms,
 	)
 	.await;
@@ -813,7 +823,7 @@ async fn build_sync_events_v5(
 	let typing = collect_typing_events(services, sender_user, body, &todo_rooms).await?;
 	response.extensions.typing = typing;
 
-	if endpoint.stores_connection_without_id() || body.conn_id.is_some() {
+	if persist_cache && (endpoint.stores_connection_without_id() || body.conn_id.is_some()) {
 		// Save the current timeline limits back into our snake connections cache.
 		let snake_key = into_snake_key(sender_user, sender_device, body.conn_id.clone());
 		let next_limits: BTreeMap<OwnedRoomId, usize> = todo_rooms
@@ -835,6 +845,7 @@ async fn fetch_subscriptions(
 	known_rooms: &KnownRooms,
 	endpoint: SyncEndpoint,
 	required_state_excludes: Option<&CompatRequiredStateExcludes>,
+	persist_cache: bool,
 	todo_rooms: &mut TodoRooms,
 ) {
 	let mut known_subscription_rooms = BTreeSet::new();
@@ -887,7 +898,7 @@ async fn fetch_subscriptions(
 	//	body.room_subscriptions.remove(&r);
 	//}
 
-	if endpoint.stores_connection_without_id() || body.conn_id.is_some() {
+	if persist_cache && (endpoint.stores_connection_without_id() || body.conn_id.is_some()) {
 		let snake_key = into_snake_key(sender_user, sender_device, body.conn_id.clone());
 		services.sync.update_snake_sync_known_rooms(
 			&snake_key,
@@ -909,6 +920,7 @@ async fn handle_lists<'a, Rooms, AllRooms>(
 	list_filters: Option<&BTreeMap<String, CompatListFilters>>,
 	required_state_excludes: Option<&CompatRequiredStateExcludes>,
 	endpoint: SyncEndpoint,
+	persist_cache: bool,
 	todo_rooms: &'a mut TodoRooms,
 	known_rooms: &'a KnownRooms,
 	response: &'_ mut sync_events::v5::Response,
@@ -1057,7 +1069,7 @@ where
 				count: ruma_from_usize(active_rooms.len()),
 			});
 
-		if endpoint.stores_connection_without_id() || body.conn_id.is_some() {
+		if persist_cache && (endpoint.stores_connection_without_id() || body.conn_id.is_some()) {
 			let snake_key = into_snake_key(sender_user, sender_device, body.conn_id.clone());
 			services.sync.update_snake_sync_known_rooms(
 				&snake_key,
