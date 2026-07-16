@@ -1,5 +1,4 @@
 use std::{
-	cmp::Ordering,
 	collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque},
 	time::Duration,
 };
@@ -35,11 +34,14 @@ use ruma::{
 	directory::RoomTypeFilter,
 	events::{
 		AnyRawAccountDataEvent, AnySyncEphemeralRoomEvent, AnySyncStateEvent,
-		GlobalAccountDataEventType, StateEventType, TimelineEventType,
+		GlobalAccountDataEventType, RoomAccountDataEventType, StateEventType, TimelineEventType,
 		direct::DirectEvent,
 		room::member::{MembershipState, RoomMemberEventContent},
+		space::child::SpaceChildEventContent,
+		tag::TagEvent,
 		typing::TypingEventContent,
 	},
+	presence::PresenceState,
 	serde::Raw,
 	uint,
 };
@@ -124,6 +126,9 @@ struct CompatRequest {
 	timeout: Option<Duration>,
 
 	#[serde(default)]
+	set_presence: PresenceState,
+
+	#[serde(default)]
 	lists: BTreeMap<String, CompatList>,
 
 	#[serde(default)]
@@ -157,6 +162,7 @@ struct CompatListFilters {
 	is_encrypted: Option<bool>,
 
 	#[serde(skip_serializing_if = "Option::is_none")]
+	#[serde(alias = "is_invited")]
 	is_invite: Option<bool>,
 
 	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
@@ -164,6 +170,15 @@ struct CompatListFilters {
 
 	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
 	not_room_types: Vec<RoomTypeFilter>,
+
+	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+	tags: Vec<String>,
+
+	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+	not_tags: Vec<String>,
+
+	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+	spaces: Vec<OwnedRoomId>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -203,6 +218,9 @@ impl From<&sync_events::v5::request::ListFilters> for CompatListFilters {
 			is_invite: value.is_invite,
 			room_types: Vec::new(),
 			not_room_types: value.not_room_types.clone(),
+			tags: Vec::new(),
+			not_tags: Vec::new(),
+			spaces: Vec::new(),
 		}
 	}
 }
@@ -397,6 +415,7 @@ pub(crate) struct CompatSyncRequest {
 	request: sync_events::v5::Request,
 	list_filters: BTreeMap<String, CompatListFilters>,
 	required_state_excludes: CompatRequiredStateExcludes,
+	set_presence: PresenceState,
 }
 
 impl IncomingRequest for CompatSyncRequest {
@@ -415,14 +434,16 @@ impl IncomingRequest for CompatSyncRequest {
 	{
 		let (parts, body) = req.into_parts();
 		let body = body.as_ref();
-		let (request, list_filters, required_state_excludes) = if body.is_empty() {
+		let (request, list_filters, required_state_excludes, set_presence) = if body.is_empty() {
 			(
 				sync_events::v5::Request::default(),
 				BTreeMap::new(),
 				CompatRequiredStateExcludes::default(),
+				PresenceState::Online,
 			)
 		} else {
 			let compat = serde_json::from_slice::<CompatRequest>(body)?;
+			let set_presence = compat.set_presence.clone();
 			let list_filters = compat
 				.lists
 				.iter()
@@ -448,7 +469,12 @@ impl IncomingRequest for CompatSyncRequest {
 					.map(|(room_id, room)| (room_id.clone(), room.required_state.exclude.clone()))
 					.collect(),
 			};
-			(sync_events::v5::Request::from(compat), list_filters, required_state_excludes)
+			(
+				sync_events::v5::Request::from(compat),
+				list_filters,
+				required_state_excludes,
+				set_presence,
+			)
 		};
 
 		let req = http::Request::from_parts(parts, bytes::Bytes::from_static(b"{}"));
@@ -466,6 +492,7 @@ impl IncomingRequest for CompatSyncRequest {
 			request: parsed,
 			list_filters,
 			required_state_excludes,
+			set_presence,
 		})
 	}
 }
@@ -530,6 +557,7 @@ async fn sync_events_v5_route_inner(
 		mut request,
 		list_filters,
 		required_state_excludes,
+		set_presence,
 	} = body.body;
 
 	if endpoint.enforces_stable_limits() && request.lists.len() > 100 {
@@ -542,16 +570,26 @@ async fn sync_events_v5_route_inner(
 		)));
 	}
 
+	if services.config.allow_local_presence {
+		services
+			.presence
+			.ping_presence(sender_user, &set_presence)
+			.await?;
+	}
+
 	// Setup watchers, so if there's no response, we can wait for them
 	let watcher = services.sync.setup_watch(sender_user, sender_device).await;
 
 	let conn_id = request.conn_id.clone();
 
-	let globalsince = request
-		.pos
-		.as_ref()
-		.and_then(|string| string.parse().ok())
-		.unwrap_or(0);
+	let globalsince = match request.pos.as_ref() {
+		| Some(pos) => pos.parse().map_err(|_| {
+			err!(Request(UnknownPos(
+				"Connection data unknown to server; restarting sync stream."
+			)))
+		})?,
+		| None => 0,
+	};
 
 	let snake_key = into_snake_key(sender_user, sender_device, conn_id);
 
@@ -891,9 +929,14 @@ where
 		let merged_filters =
 			merge_list_filters(list.filters.as_ref(), list_filters.and_then(|f| f.get(list_id)));
 
-		let active_rooms =
-			filter_active_rooms(services, merged_filters.as_ref(), &direct_rooms, active_rooms)
-				.await;
+		let active_rooms = filter_active_rooms(
+			services,
+			sender_user,
+			merged_filters.as_ref(),
+			&direct_rooms,
+			active_rooms,
+		)
+		.await;
 
 		let missing_rooms: Vec<_> = active_rooms
 			.iter()
@@ -1261,30 +1304,6 @@ where
 			.collect()
 			.await;
 
-		let name = match heroes.len().cmp(&(1_usize)) {
-			| Ordering::Greater => {
-				let firsts = heroes[1..]
-					.iter()
-					.map(|h| h.name.clone().unwrap_or_else(|| h.user_id.to_string()))
-					.collect::<Vec<_>>()
-					.join(", ");
-
-				let last = heroes[0]
-					.name
-					.clone()
-					.unwrap_or_else(|| heroes[0].user_id.to_string());
-
-				Some(format!("{firsts} and {last}"))
-			},
-			| Ordering::Equal => Some(
-				heroes[0]
-					.name
-					.clone()
-					.unwrap_or_else(|| heroes[0].user_id.to_string()),
-			),
-			| Ordering::Less => None,
-		};
-
 		let heroes_avatar = if heroes.len() == 1 {
 			heroes[0].avatar.clone()
 		} else {
@@ -1293,13 +1312,7 @@ where
 
 		rooms.insert(room_id.clone(), sync_events::v5::response::Room {
 			name: if include_stable_room_fields {
-				services
-					.rooms
-					.state_accessor
-					.get_name(room_id)
-					.await
-					.ok()
-					.or(name)
+				services.rooms.state_accessor.get_name(room_id).await.ok()
 			} else {
 				None
 			},
@@ -1311,7 +1324,7 @@ where
 					| ruma::JsOption::Undefined => ruma::JsOption::Undefined,
 				},
 			},
-			initial: (body.pos.is_none() && roomsince == &0).then_some(true),
+			initial: (roomsince == &0).then_some(true),
 			is_dm: None,
 			invite_state,
 			unread_notifications: UnreadNotificationsCount {
@@ -1395,6 +1408,14 @@ fn sync_events_v5_json_response(
 				"membership".to_owned(),
 				Value::String(membership_state_to_str(&membership).to_owned()),
 			);
+		}
+
+		if let Some(invite_state) = room.get("invite_state").cloned() {
+			room.insert("stripped_state".to_owned(), invite_state);
+		}
+
+		if let Some(timeline) = room.get("timeline").cloned() {
+			room.insert("timeline_events".to_owned(), timeline);
 		}
 
 		room.insert("lists".to_owned(), serde_json::to_value(extra.lists)?);
@@ -1932,6 +1953,7 @@ async fn collect_receipts(_services: &Services) -> sync_events::v5::response::Re
 
 async fn filter_active_rooms<'a>(
 	services: &'a Services,
+	sender_user: &'a UserId,
 	filters: Option<&'a CompatListFilters>,
 	direct_rooms: &'a HashSet<OwnedRoomId>,
 	mut active_rooms: Vec<&'a RoomId>,
@@ -1980,6 +2002,39 @@ async fn filter_active_rooms<'a>(
 		active_rooms = filtered;
 	}
 
+	if !filters.tags.is_empty() {
+		let mut filtered = Vec::with_capacity(active_rooms.len());
+		for room_id in active_rooms {
+			if room_matches_tag_filter(services, sender_user, room_id, &filters.tags, false).await
+			{
+				filtered.push(room_id);
+			}
+		}
+		active_rooms = filtered;
+	}
+
+	if !filters.not_tags.is_empty() {
+		let mut filtered = Vec::with_capacity(active_rooms.len());
+		for room_id in active_rooms {
+			if room_matches_tag_filter(services, sender_user, room_id, &filters.not_tags, true)
+				.await
+			{
+				filtered.push(room_id);
+			}
+		}
+		active_rooms = filtered;
+	}
+
+	if !filters.spaces.is_empty() {
+		let mut filtered = Vec::with_capacity(active_rooms.len());
+		for room_id in active_rooms {
+			if room_is_child_of_any_space(services, room_id, &filters.spaces).await {
+				filtered.push(room_id);
+			}
+		}
+		active_rooms = filtered;
+	}
+
 	active_rooms
 }
 
@@ -2004,6 +2059,51 @@ async fn room_matches_type_filter(
 	}
 }
 
+async fn room_matches_tag_filter(
+	services: &Services,
+	sender_user: &UserId,
+	room_id: &RoomId,
+	filter: &[String],
+	negate: bool,
+) -> bool {
+	let tags = services
+		.account_data
+		.get_room::<TagEvent>(room_id, sender_user, RoomAccountDataEventType::Tag)
+		.await
+		.map(|event| event.content.tags)
+		.unwrap_or_default();
+
+	let matches = filter
+		.iter()
+		.any(|tag| tags.keys().any(|room_tag| room_tag.to_string() == *tag));
+
+	if negate { !matches } else { matches }
+}
+
+async fn room_is_child_of_any_space(
+	services: &Services,
+	room_id: &RoomId,
+	spaces: &[OwnedRoomId],
+) -> bool {
+	for space_id in spaces {
+		if services
+			.rooms
+			.state_accessor
+			.room_state_get_content::<SpaceChildEventContent>(
+				space_id,
+				&StateEventType::SpaceChild,
+				room_id.as_str(),
+			)
+			.await
+			.is_ok_and(|content| !content.via.is_empty())
+		{
+			return true;
+		}
+	}
+
+	false
+}
+
 fn merge_list_filters(
 	base: Option<&sync_events::v5::request::ListFilters>,
 	extra: Option<&CompatListFilters>,
@@ -2022,6 +2122,9 @@ fn merge_list_filters(
 			} else {
 				extra.not_room_types.clone()
 			},
+			tags: extra.tags.clone(),
+			not_tags: extra.not_tags.clone(),
+			spaces: extra.spaces.clone(),
 		}),
 	}
 }
