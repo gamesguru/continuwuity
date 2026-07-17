@@ -480,6 +480,7 @@ jobs:
             const total = ${{ steps.results.outputs.total || 0 }};
             const arch = '${{ matrix.arch }}';
             const os = '${{ matrix.os }}';
+            const roomVersion = '${{ matrix.room_version }}';
             const failedTestsRaw = process.env.FAILED_TESTS || '';
             const passedTestsRaw = process.env.PASSED_TESTS || '';
 
@@ -493,7 +494,7 @@ jobs:
             const passedLines = passedTestsRaw.trim().split('\n').filter(l => l.length > 0);
 
             const currentRunLines = [
-              `## Complement Test Results (${arch} ${os})`,
+              `## Complement Test Results (${arch} ${os} v${roomVersion})`,
               `**Commit:** \`${context.payload.pull_request.head.ref}\` (\`${context.payload.pull_request.head.sha.substring(0, 7)}\`)`,
               `**Logs:** [View / Download Logs](https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
               '',
@@ -531,7 +532,7 @@ jobs:
               issue_number: context.issue.number,
             });
 
-            const marker = `<!-- complement-test-results-${arch}-${os} -->`;
+            const marker = `<!-- complement-test-results-${arch}-${os}-v${roomVersion} -->`;
             const existing = comments.find(c =>
               c.body && c.body.includes(marker)
             );
