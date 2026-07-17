@@ -260,19 +260,9 @@ fn is_sync_response_empty(val: &serde_json::Value) -> bool {
 		return true;
 	};
 
-	// ruma's Rooms::is_empty() omits the `knock` field, so when only knock rooms
-	// exist the "rooms" key is absent from the serialized JSON. Check rooms.knock
-	// explicitly so we don't treat a knock-only response as empty.
-	if let Some(rooms) = obj.get("rooms") {
-		if let Some(rooms_obj) = rooms.as_object() {
-			let knock_non_empty = rooms_obj
-				.get("knock")
-				.and_then(|k| k.as_object())
-				.is_some_and(|k| !k.is_empty());
-			if knock_non_empty {
-				return false;
-			}
-		}
+	// Any serialized rooms object makes the response non-empty. Knock-only
+	// responses omit "rooms" entirely, so there is nothing useful to inspect here.
+	if obj.contains_key("rooms") {
 		return false;
 	}
 

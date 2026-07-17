@@ -162,12 +162,15 @@ impl Service {
 			return Ok(());
 		}
 
-		self.set_room_state(room_id, shortstatehash, state_lock);
-
-		let new_event_ids = statediffnew
+		let new_state_events: HashMap<_, _> = statediffnew
 			.iter()
+			.map(|&new| parse_compressed_state_event(new))
+			.collect();
+
+		let new_event_ids = new_state_events
+			.values()
+			.copied()
 			.stream()
-			.map(|&new| parse_compressed_state_event(new).1)
 			.then(|shorteventid| {
 				self.services
 					.short
@@ -270,26 +273,10 @@ impl Service {
 			{
 				if event_type == StateEventType::RoomMember {
 					if let Ok(user_id) = UserId::parse(&*state_key) {
-						// Re-sync membership from the NEW state to update cache correctly.
-						// The new state has already been committed via `set_room_state`,
-						// so we can use `room_state_get`.
-						if let Ok(new_pdu) = self
-							.services
-							.state_accessor
-							.room_state_get(
-								room_id,
-								&StateEventType::RoomMember,
-								user_id.as_str(),
-							)
-							.await
-						{
-							let _ = self
-								.services
-								.state_cache
-								.update_membership(room_id, user_id, &new_pdu, false)
-								.await;
-						} else {
-							// User is no longer in the room at all in the new state
+						// Replacement member events were already processed by the new-events
+						// loop above. Without a replacement, the user is absent from the new
+						// state and must be marked left.
+						if !new_state_events.contains_key(&shortstatekey) {
 							self.services
 								.state_cache
 								.mark_as_left(user_id, room_id, None)
@@ -324,6 +311,7 @@ impl Service {
 			}
 		}
 		info!(target: "force_state", "removed events done, updating joined count");
+		self.set_room_state(room_id, shortstatehash, state_lock);
 		self.services.state_cache.update_joined_count(room_id).await;
 
 		info!(target: "force_state", "complete for {room_id}");
