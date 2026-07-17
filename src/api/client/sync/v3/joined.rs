@@ -1018,10 +1018,10 @@ async fn build_device_list_updates(
 		.await;
 
 	if !room_key_changes.is_empty() {
-		info!(
+		debug!(
 			%room_id,
 			syncing_user = %syncing_user,
-			changed_users = ?room_key_changes,
+			changed_user_count = room_key_changes.len(),
 			"build_device_list_updates: room key changes"
 		);
 	}
