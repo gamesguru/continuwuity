@@ -274,6 +274,7 @@ impl Service {
 	/// appropriate error otherwise
 	async fn check_finalized_event_outcome(
 		&self,
+		sender_user: &UserId,
 		delay_id: &String,
 		action: UpdateAction,
 	) -> Result<()> {
@@ -288,6 +289,10 @@ impl Service {
 		}
 
 		let finalized_event: FinalizedDelayedEvent = finalized_event?.deserialized()?;
+
+		if finalized_event.event.user_id != sender_user {
+			return Err!(Request(Forbidden("You are not authorized to modify this delayed event.")));
+		}
 
 		match (action, finalized_event.outcome()) {
 			| (UpdateAction::Send, DelayedEventStatus::Send)
@@ -324,7 +329,9 @@ impl Service {
 	) -> Result<()> {
 		if !self.scheduled_events.lock().await.remove(delay_id.as_str()) {
 			// Someone else has already finalized this event
-			return self.check_finalized_event_outcome(delay_id, action).await;
+			return self
+				.check_finalized_event_outcome(&event.user_id, delay_id, action)
+				.await;
 		}
 
 		let timestamp = MilliSecondsSinceUnixEpoch::now();
@@ -473,13 +480,20 @@ impl Service {
 
 	pub async fn update_delayed_event(
 		&self,
+		sender_user: &UserId,
 		delay_id: String,
 		action: UpdateAction,
 	) -> Result<()> {
 		let Ok(event) = self.db.delayid_scheduleddelayedevent.get(&delay_id).await else {
-			return self.check_finalized_event_outcome(&delay_id, action).await;
+			return self
+				.check_finalized_event_outcome(sender_user, &delay_id, action)
+				.await;
 		};
 		let mut event: ScheduledDelayedEvent = event.deserialized()?;
+
+		if event.user_id != sender_user {
+			return Err!(Request(Forbidden("You are not authorized to modify this delayed event.")));
+		}
 
 		match action {
 			| UpdateAction::Restart => {
