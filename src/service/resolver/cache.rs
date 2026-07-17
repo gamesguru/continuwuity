@@ -129,7 +129,8 @@ impl CachedDest {
 
 	#[must_use]
 	pub(crate) fn default_expire(expire_secs: u64) -> SystemTime {
-		rand::time_from_now_secs(expire_secs..expire_secs.saturating_mul(2).max(1))
+		let start = expire_secs.clamp(1, u64::MAX / 2);
+		rand::time_from_now_secs(start..start.saturating_mul(2))
 	}
 
 	#[inline]

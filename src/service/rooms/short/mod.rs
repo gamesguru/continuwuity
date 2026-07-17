@@ -459,7 +459,7 @@ where
 						.map_err(|e| err!(Database("Failed to serialize cached EventId: {e:?}")))
 						.and_then(|s| {
 							serde_json::from_slice::<Id>(&s).map_err(|e| {
-								err!(Database("Failed to deserialize EventId: {e:?}"))
+								err!(Database("Failed to deserialize EventId from cache: {e:?}"))
 							})
 						});
 					results.push(Some(res));

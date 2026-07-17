@@ -188,7 +188,7 @@ where
 		.user
 		.reset_notification_counts(pdu.sender(), room_id);
 
-	let count2_raw = self.services.globals.next_count().unwrap();
+	let count2_raw = self.services.globals.next_count()?;
 	let count2 = PduCount::Normal(count2_raw);
 	let pdu_id: RawPduId = PduId { shortroomid, shorteventid: count2 }.into();
 
