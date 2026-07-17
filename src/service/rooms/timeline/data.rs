@@ -2117,8 +2117,10 @@ fn increment(db: &Arc<Map>, key: &[u8]) {
 
 #[cfg(test)]
 mod tests {
+	use conduwuit::Result;
 	use conduwuit_core::matrix::pdu::{Count as PduCount, Id as PduId, RawId as RawPduId};
 	use rezzy::{HashMap, LeanEvent, verify_pagination};
+	use ruma::api::Direction;
 
 	use super::Data;
 
@@ -2642,12 +2644,6 @@ mod tests {
 		assert_eq!(exact_total, 7, "exact seek from MAX must return all 7 events");
 		assert_eq!(inflate_total, 7, "inflated seek from MAX must also return all 7 events");
 	}
-}
-
-#[cfg(test)]
-mod tests {
-	use conduwuit::Result;
-	use ruma::api::Direction;
 
 	// Tests for edge cases and out-of-order events.
 
