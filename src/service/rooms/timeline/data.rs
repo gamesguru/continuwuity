@@ -1379,12 +1379,18 @@ impl Data {
 	/// Returns an iterator over all events and their tokens in a room that
 	/// happened before the event with id `until` in reverse-chronological
 	/// order.
+	///
+	/// EXCLUSIVE of `until`: the event at `until` itself is never yielded.
+	/// Callers that want that event included (e.g. "give me the state at
+	/// this point") must pass `until.saturating_inc(Direction::Forward)`
+	/// instead — see `members.rs`'s `/members?at=` handler for an example.
 	pub(super) fn pdus_rev<'a>(
 		&'a self,
 		room_id: &'a RoomId,
 		until: PduCount,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		self.count_to_id(room_id, until, Direction::Backward)
+		let seek_count = until.saturating_inc(Direction::Backward);
+		self.count_to_id(room_id, seek_count, Direction::Backward)
 			.map_ok(move |current| {
 				let prefix = current.shortroomid();
 				self.room_pducount_eventid
@@ -1401,12 +1407,14 @@ impl Data {
 			.try_flatten_stream()
 	}
 
+	/// EXCLUSIVE of `from`: the event at `from` itself is never yielded. See
+	/// `pdus_rev` above for the rationale and the caller-side workaround.
 	pub(super) fn pdus<'a>(
 		&'a self,
 		room_id: &'a RoomId,
 		from: PduCount,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		self.count_to_id(room_id, from, Direction::Forward)
+		self.count_to_id(room_id, from.saturating_inc(Direction::Forward), Direction::Forward)
 			.map_ok(move |current| {
 				let prefix = current.shortroomid();
 				self.room_pducount_eventid
