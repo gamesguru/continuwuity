@@ -18,7 +18,11 @@ use conduwuit::{
 	},
 	warn,
 };
-use conduwuit_service::{Services, rooms::read_receipt::pack_receipts, sync::into_snake_key};
+use conduwuit_service::{
+	Services,
+	rooms::read_receipt::pack_receipts,
+	sync::{CompatListFilters, CompatRequiredStateExcludes, into_snake_key},
+};
 use futures::{
 	FutureExt, StreamExt, TryFutureExt,
 	future::{OptionFuture, join3, try_join4},
@@ -107,12 +111,6 @@ impl RequiredStateSelection {
 	}
 }
 
-#[derive(Default)]
-struct CompatRequiredStateExcludes {
-	lists: BTreeMap<String, Vec<(StateEventType, String)>>,
-	room_subscriptions: BTreeMap<OwnedRoomId, Vec<(StateEventType, String)>>,
-}
-
 #[derive(Clone, Copy)]
 enum SyncEndpoint {
 	StableV5,
@@ -192,34 +190,6 @@ struct CompatList {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-struct CompatListFilters {
-	#[serde(skip_serializing_if = "Option::is_none")]
-	is_dm: Option<bool>,
-
-	#[serde(skip_serializing_if = "Option::is_none")]
-	is_encrypted: Option<bool>,
-
-	#[serde(skip_serializing_if = "Option::is_none")]
-	#[serde(alias = "is_invited")]
-	is_invite: Option<bool>,
-
-	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
-	room_types: Vec<RoomTypeFilter>,
-
-	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
-	not_room_types: Vec<RoomTypeFilter>,
-
-	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
-	tags: Vec<String>,
-
-	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
-	not_tags: Vec<String>,
-
-	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
-	spaces: Vec<OwnedRoomId>,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct CompatRoomSubscription {
 	#[serde(
 		default,
@@ -246,21 +216,6 @@ struct CompatRoomDetails {
 
 	#[serde(default, skip_serializing_if = "ruma::serde::is_default")]
 	timeline_limit: UInt,
-}
-
-impl From<&sync_events::v5::request::ListFilters> for CompatListFilters {
-	fn from(value: &sync_events::v5::request::ListFilters) -> Self {
-		Self {
-			is_dm: None,
-			is_encrypted: None,
-			is_invite: value.is_invite,
-			room_types: Vec::new(),
-			not_room_types: value.not_room_types.clone(),
-			tags: Vec::new(),
-			not_tags: Vec::new(),
-			spaces: Vec::new(),
-		}
-	}
 }
 
 impl From<CompatRequest> for sync_events::v5::Request {
@@ -593,8 +548,8 @@ async fn sync_events_v5_route_inner(
 
 	let CompatSyncRequest {
 		mut request,
-		list_filters,
-		required_state_excludes,
+		mut list_filters,
+		mut required_state_excludes,
 		set_presence,
 	} = body.body;
 
@@ -654,6 +609,13 @@ async fn sync_events_v5_route_inner(
 	let (known_rooms, timeline_limits) = services
 		.sync
 		.update_snake_sync_request_with_cache(&snake_key, &mut request);
+	if endpoint.stores_connection_without_id() {
+		services.sync.update_snake_compat_sticky(
+			&snake_key,
+			&mut list_filters,
+			&mut required_state_excludes,
+		);
+	}
 	let list_filters = endpoint
 		.stores_connection_without_id()
 		.then_some(&list_filters);

@@ -17,10 +17,68 @@ use ruma::{
 		v4::{ExtensionsConfig, SyncRequestList},
 		v5::{self, request as v5_request},
 	},
+	directory::RoomTypeFilter,
+	events::StateEventType,
 	uint,
 };
+use serde::{Deserialize, Serialize};
 
 use crate::{Dep, rooms};
+
+/// Sticky (compat-only, non-MSC3575) list filters for MSC4186's simplified
+/// sliding sync. Kept here so they can be cached alongside the rest of a
+/// snake-cased connection's sticky parameters and survive follow-up requests
+/// that omit `lists` entirely.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CompatListFilters {
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub is_dm: Option<bool>,
+
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub is_encrypted: Option<bool>,
+
+	#[serde(skip_serializing_if = "Option::is_none")]
+	#[serde(alias = "is_invited")]
+	pub is_invite: Option<bool>,
+
+	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+	pub room_types: Vec<RoomTypeFilter>,
+
+	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+	pub not_room_types: Vec<RoomTypeFilter>,
+
+	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+	pub tags: Vec<String>,
+
+	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+	pub not_tags: Vec<String>,
+
+	#[serde(default, skip_serializing_if = "<[_]>::is_empty")]
+	pub spaces: Vec<OwnedRoomId>,
+}
+
+impl From<&v5_request::ListFilters> for CompatListFilters {
+	fn from(value: &v5_request::ListFilters) -> Self {
+		Self {
+			is_dm: None,
+			is_encrypted: None,
+			is_invite: value.is_invite,
+			room_types: Vec::new(),
+			not_room_types: value.not_room_types.clone(),
+			tags: Vec::new(),
+			not_tags: Vec::new(),
+			spaces: Vec::new(),
+		}
+	}
+}
+
+/// Sticky (compat-only) `required_state.exclude` entries, keyed the same way
+/// as [`CompatListFilters`].
+#[derive(Clone, Debug, Default)]
+pub struct CompatRequiredStateExcludes {
+	pub lists: BTreeMap<String, Vec<(StateEventType, String)>>,
+	pub room_subscriptions: BTreeMap<OwnedRoomId, Vec<(StateEventType, String)>>,
+}
 
 pub struct Service {
 	db: Data,
@@ -66,6 +124,8 @@ struct SnakeSyncCache {
 	known_rooms: BTreeMap<String, BTreeMap<OwnedRoomId, u64>>,
 	timeline_limits: BTreeMap<OwnedRoomId, usize>,
 	last_pos: Option<u64>,
+	compat_list_filters: BTreeMap<String, CompatListFilters>,
+	compat_required_state_excludes: CompatRequiredStateExcludes,
 }
 
 type DbConnections<K, V> = Cache<K, V>;
@@ -176,6 +236,47 @@ impl Service {
 		cached.extensions = request.extensions.clone();
 
 		(cached.known_rooms.clone(), cached.timeline_limits.clone())
+	}
+
+	/// Sticky merge for the compat-only (non-MSC3575) list filters and
+	/// required_state excludes: a list/subscription whose entry is absent
+	/// from this request (whether because the list itself was omitted, or
+	/// just its `filters`/exclude entry was) keeps whatever was cached from
+	/// a previous request. An entry present in this request, even an empty
+	/// one, always overrides the cache.
+	pub fn update_snake_compat_sticky(
+		&self,
+		snake_key: &SnakeConnectionsKey,
+		list_filters: &mut BTreeMap<String, CompatListFilters>,
+		required_state_excludes: &mut CompatRequiredStateExcludes,
+	) {
+		let cached_arc = self
+			.snake_connections
+			.get_with(snake_key.clone(), || Arc::new(SyncMutex::new(SnakeSyncCache::default())));
+		let mut cached = cached_arc.lock();
+
+		for (list_id, cached_filters) in &cached.compat_list_filters {
+			list_filters
+				.entry(list_id.clone())
+				.or_insert_with(|| cached_filters.clone());
+		}
+		cached.compat_list_filters = list_filters.clone();
+
+		for (list_id, cached_excludes) in &cached.compat_required_state_excludes.lists {
+			required_state_excludes
+				.lists
+				.entry(list_id.clone())
+				.or_insert_with(|| cached_excludes.clone());
+		}
+		for (room_id, cached_excludes) in
+			&cached.compat_required_state_excludes.room_subscriptions
+		{
+			required_state_excludes
+				.room_subscriptions
+				.entry(room_id.clone())
+				.or_insert_with(|| cached_excludes.clone());
+		}
+		cached.compat_required_state_excludes = required_state_excludes.clone();
 	}
 
 	pub fn update_sync_request_with_cache(
