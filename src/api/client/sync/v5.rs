@@ -896,7 +896,7 @@ async fn fetch_subscriptions(
 			.entry(room_id.clone())
 			.or_insert_with(|| (RequiredStateSelection::default(), 0_usize, u64::MAX));
 
-		let limit: UInt = room.timeline_limit;
+		let limit: usize = usize_from_ruma(room.timeline_limit).min(100);
 
 		todo_room.0.include.extend(
 			room.required_state
@@ -912,7 +912,7 @@ async fn fetch_subscriptions(
 					.map(|(ty, sk)| (ty.clone(), sk.as_str().into())),
 			);
 		}
-		todo_room.1 = todo_room.1.max(usize_from_ruma(limit));
+		todo_room.1 = todo_room.1.max(limit);
 		// 0 means unknown because it got out of date
 		todo_room.2 = todo_room.2.min(
 			known_rooms
