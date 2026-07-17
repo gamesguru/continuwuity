@@ -494,7 +494,7 @@ pub(crate) async fn build_sync_events(
 	// Look for device list updates of this account
 	let keys_changed = services
 		.users
-		.keys_changed(syncing_user, last_sync_end_count, Some(current_count))
+		.keys_changed(syncing_user, last_sync_end_count, None)
 		.map(ToOwned::to_owned)
 		.collect::<HashSet<_>>();
 
