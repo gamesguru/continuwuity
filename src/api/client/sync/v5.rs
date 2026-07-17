@@ -72,14 +72,39 @@ impl CompatRequiredState {
 	fn is_empty(&self) -> bool { self.include.is_empty() && self.exclude.is_empty() }
 }
 
+/// One list's or room subscription's required_state request for a room.
+/// Kept separate per selector (rather than merged into one include/exclude
+/// pair) so an exclude from one list/subscription can't suppress state that
+/// another list/subscription for the same room explicitly asked to include.
 #[derive(Debug, Default)]
-struct RequiredStateSelection {
+struct RequiredStateSelector {
 	include: BTreeSet<TypeStateKey>,
 	exclude: BTreeSet<TypeStateKey>,
 }
 
+#[derive(Debug, Default)]
+struct RequiredStateSelection {
+	selectors: Vec<RequiredStateSelector>,
+}
+
 impl RequiredStateSelection {
-	fn is_empty(&self) -> bool { self.include.is_empty() }
+	fn is_empty(&self) -> bool { self.selectors.iter().all(|s| s.include.is_empty()) }
+
+	fn push<I, E>(&mut self, include: I, exclude: E)
+	where
+		I: IntoIterator<Item = TypeStateKey>,
+		E: IntoIterator<Item = TypeStateKey>,
+	{
+		let include: BTreeSet<_> = include.into_iter().collect();
+		if include.is_empty() {
+			return;
+		}
+
+		self.selectors.push(RequiredStateSelector {
+			include,
+			exclude: exclude.into_iter().collect(),
+		});
+	}
 }
 
 #[derive(Default)]
@@ -898,20 +923,17 @@ async fn fetch_subscriptions(
 
 		let limit: usize = usize_from_ruma(room.timeline_limit).min(100);
 
-		todo_room.0.include.extend(
+		let excludes = required_state_excludes
+			.and_then(|excludes| excludes.room_subscriptions.get(room_id))
+			.into_iter()
+			.flatten()
+			.map(|(ty, sk)| (ty.clone(), sk.as_str().into()));
+		todo_room.0.push(
 			room.required_state
 				.iter()
 				.map(|(ty, sk)| (ty.clone(), sk.as_str().into())),
+			excludes,
 		);
-		if let Some(excludes) =
-			required_state_excludes.and_then(|excludes| excludes.room_subscriptions.get(room_id))
-		{
-			todo_room.0.exclude.extend(
-				excludes
-					.iter()
-					.map(|(ty, sk)| (ty.clone(), sk.as_str().into())),
-			);
-		}
 		todo_room.1 = todo_room.1.max(limit);
 		// 0 means unknown because it got out of date
 		todo_room.2 = todo_room.2.min(
@@ -1051,21 +1073,18 @@ where
 
 				let limit: usize = usize_from_ruma(list.room_details.timeline_limit).min(100);
 
-				todo_room.0.include.extend(
+				let excludes = required_state_excludes
+					.and_then(|excludes| excludes.lists.get(list_id))
+					.into_iter()
+					.flatten()
+					.map(|(ty, sk)| (ty.clone(), sk.as_str().into()));
+				todo_room.0.push(
 					list.room_details
 						.required_state
 						.iter()
 						.map(|(ty, sk)| (ty.clone(), sk.as_str().into())),
+					excludes,
 				);
-				if let Some(excludes) =
-					required_state_excludes.and_then(|excludes| excludes.lists.get(list_id))
-				{
-					todo_room.0.exclude.extend(
-						excludes
-							.iter()
-							.map(|(ty, sk)| (ty.clone(), sk.as_str().into())),
-					);
-				}
 
 				todo_room.1 = todo_room.1.max(limit);
 				// 0 means unknown because it got out of date
@@ -1284,14 +1303,11 @@ where
 		)
 		.await;
 
-		let room_name_requested =
-			required_state_request
-				.include
-				.iter()
-				.any(|(event_type, state_key)| {
-					*event_type == StateEventType::RoomName
-						&& matches!(state_key.as_str(), "" | "*")
-				});
+		let room_name_requested = required_state_request.selectors.iter().any(|selector| {
+			selector.include.iter().any(|(event_type, state_key)| {
+				*event_type == StateEventType::RoomName && matches!(state_key.as_str(), "" | "*")
+			})
+		});
 		let include_stable_room_fields = body.pos.is_none()
 			|| room_name_requested
 			|| timeline_pdus
@@ -1548,119 +1564,131 @@ async fn collect_required_state(
 	timeline_pdus: &VecDeque<(PduCount, impl Event + Sync)>,
 ) -> Vec<Raw<AnySyncStateEvent>> {
 	let mut required_state = Vec::new();
-	let mut wildcard_types: HashSet<&StateEventType> = HashSet::new();
+	// Shared across selectors purely to avoid emitting duplicate state events;
+	// never used to decide whether an entry is fetched at all, so one
+	// selector's exclusions can't suppress another's includes.
 	let mut fetched: HashSet<(StateEventType, String)> = HashSet::new();
+	let mut lazy = false;
+	let mut member_wildcarded = false;
 
-	let lazy = required_state_request
-		.include
-		.iter()
-		.any(|(ty, sk)| *ty == StateEventType::RoomMember && sk.as_str() == "$LAZY");
+	for selector in &required_state_request.selectors {
+		let mut wildcard_types: HashSet<&StateEventType> = HashSet::new();
 
-	for (event_type, state_key) in &required_state_request.include {
-		if wildcard_types.contains(event_type) {
-			continue;
-		}
+		lazy |= selector
+			.include
+			.iter()
+			.any(|(ty, sk)| *ty == StateEventType::RoomMember && sk.as_str() == "$LAZY");
 
-		if event_type.to_string() == "*" {
-			let state_key_filter = state_key.as_str();
-			let full_state = services.rooms.state_accessor.room_state_full(room_id);
-			pin_mut!(full_state);
-			while let Some(Ok(((state_event_type, full_state_key), event))) =
-				full_state.next().await
-			{
-				let full_state_key = full_state_key.to_string();
-				if state_key_filter != "*" && state_key_filter != full_state_key {
-					continue;
-				}
-				if required_state_excludes(
-					&(state_event_type.clone(), full_state_key.clone()),
-					&required_state_request.exclude,
-				) {
-					continue;
-				}
-				if !fetched.insert((state_event_type, full_state_key)) {
-					continue;
-				}
-				required_state.push(Event::into_format(event));
+		for (event_type, state_key) in &selector.include {
+			if wildcard_types.contains(event_type) {
+				continue;
 			}
-			continue;
-		}
 
-		match state_key.as_str() {
-			| "*" => {
-				wildcard_types.insert(event_type);
-				if let Ok(keys) = services
-					.rooms
-					.state_accessor
-					.room_state_keys(room_id, event_type)
-					.await
+			if event_type.to_string() == "*" {
+				let state_key_filter = state_key.as_str();
+				let full_state = services.rooms.state_accessor.room_state_full(room_id);
+				pin_mut!(full_state);
+				while let Some(Ok(((state_event_type, full_state_key), event))) =
+					full_state.next().await
 				{
-					for key in keys {
-						if required_state_excludes(
-							&(event_type.clone(), key.clone()),
-							&required_state_request.exclude,
-						) {
-							continue;
-						}
-						if !fetched.insert((event_type.clone(), key.clone())) {
-							continue;
-						}
-						if let Ok(event) = services
-							.rooms
-							.state_accessor
-							.room_state_get(room_id, event_type, &key)
-							.await
-						{
-							required_state.push(Event::into_format(event));
+					let full_state_key = full_state_key.to_string();
+					if state_key_filter != "*" && state_key_filter != full_state_key {
+						continue;
+					}
+					if required_state_excludes(
+						&(state_event_type.clone(), full_state_key.clone()),
+						&selector.exclude,
+					) {
+						continue;
+					}
+					if !fetched.insert((state_event_type, full_state_key)) {
+						continue;
+					}
+					required_state.push(Event::into_format(event));
+				}
+				continue;
+			}
+
+			match state_key.as_str() {
+				| "*" => {
+					wildcard_types.insert(event_type);
+					if *event_type == StateEventType::RoomMember {
+						member_wildcarded = true;
+					}
+					if let Ok(keys) = services
+						.rooms
+						.state_accessor
+						.room_state_keys(room_id, event_type)
+						.await
+					{
+						for key in keys {
+							if required_state_excludes(
+								&(event_type.clone(), key.clone()),
+								&selector.exclude,
+							) {
+								continue;
+							}
+							if !fetched.insert((event_type.clone(), key.clone())) {
+								continue;
+							}
+							if let Ok(event) = services
+								.rooms
+								.state_accessor
+								.room_state_get(room_id, event_type, &key)
+								.await
+							{
+								required_state.push(Event::into_format(event));
+							}
 						}
 					}
-				}
-			},
-			// Handled below via `lazy`; skip the literal "$LAZY" lookup only for member state.
-			| "$LAZY" if *event_type == StateEventType::RoomMember => {},
-			| "$ME" => {
-				let resolved_key = sender_user.as_str();
-				if required_state_excludes(
-					&(event_type.clone(), resolved_key.to_owned()),
-					&required_state_request.exclude,
-				) {
-					continue;
-				}
-				if !fetched.insert((event_type.clone(), resolved_key.to_owned())) {
-					continue;
-				}
-				if let Ok(event) = services
-					.rooms
-					.state_accessor
-					.room_state_get(room_id, event_type, resolved_key)
-					.await
-				{
-					required_state.push(Event::into_format(event));
-				}
-			},
-			| _ => {
-				if required_state_excludes(
-					&(event_type.clone(), state_key.to_string()),
-					&required_state_request.exclude,
-				) {
-					continue;
-				}
-				if !fetched.insert((event_type.clone(), state_key.to_string())) {
-					continue;
-				}
-				if let Ok(event) = services
-					.rooms
-					.state_accessor
-					.room_state_get(room_id, event_type, state_key)
-					.await
-				{
-					required_state.push(Event::into_format(event));
-				}
-			},
+				},
+				// Handled below via `lazy`; skip the literal "$LAZY" lookup only for member
+				// state.
+				| "$LAZY" if *event_type == StateEventType::RoomMember => {},
+				| "$ME" => {
+					let resolved_key = sender_user.as_str();
+					if required_state_excludes(
+						&(event_type.clone(), resolved_key.to_owned()),
+						&selector.exclude,
+					) {
+						continue;
+					}
+					if !fetched.insert((event_type.clone(), resolved_key.to_owned())) {
+						continue;
+					}
+					if let Ok(event) = services
+						.rooms
+						.state_accessor
+						.room_state_get(room_id, event_type, resolved_key)
+						.await
+					{
+						required_state.push(Event::into_format(event));
+					}
+				},
+				| _ => {
+					if required_state_excludes(
+						&(event_type.clone(), state_key.to_string()),
+						&selector.exclude,
+					) {
+						continue;
+					}
+					if !fetched.insert((event_type.clone(), state_key.to_string())) {
+						continue;
+					}
+					if let Ok(event) = services
+						.rooms
+						.state_accessor
+						.room_state_get(room_id, event_type, state_key)
+						.await
+					{
+						required_state.push(Event::into_format(event));
+					}
+				},
+			}
 		}
 	}
 
-	if lazy && !wildcard_types.contains(&StateEventType::RoomMember) {
+	if lazy && !member_wildcarded {
 		let mut lazy_members: HashSet<String> = HashSet::new();
 		for (_, pdu) in timeline_pdus {
 			lazy_members.insert(pdu.sender().as_str().to_owned());
@@ -1671,12 +1699,8 @@ async fn collect_required_state(
 			}
 		}
 		for member in lazy_members {
-			if required_state_excludes(
-				&(StateEventType::RoomMember, member.clone()),
-				&required_state_request.exclude,
-			) {
-				continue;
-			}
+			// Lazy-loaded members aren't tied to any single selector's include/exclude
+			// pair, so no per-selector exclude applies here.
 			if !fetched.insert((StateEventType::RoomMember, member.clone())) {
 				continue;
 			}
