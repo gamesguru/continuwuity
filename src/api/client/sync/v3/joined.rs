@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use conduwuit::{
-	Error, Result, at, debug, debug_warn, extract_variant, info,
+	Error, Result, at, debug, debug_warn, extract_variant,
 	matrix::{
 		Event,
 		event::Matches,
