@@ -915,22 +915,7 @@ async fn handle_edu_device_list_update(
 
 		// TODO: Synapse tracks and replays prev_id chains locally, which lets it avoid
 		// some of these fallback /user/devices fetches and save federation bandwidth.
-		let mut actually_changed = false;
 		for device in response.devices {
-			let existing_keys = services
-				.users
-				.get_device_keys(&user_id, &device.device_id)
-				.await
-				.ok();
-			let keys_changed = match existing_keys {
-				| Some(existing_keys) => remote_device_keys_differ(&existing_keys, &device.keys),
-				| None => true,
-			};
-
-			if keys_changed {
-				actually_changed = true;
-			}
-
 			services
 				.users
 				.cache_remote_device_keys(&user_id, &device.device_id, &device.keys)
@@ -941,9 +926,7 @@ async fn handle_edu_device_list_update(
 			.users
 			.set_remote_device_list_stream_id(&user_id, fetched_stream_id);
 
-		if actually_changed {
-			services.users.mark_device_key_update(&user_id).await;
-		}
+		services.users.mark_device_key_update(&user_id).await;
 
 		return;
 	};

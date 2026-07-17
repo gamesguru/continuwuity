@@ -539,6 +539,10 @@ where
 		.into_iter()
 		.stream()
 		.wide_filter_map(|(server, vec)| async move {
+			let requested_users = vec
+				.iter()
+				.map(|(user_id, _)| user_id.as_str().to_owned())
+				.collect::<HashSet<_>>();
 			let mut device_keys_input_fed = BTreeMap::new();
 			for (user_id, keys) in vec {
 				device_keys_input_fed.insert(user_id.to_owned(), keys.clone());
@@ -555,16 +559,22 @@ where
 			.map_err(|_| err!(Request(Unknown("Timeout when getting keys over federation."))))
 			.and_then(|res| res);
 
-			Some((server, response))
+			Some((server, requested_users, response))
 		})
 		.collect::<FuturesUnordered<_>>()
 		.await
 		.into_iter();
 
-	for (server, response) in futures {
+	for (server, requested_users, response) in futures {
 		match response {
 			| Ok(response) => {
 				for (user_id, devices) in &response.device_keys {
+					if user_id.server_name().as_str() != server.as_str()
+						|| !requested_users.contains(user_id.as_str())
+					{
+						continue;
+					}
+
 					for (device_id, device_keys) in devices {
 						services
 							.users

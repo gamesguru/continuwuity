@@ -1139,17 +1139,18 @@ impl Service {
 	) -> impl Stream<Item = (&'a UserId, u64)> + Send + 'a {
 		type KeyVal<'a> = ((&'a UserId, u64), &'a UserId);
 
-		let from = from.unwrap_or(0);
+		let from = from.map_or(0, |from| from.saturating_add(1));
 		let to = to.unwrap_or(u64::MAX);
-		let prefix = (user_id, Interfix);
+		let from = (user_id, Interfix, from);
 
 		self.db
 			.keychangeid_userid
-			.stream_prefix(&prefix)
+			.stream_from(&from)
 			.ignore_err()
-			.ready_filter_map(move |((_, count), changed_user): KeyVal<'_>| {
-				(count >= from && count <= to).then_some((changed_user, count))
+			.ready_take_while(move |((user_id_, count), _): &KeyVal<'_>| {
+				user_id == *user_id_ && *count <= to
 			})
+			.map(move |((_, count), changed_user): KeyVal<'_>| (changed_user, count))
 	}
 
 	#[inline]
@@ -1161,29 +1162,18 @@ impl Service {
 	) -> impl Stream<Item = (&'a UserId, u64)> + Send + 'a {
 		type KeyVal<'a> = ((&'a RoomId, u64), &'a UserId);
 
-		let from = from.unwrap_or(0);
+		let from = from.map_or(0, |from| from.saturating_add(1));
 		let to = to.unwrap_or(u64::MAX);
-		let prefix = (room_id, Interfix);
+		let from = (room_id, Interfix, from);
 
 		self.db
 			.keychangeid_userid
-			.stream_prefix(&prefix)
+			.stream_from(&from)
 			.ignore_err()
-			.ready_filter_map(move |((_, count), changed_user): KeyVal<'_>| {
-				let in_range = count >= from && count <= to;
-
-				tracing::info!(
-					%room_id,
-					%changed_user,
-					count,
-					from,
-					to,
-					in_range,
-					"room_keys_changed: scanned row"
-				);
-
-				in_range.then_some((changed_user, count))
+			.ready_take_while(move |((room_id_, count), _): &KeyVal<'_>| {
+				room_id == *room_id_ && *count <= to
 			})
+			.map(move |((_, count), changed_user): KeyVal<'_>| (changed_user, count))
 	}
 
 	pub async fn mark_device_key_update(&self, user_id: &UserId) {

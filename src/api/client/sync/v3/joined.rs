@@ -980,7 +980,12 @@ async fn build_heroes(
 #[tracing::instrument(level = "debug", skip_all)]
 async fn build_device_list_updates(
 	services: &Services,
-	SyncContext { syncing_user, last_sync_end_count, .. }: SyncContext<'_>,
+	SyncContext {
+		syncing_user,
+		last_sync_end_count,
+		current_count,
+		..
+	}: SyncContext<'_>,
 	room_id: &RoomId,
 	ShortStateHashes { .. }: ShortStateHashes,
 	timeline: &TimelinePdus,
@@ -1008,17 +1013,14 @@ async fn build_device_list_updates(
 	// add users with changed keys to the `changed` list
 	let room_key_changes = services
 		.users
-		// Device-list updates are not tied to timeline/state counts and can land
-		// just after the sync snapshot. Leaving this unbounded avoids dropping a
-		// wakeup for an otherwise-empty incremental joined room.
-		.room_keys_changed(room_id, last_sync_end_count, None)
+		.room_keys_changed(room_id, last_sync_end_count, Some(current_count))
 		.map(at!(0))
 		.map(ToOwned::to_owned)
 		.collect::<Vec<_>>()
 		.await;
 
 	if !room_key_changes.is_empty() {
-		debug!(
+		trace!(
 			%room_id,
 			syncing_user = %syncing_user,
 			changed_user_count = room_key_changes.len(),

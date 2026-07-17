@@ -600,8 +600,8 @@ pub(crate) fn is_join_rule_accessible(
 /// Returns the children of a SpaceHierarchyParentSummary, making use of the
 /// children_state field.
 ///
-/// Sorted by the spec-mandated `order` field (lexicographic), rooms without
-/// `order` come last while preserving their existing state order.
+/// Sorted by the spec-mandated `order`, `origin_server_ts`, and room ID tie
+/// breakers. Do not rely on state iteration order here.
 pub fn get_parent_children_via(
 	parent: &SpaceHierarchyParentSummary,
 	suggested_only: bool,
@@ -620,25 +620,27 @@ pub fn get_parent_children_via(
 		.map(Raw::deserialize)
 		.filter_map(Result::ok)
 		.filter(|ce| !suggested_only || ce.content.suggested)
-		.map(|ce| (ce.state_key, ce.content.order, ce.content.via))
 		.collect();
 
-	// Spec: sort by `order` field (lexicographic), rooms without `order` come
-	// last. Do not tiebreak unordered children by room_id: generated room IDs
-	// make hierarchy pagination nondeterministic across otherwise identical
-	// test runs.
-	children.sort_by(|(_, order_a, _), (_, order_b, _)| {
-		match (order_a.as_deref(), order_b.as_deref()) {
-			| (Some(a), Some(b)) => a.cmp(b),
-			| (Some(_), None) => std::cmp::Ordering::Less,
-			| (None, Some(_)) => std::cmp::Ordering::Greater,
-			| (None, None) => std::cmp::Ordering::Equal,
-		}
+	children.sort_by(|a, b| match (a.content.order.as_deref(), b.content.order.as_deref()) {
+		| (Some(order_a), Some(order_b)) => match order_a.cmp(order_b) {
+			| std::cmp::Ordering::Equal => match a.origin_server_ts.cmp(&b.origin_server_ts) {
+				| std::cmp::Ordering::Equal => a.state_key.cmp(&b.state_key),
+				| ordering => ordering,
+			},
+			| ordering => ordering,
+		},
+		| (Some(_), None) => std::cmp::Ordering::Less,
+		| (None, Some(_)) => std::cmp::Ordering::Greater,
+		| (None, None) => match a.origin_server_ts.cmp(&b.origin_server_ts) {
+			| std::cmp::Ordering::Equal => a.state_key.cmp(&b.state_key),
+			| ordering => ordering,
+		},
 	});
 
 	children
 		.into_iter()
-		.map(|(room_id, _order, via)| (room_id, via))
+		.map(|ce| (ce.state_key, ce.content.via))
 		.collect()
 }
 
