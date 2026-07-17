@@ -1141,7 +1141,7 @@ impl Service {
 
 		let from = from.map_or(0, |from| from.saturating_add(1));
 		let to = to.unwrap_or(u64::MAX);
-		let from = (user_id, Interfix, from);
+		let from = (user_id, from);
 
 		self.db
 			.keychangeid_userid
@@ -1164,7 +1164,7 @@ impl Service {
 
 		let from = from.map_or(0, |from| from.saturating_add(1));
 		let to = to.unwrap_or(u64::MAX);
-		let from = (room_id, Interfix, from);
+		let from = (room_id, from);
 
 		self.db
 			.keychangeid_userid
