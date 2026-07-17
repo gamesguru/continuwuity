@@ -494,10 +494,7 @@ pub(crate) async fn build_sync_events(
 	// Look for device list updates of this account
 	let keys_changed = services
 		.users
-		// Device-list updates can arrive after the sync snapshot is taken but
-		// before the long-poll wakes. Do not cap these by current_count or an
-		// otherwise-empty incremental sync can miss the wakeup entirely.
-		.keys_changed(syncing_user, last_sync_end_count, None)
+		.keys_changed(syncing_user, last_sync_end_count, Some(current_count))
 		.map(ToOwned::to_owned)
 		.collect::<HashSet<_>>();
 

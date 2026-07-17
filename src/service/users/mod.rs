@@ -739,7 +739,9 @@ impl Service {
 			.onetimekeyid_onetimekeys
 			.raw_put(key, Json(one_time_key_value));
 
-		self.db.userid_lastonetimekeyupdate.raw_put(user_id, upload_count);
+		self.db
+			.userid_lastonetimekeyupdate
+			.raw_put(user_id, upload_count);
 
 		Ok(())
 	}
@@ -1142,18 +1144,17 @@ impl Service {
 	) -> impl Stream<Item = (&'a UserId, u64)> + Send + 'a {
 		type KeyVal<'a> = ((&'a UserId, u64), &'a UserId);
 
-		let from = from.map_or(0, |from| from.saturating_add(1));
+		let from = from.unwrap_or(0);
 		let to = to.unwrap_or(u64::MAX);
-		let from = (user_id, from);
+		let prefix = (user_id, Interfix);
 
 		self.db
 			.keychangeid_userid
-			.stream_from(&from)
+			.stream_prefix(&prefix)
 			.ignore_err()
-			.ready_take_while(move |((user_id_, count), _): &KeyVal<'_>| {
-				user_id == *user_id_ && *count <= to
+			.ready_filter_map(move |((_, count), changed_user): KeyVal<'_>| {
+				(count >= from && count <= to).then_some((changed_user, count))
 			})
-			.map(move |((_, count), changed_user): KeyVal<'_>| (changed_user, count))
 	}
 
 	#[inline]
@@ -1165,18 +1166,17 @@ impl Service {
 	) -> impl Stream<Item = (&'a UserId, u64)> + Send + 'a {
 		type KeyVal<'a> = ((&'a RoomId, u64), &'a UserId);
 
-		let from = from.map_or(0, |from| from.saturating_add(1));
+		let from = from.unwrap_or(0);
 		let to = to.unwrap_or(u64::MAX);
-		let from = (room_id, from);
+		let prefix = (room_id, Interfix);
 
 		self.db
 			.keychangeid_userid
-			.stream_from(&from)
+			.stream_prefix(&prefix)
 			.ignore_err()
-			.ready_take_while(move |((room_id_, count), _): &KeyVal<'_>| {
-				room_id == *room_id_ && *count <= to
+			.ready_filter_map(move |((_, count), changed_user): KeyVal<'_>| {
+				(count >= from && count <= to).then_some((changed_user, count))
 			})
-			.map(move |((_, count), changed_user): KeyVal<'_>| (changed_user, count))
 	}
 
 	pub async fn mark_device_key_update(&self, user_id: &UserId) {
