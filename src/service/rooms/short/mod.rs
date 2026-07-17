@@ -410,7 +410,8 @@ where
 	const BUFSIZE: usize = size_of::<ShortEventId>();
 
 	if let Some(cached) = self.shorteventid_eventid_cache.get(&shorteventid) {
-		let s = serde_json::to_vec(&cached).unwrap();
+		let s = serde_json::to_vec(&cached)
+			.map_err(|e| err!(Database("Failed to serialize cached EventId: {e:?}")))?;
 		return serde_json::from_slice::<Id>(&s)
 			.map_err(|e| err!(Database("Failed to deserialize EventId from cache: {e:?}")));
 	}
@@ -454,9 +455,13 @@ where
 
 			for (i, key) in chunk.iter().copied().enumerate() {
 				if let Some(cached) = self.shorteventid_eventid_cache.get(&key) {
-					let s = serde_json::to_vec(&cached).unwrap();
-					let res = serde_json::from_slice::<Id>(&s)
-						.map_err(|e| err!(Database("Failed to deserialize EventId: {e:?}")));
+					let res = serde_json::to_vec(&cached)
+						.map_err(|e| err!(Database("Failed to serialize cached EventId: {e:?}")))
+						.and_then(|s| {
+							serde_json::from_slice::<Id>(&s).map_err(|e| {
+								err!(Database("Failed to deserialize EventId: {e:?}"))
+							})
+						});
 					results.push(Some(res));
 				} else {
 					results.push(None);
