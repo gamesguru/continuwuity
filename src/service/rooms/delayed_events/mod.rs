@@ -291,7 +291,9 @@ impl Service {
 		let finalized_event: FinalizedDelayedEvent = finalized_event?.deserialized()?;
 
 		if finalized_event.event.user_id != sender_user {
-			return Err!(Request(Forbidden("You are not authorized to modify this delayed event.")));
+			return Err!(Request(Forbidden(
+				"You are not authorized to modify this delayed event."
+			)));
 		}
 
 		match (action, finalized_event.outcome()) {
@@ -492,7 +494,9 @@ impl Service {
 		let mut event: ScheduledDelayedEvent = event.deserialized()?;
 
 		if event.user_id != sender_user {
-			return Err!(Request(Forbidden("You are not authorized to modify this delayed event.")));
+			return Err!(Request(Forbidden(
+				"You are not authorized to modify this delayed event."
+			)));
 		}
 
 		match action {

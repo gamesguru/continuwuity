@@ -260,7 +260,10 @@ impl Data {
 						Ok(PduCount::Normal(existing_count)),
 					) = (
 						self.services.timeline.get_pdu_count(&new_event_id).await,
-						self.services.timeline.get_pdu_count(&existing_event_id).await,
+						self.services
+							.timeline
+							.get_pdu_count(&existing_event_id)
+							.await,
 					) {
 						if existing_count > new_count {
 							continue;
