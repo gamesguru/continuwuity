@@ -7,7 +7,7 @@ pub(crate) async fn update_delayed_event_event_route(
 	State(services): State<crate::State>,
 	axum::extract::Path(delay_id): axum::extract::Path<String>,
 	uri: http::Uri,
-	body: Ruma<ruma::api::client::device::get_devices::v3::Request>,
+	body: Ruma<ruma::api::client::session::logout::v3::Request>,
 ) -> Result<axum::Json<serde_json::Value>> {
 	let sender_user = body.sender_user();
 
