@@ -234,6 +234,45 @@ impl Data {
 			.await;
 		new_receipts.extend(synthetic_receipts);
 
+		// Drop receipts that would move the user's read position backwards for the
+		// same (type, thread). Federation EDUs (and replayed client requests) can
+		// arrive out of order, and a stale receipt must not regress state that's
+		// already more recent.
+		let mut ordered_receipts = Vec::with_capacity(new_receipts.len());
+		for (new_event_id, new_type, new_receipt, is_synthetic) in new_receipts {
+			let existing_event_id =
+				existing_event
+					.content
+					.0
+					.iter()
+					.find_map(|(event_id, receipts)| {
+						receipts
+							.get(&new_type)
+							.and_then(|users| users.get(user_id))
+							.filter(|receipt| receipt.thread == new_receipt.thread)
+							.map(|_| event_id.clone())
+					});
+
+			if let Some(existing_event_id) = existing_event_id {
+				if existing_event_id != new_event_id {
+					if let (
+						Ok(PduCount::Normal(new_count)),
+						Ok(PduCount::Normal(existing_count)),
+					) = (
+						self.services.timeline.get_pdu_count(&new_event_id).await,
+						self.services.timeline.get_pdu_count(&existing_event_id).await,
+					) {
+						if existing_count > new_count {
+							continue;
+						}
+					}
+				}
+			}
+
+			ordered_receipts.push((new_event_id, new_type, new_receipt, is_synthetic));
+		}
+		let new_receipts = ordered_receipts;
+
 		// Remove old receipts for the same thread and type
 		for (_, new_type, new_receipt, _) in &new_receipts {
 			let mut empty_event_ids = Vec::new();
