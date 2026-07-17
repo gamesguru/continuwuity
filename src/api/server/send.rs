@@ -835,7 +835,7 @@ async fn handle_edu_device_list_update(
 		prev_id,
 		deleted,
 		keys,
-		..
+		device_display_name,
 	} = content;
 
 	if user_id.server_name() != origin {
@@ -917,13 +917,19 @@ async fn handle_edu_device_list_update(
 		// some of these fallback /user/devices fetches and save federation bandwidth.
 		let mut actually_changed = false;
 		for device in response.devices {
+			let incoming_keys = inject_device_display_name(
+				device.keys.clone(),
+				device.device_display_name.as_ref(),
+			);
+
 			let existing_keys = services
 				.users
 				.get_device_keys(&user_id, &device.device_id)
 				.await
 				.ok();
 			let keys_changed = match existing_keys {
-				| Some(existing_keys) => remote_device_keys_differ(&existing_keys, &device.keys),
+				| Some(existing_keys) =>
+					remote_device_keys_differ(&existing_keys, &incoming_keys),
 				| None => true,
 			};
 
@@ -933,7 +939,7 @@ async fn handle_edu_device_list_update(
 
 			services
 				.users
-				.cache_remote_device_keys(&user_id, &device.device_id, &device.keys)
+				.cache_remote_device_keys(&user_id, &device.device_id, &incoming_keys)
 				.await;
 		}
 
@@ -947,6 +953,8 @@ async fn handle_edu_device_list_update(
 
 		return;
 	};
+
+	let incoming_keys = inject_device_display_name(incoming_keys, device_display_name.as_ref());
 
 	let existing_keys = services
 		.users
@@ -969,6 +977,51 @@ async fn handle_edu_device_list_update(
 	if keys_changed {
 		services.users.mark_device_key_update(&user_id).await;
 	}
+}
+
+fn inject_device_display_name(
+	mut keys: Raw<DeviceKeys>,
+	display_name: Option<&String>,
+) -> Raw<DeviceKeys> {
+	let Ok(mut object) = keys.deserialize_as::<serde_json::Map<String, serde_json::Value>>()
+	else {
+		return keys;
+	};
+
+	let mut modified = false;
+
+	match display_name {
+		| Some(name) => {
+			let unsigned = object
+				.entry("unsigned")
+				.or_insert_with(|| serde_json::json!({}));
+			if let serde_json::Value::Object(unsigned_object) = unsigned {
+				if unsigned_object
+					.get("device_display_name")
+					.and_then(|v| v.as_str())
+					!= Some(name)
+				{
+					unsigned_object.insert("device_display_name".to_owned(), name.clone().into());
+					modified = true;
+				}
+			}
+		},
+		| None => {
+			if let Some(serde_json::Value::Object(unsigned_object)) = object.get_mut("unsigned") {
+				if unsigned_object.remove("device_display_name").is_some() {
+					modified = true;
+				}
+			}
+		},
+	}
+
+	if modified {
+		if let Ok(raw) = serde_json::value::to_raw_value(&object) {
+			keys = Raw::from_json(raw);
+		}
+	}
+
+	keys
 }
 
 fn remote_device_keys_differ(
