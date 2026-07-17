@@ -139,8 +139,10 @@ async fn knock_room_by_id_helper(
 		.is_knocked(sender_user, room_id)
 		.await
 	{
-		debug_warn!("{sender_user} is already knocked in {room_id}");
-		return Ok(knock_room::v3::Response { room_id: room_id.into() });
+		debug_warn!(
+			"{sender_user} is already knocked in {room_id} locally, but proceeding with remote \
+			 knock in case of state desync"
+		);
 	}
 
 	if let Ok(membership) = services

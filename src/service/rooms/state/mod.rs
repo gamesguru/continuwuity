@@ -485,7 +485,10 @@ impl Service {
 				Ok(new_ssh.unwrap_or(previous_shortstatehash))
 			},
 			| _ => {
-				assert!(previous_shortstatehash != 0, "first event in room must be a state event");
+				assert!(
+					previous_shortstatehash != 0,
+					"first event in room must be a state event"
+				);
 				Ok(previous_shortstatehash)
 			},
 		}
