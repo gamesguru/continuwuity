@@ -3,14 +3,14 @@ use conduwuit::{Err, Result};
 
 use crate::Ruma;
 
+// MSC4140: the delay_id itself is the bearer capability for these actions;
+// per the MSC and its Complement coverage, restart/send/cancel are called
+// without a user access token, so this route is intentionally unauthenticated.
 pub(crate) async fn update_delayed_event_event_route(
 	State(services): State<crate::State>,
 	axum::extract::Path(delay_id): axum::extract::Path<String>,
 	uri: http::Uri,
-	body: Ruma<ruma::api::client::session::logout::v3::Request>,
 ) -> Result<axum::Json<serde_json::Value>> {
-	let sender_user = body.sender_user();
-
 	let action = if uri.path().ends_with("/restart") {
 		service::rooms::delayed_events::UpdateAction::Restart
 	} else if uri.path().ends_with("/send") {
@@ -24,7 +24,7 @@ pub(crate) async fn update_delayed_event_event_route(
 	services
 		.rooms
 		.delayed_events
-		.update_delayed_event(sender_user, delay_id, action)
+		.update_delayed_event(delay_id, action)
 		.await?;
 
 	Ok(axum::Json(serde_json::json!({})))
