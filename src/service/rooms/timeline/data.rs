@@ -1384,8 +1384,7 @@ impl Data {
 		room_id: &'a RoomId,
 		until: PduCount,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		let seek_count = until.saturating_inc(Direction::Backward);
-		self.count_to_id(room_id, seek_count, Direction::Backward)
+		self.count_to_id(room_id, until, Direction::Backward)
 			.map_ok(move |current| {
 				let prefix = current.shortroomid();
 				self.room_pducount_eventid
@@ -1407,7 +1406,7 @@ impl Data {
 		room_id: &'a RoomId,
 		from: PduCount,
 	) -> impl Stream<Item = Result<PdusIterItem>> + Send + 'a {
-		self.count_to_id(room_id, from.saturating_inc(Direction::Forward), Direction::Forward)
+		self.count_to_id(room_id, from, Direction::Forward)
 			.map_ok(move |current| {
 				let prefix = current.shortroomid();
 				self.room_pducount_eventid
