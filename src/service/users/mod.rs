@@ -719,9 +719,13 @@ impl Service {
 			)));
 		}
 
+		let upload_count = self.services.globals.next_count()?.to_be_bytes();
+
 		let mut key = user_id.as_bytes().to_vec();
 		key.push(0xFF);
 		key.extend_from_slice(device_id.as_bytes());
+		key.push(0xFF);
+		key.extend_from_slice(&upload_count);
 		key.push(0xFF);
 		// TODO: Use DeviceKeyId::to_string when it's available (and update everything,
 		// because there are no wrapping quotation marks anymore)
@@ -735,8 +739,7 @@ impl Service {
 			.onetimekeyid_onetimekeys
 			.raw_put(key, Json(one_time_key_value));
 
-		let count = self.services.globals.next_count().unwrap();
-		self.db.userid_lastonetimekeyupdate.raw_put(user_id, count);
+		self.db.userid_lastonetimekeyupdate.raw_put(user_id, upload_count);
 
 		Ok(())
 	}
