@@ -145,10 +145,14 @@ pub(super) static MAPS: &[Descriptor] = &[
 		name: "presenceid_presence",
 		..descriptor::SEQUENTIAL_SMALL
 	},
+	// Stream index (room+count+user) for since-token scans; see readreceipts_since().
 	Descriptor {
 		name: "readreceiptid_readreceipt",
 		..descriptor::RANDOM
 	},
+	// State index (room+user) for O(1) point lookups of a user's current public
+	// read receipt; see readreceipt_get()/readreceipt_update(). Dual-indexed
+	// alongside readreceiptid_readreceipt above, not a replacement for it.
 	Descriptor {
 		name: "roomuserid_readreceipt",
 		val_size_hint: Some(1024),
@@ -218,6 +222,9 @@ pub(super) static MAPS: &[Descriptor] = &[
 		name: "roomuserid_joined",
 		..descriptor::RANDOM_SMALL
 	},
+	// TODO: legacy, superseded by roomuserid_privatereadreceipt. No longer written;
+	// only read as a fallback in read_receipt/data.rs. Remove once a migration
+	// backfills roomuserid_privatereadreceipt from this map.
 	Descriptor {
 		name: "roomuserid_lastprivatereadupdate",
 		..descriptor::RANDOM_SMALL
@@ -232,14 +239,23 @@ pub(super) static MAPS: &[Descriptor] = &[
 		val_size_hint: Some(8),
 		..descriptor::RANDOM_SMALL
 	},
+	// TODO: legacy, superseded by roomuserid_privatereadreceipt. No longer written;
+	// only read as a fallback in read_receipt/data.rs. Remove once a migration
+	// backfills roomuserid_privatereadreceipt from this map.
 	Descriptor {
 		name: "roomuserid_privateread",
 		..descriptor::RANDOM_SMALL
 	},
+	// TODO: legacy, superseded by roomuserid_privatereadreceipt. No longer written;
+	// only read as a fallback in read_receipt/data.rs. Remove once a migration
+	// backfills roomuserid_privatereadreceipt from this map.
 	Descriptor {
 		name: "roomuserid_privatereadevent",
 		..descriptor::RANDOM_SMALL
 	},
+	// Consolidated, thread-aware private read receipt map (MSC4102). Supersedes
+	// roomuserid_privateread, roomuserid_privatereadevent, and
+	// roomuserid_lastprivatereadupdate above.
 	Descriptor {
 		name: "roomuserid_privatereadreceipt",
 		val_size_hint: Some(1024),
