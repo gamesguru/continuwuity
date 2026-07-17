@@ -453,17 +453,15 @@ impl Service {
 			.get_or_create_shorteventid(&new_pdu.event_id)
 			.await;
 
-		let previous_shortstatehash = self.get_room_shortstatehash(room_id).await;
+		let previous_shortstatehash = self.get_room_shortstatehash(room_id).await.unwrap_or(0);
 
-		if let Ok(p) = previous_shortstatehash {
-			self.db
-				.shorteventid_shortstatehash
-				.aput::<BUFSIZE, BUFSIZE, _, _>(shorteventid, p);
-			self.services
-				.short
-				.shorteventid_shortstatehash_cache
-				.insert(shorteventid, p);
-		}
+		self.db
+			.shorteventid_shortstatehash
+			.aput::<BUFSIZE, BUFSIZE, _, _>(shorteventid, previous_shortstatehash);
+		self.services
+			.short
+			.shorteventid_shortstatehash_cache
+			.insert(shorteventid, previous_shortstatehash);
 
 		match &new_pdu.state_key {
 			| Some(state_key) => {
@@ -477,17 +475,19 @@ impl Service {
 					.services
 					.state_compressor
 					.append_state_pdu(
-						previous_shortstatehash.as_ref().copied().unwrap_or(0),
+						previous_shortstatehash,
 						shortstatekey,
 						&new_pdu.event_id,
 						|| self.services.globals.next_count(),
 					)
 					.await?;
 
-				Ok(new_ssh.unwrap_or_else(|| previous_shortstatehash.expect("must exist")))
+				Ok(new_ssh.unwrap_or(previous_shortstatehash))
 			},
-			| _ =>
-				Ok(previous_shortstatehash.expect("first event in room must be a state event")),
+			| _ => {
+				assert!(previous_shortstatehash != 0, "first event in room must be a state event");
+				Ok(previous_shortstatehash)
+			},
 		}
 	}
 
