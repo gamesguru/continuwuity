@@ -623,7 +623,7 @@ async fn knock_room_helper_remote(
 		.append_to_state(&parsed_knock_pdu, room_id)
 		.await?;
 
-	// update_membership is handled automatically by append_to_state and append_pdu
+	// update_membership is handled automatically by append_pdu
 
 	info!("Appending room knock event locally");
 	services
