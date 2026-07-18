@@ -171,7 +171,11 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		.ruma_route(&client::sync_events_v5_route)
 		.ruma_route(&client::get_context_route)
 		.ruma_route(&client::get_message_events_route)
-		.ruma_route(&client::search_events_route)
+		.merge(
+			Router::new()
+				.ruma_route(&client::search_events_route)
+				.layer(axum::middleware::map_response(ensure_search_results_present)),
+		)
 		.ruma_route(&client::turn_server_route)
 		.ruma_route(&client::send_event_to_device_route)
 		.ruma_route(&client::create_content_route)
@@ -420,6 +424,45 @@ async fn inject_public_join_rule(res: axum::response::Response) -> axum::respons
 					room["join_rule"] = serde_json::json!("public");
 				}
 			}
+		}
+		if let Ok(modified_bytes) = serde_json::to_vec(&json) {
+			return axum::response::Response::from_parts(
+				parts,
+				axum::body::Body::from(modified_bytes),
+			);
+		}
+	}
+
+	axum::response::Response::from_parts(parts, axum::body::Body::from(bytes))
+}
+
+/// ruma's `ResultRoomEvents::results` has `skip_serializing_if =
+/// "Vec::is_empty"`, so an empty page of search results serializes with the
+/// `results` key dropped entirely rather than as `results: []`. Complement's
+/// `Can back-paginate search results` test (and the spec's implied contract)
+/// expects the key to always be present when `room_events` was requested.
+/// Patched here at the response-body level instead of in the vendored ruma
+/// crate, mirroring `inject_public_join_rule` above.
+async fn ensure_search_results_present(
+	res: axum::response::Response,
+) -> axum::response::Response {
+	use axum::body::to_bytes;
+
+	let (parts, body) = res.into_parts();
+
+	let Ok(bytes) = to_bytes(body, usize::MAX).await else {
+		return axum::response::Response::from_parts(parts, axum::body::Body::empty());
+	};
+
+	if let Ok(mut json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+		if let Some(room_events) = json
+			.get_mut("search_categories")
+			.and_then(|c| c.get_mut("room_events"))
+			.and_then(|r| r.as_object_mut())
+		{
+			room_events
+				.entry("results")
+				.or_insert_with(|| serde_json::json!([]));
 		}
 		if let Ok(modified_bytes) = serde_json::to_vec(&json) {
 			return axum::response::Response::from_parts(
