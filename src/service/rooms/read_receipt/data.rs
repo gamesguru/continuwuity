@@ -275,6 +275,9 @@ impl Data {
 			ordered_receipts.push((new_event_id, new_type, new_receipt, is_synthetic));
 		}
 		let new_receipts = ordered_receipts;
+		if new_receipts.is_empty() {
+			return;
+		}
 
 		// Remove old receipts for the same thread and type
 		for (_, new_type, new_receipt, _) in &new_receipts {
@@ -401,7 +404,8 @@ impl Data {
 					.map_err(|_| conduwuit::Error::bad_database("Invalid user ID"))?
 					.to_owned();
 
-				let json: CanonicalJsonObject = serde_json::from_slice(value)?;
+				let mut json: CanonicalJsonObject = serde_json::from_slice(value)?;
+				json.remove("room_id");
 				let event = serde_json::value::to_raw_value(&json)?;
 
 				conduwuit::trace!(
