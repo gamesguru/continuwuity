@@ -590,7 +590,7 @@
 {"Action":"pass","Test":"TestRegistration/parallel/POST_{}_returns_a_set_of_flows"}
 {"Action":"pass","Test":"TestRegistration/parallel/Registration_accepts_non-ascii_passwords"}
 {"Action":"pass","Test":"TestRelations"}
-{"Action":"fail","Test":"TestRelationsPagination"}
+{"Action":"pass","Test":"TestRelationsPagination"}
 {"Action":"pass","Test":"TestRelationsPaginationSync"}
 {"Action":"pass","Test":"TestRemoteAliasRequestsUnderstandUnicode"}
 {"Action":"pass","Test":"TestRemotePngThumbnail"}
