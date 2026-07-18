@@ -95,16 +95,26 @@ pub(crate) async fn get_message_events_route(
 	// Per Matrix spec, /messages is accessible to current AND former members.
 	// The per-event visibility_filter handles fine-grained history_visibility
 	// checks; this gate only verifies the user has/had membership.
-	if !services
+	//
+	// A former member who has forgotten the room (POST /forget) loses access
+	// even though is_left() still returns true -- forgetting no longer
+	// deletes the leave record (see state_cache::forget()'s doc comment), so
+	// it must be checked explicitly here rather than inferred from is_left().
+	let is_member = services
 		.rooms
 		.state_cache
 		.is_joined(sender_user, room_id)
-		.await && !services
+		.await || (services
 		.rooms
 		.state_cache
 		.is_left(sender_user, room_id)
-		.await
-	{
+		.await && !services
+		.rooms
+		.state_cache
+		.is_forgotten(room_id, sender_user)
+		.await);
+
+	if !is_member {
 		return Err!(Request(Forbidden("You don't have permission to view this room.")));
 	}
 

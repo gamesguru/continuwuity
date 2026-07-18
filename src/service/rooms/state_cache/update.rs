@@ -430,14 +430,20 @@ pub fn mark_as_knocked(
 }
 
 /// Makes a user forget a room.
+///
+/// This must NOT delete `userroomid_leftstate`/`roomuserid_leftcount`: other
+/// devices of the user have no way of knowing the room was forgotten (see
+/// forget_room_route's doc comment), so /sync still needs the real leave
+/// position to surface the leave via `include_leave` on a later incremental
+/// sync. Forgetting is tracked as an independent flag instead; callers that
+/// need to gate access on "did this user forget this room" (e.g. /messages)
+/// should check `is_forgotten()`, not infer it from `is_left()` going false.
 #[implement(super::Service)]
 #[tracing::instrument(skip(self), level = "debug")]
 pub fn forget(&self, room_id: &RoomId, user_id: &UserId) {
-	let userroom_id = (user_id, room_id);
 	let roomuser_id = (room_id, user_id);
 
-	self.db.userroomid_leftstate.del(userroom_id);
-	self.db.roomuserid_leftcount.del(roomuser_id);
+	self.db.roomuserid_forgotten.put_raw(roomuser_id, []);
 }
 
 #[implement(super::Service)]
