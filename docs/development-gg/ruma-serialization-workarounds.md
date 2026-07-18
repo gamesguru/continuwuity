@@ -30,6 +30,15 @@ specific keys, re-serialize. Fall back to the original bytes if parsing or
 re-serializing fails, so a shape we didn't anticipate degrades to ruma's
 default output rather than 500ing.
 
+There's also a **request-side** version of this problem: a ruma `Request`
+field that's required (no `Option`, no `#[serde(default)]`) but the actual
+reference implementation (Synapse) treats as optional. There's no response
+body to patch after the fact here — ruma's deserializer rejects the request
+before our handler ever runs — so the fix is `axum::middleware::from_fn`
+(request-side, not `map_response`) mutating the query string ahead of
+extraction, scoped the same way via a nested `Router`. See `/messages`'s
+`dir` below.
+
 ## Instances
 
 ### `/search` — empty `results` dropped instead of `results: []`
@@ -46,6 +55,23 @@ always present once `room_events` was requested.
 - Verified identical `skip_serializing_if` in both the vendored `ruwuma`
   fork and upstream `ruma-client-api` before patching here — not a
   fork-specific bug.
+
+### `/messages` — `dir` required by ruma, optional in practice
+
+`ruma::api::client::message::get_message_events::v3::Request::dir` is a
+required `Direction` field, matching the spec's literal text ("dir
+(Required)"). Synapse doesn't actually enforce that —
+`PaginationConfig.from_request` defaults it to `Direction::FORWARDS` when
+absent, the same kind of spec-vs-reference gap MSC3567 already documented
+for `from` ("Synapse already implements this, but it is not
+spec-compliant"). Complement tests against Synapse's actual behavior (e.g.
+`TestRoomForget`'s "Forgotten room messages cannot be paginated" omits
+`dir` entirely), so a request missing it 400ed with `M_BAD_JSON` before our
+handler could even run its own checks.
+
+- **Fix:** `default_messages_dir` in `src/api/router.rs` — the request-side
+  variant described above — injects `dir=f` into the query string when
+  absent, wired via `from_fn` scoped to `client::get_message_events_route`.
 
 ### `/directory/list` (public rooms) — missing `join_rule`
 

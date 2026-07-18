@@ -170,7 +170,11 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		.route("/_matrix/client/v3/sync", get(client::sync_events_route))
 		.ruma_route(&client::sync_events_v5_route)
 		.ruma_route(&client::get_context_route)
-		.ruma_route(&client::get_message_events_route)
+		.merge(
+			Router::new()
+				.ruma_route(&client::get_message_events_route)
+				.layer(axum::middleware::from_fn(default_messages_dir)),
+		)
 		.merge(
 			Router::new()
 				.ruma_route(&client::search_events_route)
@@ -473,4 +477,49 @@ async fn ensure_search_results_present(
 	}
 
 	axum::response::Response::from_parts(parts, axum::body::Body::from(bytes))
+}
+
+/// ruma's `get_message_events::v3::Request::dir` is a required `Direction`
+/// (no `Option`, no `#[serde(default)]`), matching the letter of the spec
+/// ("dir (Required)"). But Synapse treats it as optional and defaults to
+/// forwards when absent (`PaginationConfig.from_request`,
+/// `default_dir: Direction = Direction.FORWARDS`) -- the same kind of
+/// spec-vs-reference-implementation gap already established for `from` by
+/// MSC3567 ("Synapse already implements this, but it is not spec-compliant").
+/// Complement tests against that lenient behavior (e.g. `TestRoomForget`'s
+/// "Forgotten room messages cannot be paginated" omits `dir` entirely), so a
+/// request missing `dir` would otherwise 400 with `M_BAD_JSON` before our
+/// handler ever gets to run its own checks.
+///
+/// Since this is a required *request* field (not a response shape ruma
+/// serializes for us), it can't be patched the same way as the
+/// response-side workarounds above -- there's no body to fix up after the
+/// fact, because ruma's deserializer rejects the request before our handler
+/// runs. Instead this injects a default `dir=f` into the query string
+/// ahead of extraction, mirroring Synapse's default.
+async fn default_messages_dir(
+	mut req: http::Request<axum::body::Body>,
+	next: axum::middleware::Next,
+) -> axum::response::Response {
+	let uri = req.uri();
+	let has_dir = uri
+		.query()
+		.is_some_and(|q| q.split('&').any(|kv| kv.split('=').next() == Some("dir")));
+
+	if !has_dir {
+		let path = uri.path();
+		let query = match uri.query() {
+			| Some(q) if !q.is_empty() => format!("{q}&dir=f"),
+			| _ => "dir=f".to_owned(),
+		};
+
+		if let Ok(new_uri) = Uri::builder()
+			.path_and_query(format!("{path}?{query}"))
+			.build()
+		{
+			*req.uri_mut() = new_uri;
+		}
+	}
+
+	next.run(req).await
 }
