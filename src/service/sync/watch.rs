@@ -92,6 +92,7 @@ pub async fn setup_watch<'a>(
 
 	// More key changes (used when user is not joined to any rooms)
 	futures.push(self.db.keychangeid_userid.watch_prefix(&userid_prefix));
+	futures.push(self.db.deviceleftid_userid.watch_prefix(&userid_prefix));
 
 	// One time keys
 	futures.push(

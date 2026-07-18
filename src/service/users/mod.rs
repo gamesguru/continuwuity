@@ -62,6 +62,7 @@ struct Services {
 }
 
 struct Data {
+	deviceleftid_userid: Arc<Map>,
 	keychangeid_userid: Arc<Map>,
 	keyid_key: Arc<Map>,
 	onetimekeyid_onetimekeys: Arc<Map>,
@@ -108,6 +109,7 @@ impl crate::Service for Service {
 				state_cache: args.depend::<rooms::state_cache::Service>("rooms::state_cache"),
 			},
 			db: Data {
+				deviceleftid_userid: args.db["deviceleftid_userid"].clone(),
 				keychangeid_userid: args.db["keychangeid_userid"].clone(),
 				keyid_key: args.db["keyid_key"].clone(),
 				onetimekeyid_onetimekeys: args.db["onetimekeyid_onetimekeys"].clone(),
@@ -1125,6 +1127,30 @@ impl Service {
 	}
 
 	#[inline]
+	pub fn device_list_left<'a>(
+		&'a self,
+		user_id: &'a UserId,
+		from: Option<u64>,
+		to: Option<u64>,
+	) -> impl Stream<Item = (&'a UserId, u64)> + Send + 'a {
+		type KeyVal<'a> = ((&'a UserId, u64, &'a UserId), Ignore);
+
+		let from = from.map_or(0, |from| from.saturating_add(1));
+		let to = to.unwrap_or(u64::MAX);
+		let from_key = (user_id, from);
+
+		self.db
+			.deviceleftid_userid
+			.stream_from(&from_key)
+			.ready_take_while(Result::is_ok)
+			.ignore_err()
+			.ready_take_while(move |((user_id_, count, _), _): &KeyVal<'_>| {
+				user_id == *user_id_ && *count <= to
+			})
+			.map(move |((_, count, left_user), _): KeyVal<'_>| (left_user, count))
+	}
+
+	#[inline]
 	pub fn keys_changed<'a>(
 		&'a self,
 		user_id: &'a UserId,
@@ -1255,6 +1281,11 @@ impl Service {
 
 		let key = (user_id, count);
 		self.db.keychangeid_userid.put_raw(key, user_id);
+	}
+
+	pub fn mark_device_list_left(&self, user_id: &UserId, left_user: &UserId, count: u64) {
+		let key = (user_id, count, left_user);
+		self.db.deviceleftid_userid.put_raw(key, []);
 	}
 
 	pub async fn get_device_keys<'a>(

@@ -26,6 +26,7 @@ pub struct Service {
 }
 
 pub struct Data {
+	deviceleftid_userid: Arc<Map>,
 	todeviceid_events: Arc<Map>,
 	userroomid_invitestate: Arc<Map>,
 	userroomid_joined: Arc<Map>,
@@ -73,6 +74,7 @@ impl crate::Service for Service {
 	fn build(args: crate::Args<'_>) -> Result<Arc<Self>> {
 		Ok(Arc::new(Self {
 			db: Data {
+				deviceleftid_userid: args.db["deviceleftid_userid"].clone(),
 				todeviceid_events: args.db["todeviceid_events"].clone(),
 				userroomid_invitestate: args.db["userroomid_invitestate"].clone(),
 				userroomid_joined: args.db["userroomid_joined"].clone(),

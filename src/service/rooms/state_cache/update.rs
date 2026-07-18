@@ -4,7 +4,7 @@ use conduwuit::{Err, Event, Pdu, Result, implement, info, is_not_empty, utils::R
 use database::{Json, serialize_key};
 use futures::StreamExt;
 use ruma::{
-	OwnedServerName, RoomId, UserId,
+	OwnedServerName, OwnedUserId, RoomId, UserId,
 	events::{
 		AnyStrippedStateEvent, GlobalAccountDataEventType, RoomAccountDataEventType,
 		StateEventType,
@@ -350,18 +350,24 @@ pub async fn mark_as_left(&self, user_id: &UserId, room_id: &RoomId, leave_pdu: 
 		target: "knock_debug",
 		"mark_as_left called for user_id={} room_id={}", user_id, room_id
 	);
+	let prior_members = self
+		.room_members(room_id)
+		.map(ToOwned::to_owned)
+		.collect::<Vec<_>>()
+		.await;
 	let userroom_id = (user_id, room_id);
 	let userroom_id = serialize_key(userroom_id).expect("failed to serialize userroom_id");
 
 	let roomuser_id = (room_id, user_id);
 	let roomuser_id = serialize_key(roomuser_id).expect("failed to serialize roomuser_id");
+	let left_count = self.services.globals.next_count().unwrap();
 
 	self.db
 		.userroomid_leftstate
 		.raw_put(&userroom_id, Json(leave_pdu));
 	self.db
 		.roomuserid_leftcount
-		.raw_aput::<8, _, _>(&roomuser_id, self.services.globals.next_count().unwrap());
+		.raw_aput::<8, _, _>(&roomuser_id, left_count);
 
 	self.db.userroomid_joined.remove(&userroom_id);
 	self.db.roomuserid_joined.remove(&roomuser_id);
@@ -377,6 +383,8 @@ pub async fn mark_as_left(&self, user_id: &UserId, room_id: &RoomId, leave_pdu: 
 
 	self.invalidate_user_visibility(user_id, room_id).await;
 	self.invalidate_server_visibility(user_id, room_id).await;
+	self.mark_device_list_lefts(user_id, &prior_members, left_count)
+		.await;
 
 	if self.services.globals.user_is_local(user_id)
 		&& (self.services.config.forget_forced_upon_leave
@@ -384,6 +392,36 @@ pub async fn mark_as_left(&self, user_id: &UserId, room_id: &RoomId, leave_pdu: 
 			|| self.services.metadata.is_disabled(room_id).await)
 	{
 		self.forget(room_id, user_id);
+	}
+}
+
+#[implement(super::Service)]
+async fn mark_device_list_lefts(
+	&self,
+	user_id: &UserId,
+	prior_members: &[OwnedUserId],
+	count: u64,
+) {
+	for member in prior_members {
+		if member == user_id {
+			continue;
+		}
+
+		if self.services.globals.user_is_local(member)
+			&& !self.user_sees_user(member, user_id).await
+		{
+			self.services
+				.users
+				.mark_device_list_left(member, user_id, count);
+		}
+
+		if self.services.globals.user_is_local(user_id)
+			&& !self.user_sees_user(user_id, member).await
+		{
+			self.services
+				.users
+				.mark_device_list_left(user_id, member, count);
+		}
 	}
 }
 
@@ -526,8 +564,8 @@ pub async fn mark_as_invited(
 #[implement(super::Service)]
 pub async fn reconcile_membership(&self, room_id: &RoomId) {
 	let mut members_synced = 0_usize;
-	let mut state_joined: HashSet<ruma::OwnedUserId> = HashSet::new();
-	let mut state_invited: HashSet<ruma::OwnedUserId> = HashSet::new();
+	let mut state_joined: HashSet<OwnedUserId> = HashSet::new();
+	let mut state_invited: HashSet<OwnedUserId> = HashSet::new();
 
 	let room_ssh_opt = self
 		.services
@@ -543,7 +581,7 @@ pub async fn reconcile_membership(&self, room_id: &RoomId) {
 			if event_type != StateEventType::RoomMember {
 				continue;
 			}
-			let Ok(uid) = ruma::OwnedUserId::try_from(state_key.as_str()) else {
+			let Ok(uid) = OwnedUserId::try_from(state_key.as_str()) else {
 				continue;
 			};
 
@@ -574,7 +612,7 @@ pub async fn reconcile_membership(&self, room_id: &RoomId) {
 	}
 
 	// Sweep stale joined cache entries
-	let cached_members: Vec<ruma::OwnedUserId> = self
+	let cached_members: Vec<OwnedUserId> = self
 		.room_members(room_id)
 		.map(ToOwned::to_owned)
 		.collect()
@@ -589,7 +627,7 @@ pub async fn reconcile_membership(&self, room_id: &RoomId) {
 	}
 
 	// Sweep stale invited cache entries
-	let cached_invited: Vec<ruma::OwnedUserId> = self
+	let cached_invited: Vec<OwnedUserId> = self
 		.room_members_invited(room_id)
 		.map(ToOwned::to_owned)
 		.collect()
