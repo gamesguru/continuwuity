@@ -335,6 +335,7 @@ pub async fn add_signing_keys(
 	};
 
 	let enforce_fsw = self.services.server.config.msc4499_first_seen_wins;
+	let mut rejected_collision = false;
 
 	// Merging with Collision Detection (First Seen Wins)
 	let mut filtered_verify_keys = new_keys.verify_keys.clone();
@@ -369,6 +370,7 @@ pub async fn add_signing_keys(
 						 {collision_action}"
 					);
 					if enforce_fsw {
+						rejected_collision = true;
 						filtered_verify_keys.remove(key_id);
 					}
 				}
@@ -383,6 +385,7 @@ pub async fn add_signing_keys(
 					 {collision_action}"
 				);
 				if enforce_fsw {
+					rejected_collision = true;
 					filtered_verify_keys.remove(key_id);
 				}
 			}
@@ -409,6 +412,7 @@ pub async fn add_signing_keys(
 						 {new_fp}. {collision_action}"
 					);
 					if enforce_fsw {
+						rejected_collision = true;
 						filtered_old_verify_keys.remove(key_id);
 					}
 				}
@@ -423,6 +427,7 @@ pub async fn add_signing_keys(
 					 {collision_action}"
 				);
 				if enforce_fsw {
+					rejected_collision = true;
 					filtered_old_verify_keys.remove(key_id);
 				}
 			}
@@ -571,10 +576,14 @@ pub async fn add_signing_keys(
 		}
 	}
 
-	// Store the (possibly FSW-patched) response under `origin`
-	self.db
-		.server_signingkeys
-		.raw_put(origin, Json(raw_new_keys));
+	// Preserve the last raw payload that matched the accepted first-seen bindings.
+	// A rejected collision must not replace the per-origin record, since that raw
+	// blob is later re-signed and served by our notary endpoints.
+	if !rejected_collision {
+		self.db
+			.server_signingkeys
+			.raw_put(origin, Json(raw_new_keys));
+	}
 
 	Ok(new_keys)
 }
