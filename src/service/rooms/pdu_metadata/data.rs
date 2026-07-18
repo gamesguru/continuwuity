@@ -62,8 +62,16 @@ impl Data {
 		dir: Direction,
 	) -> impl Stream<Item = PdusIterItem> + Send + 'a {
 		// Query from exact position then filter excludes it (saturating_inc could skip
-		// events at min/max boundaries)
-		let from_unsigned = from.into_unsigned();
+		// events at min/max boundaries).
+		//
+		// Relations currently only index normal timeline counts. `PduCount::min()`
+		// is a backfilled sentinel whose unsigned encoding lands far beyond any
+		// normal count, which would make forward pagination from the beginning
+		// return an empty stream.
+		let from_unsigned = match (dir, from) {
+			| (Direction::Forward, PduCount::Backfilled(_)) => 0,
+			| _ => from.into_unsigned(),
+		};
 		let mut current = ArrayVec::<u8, 16>::new();
 		current.extend(target.to_be_bytes());
 		current.extend(from_unsigned.to_be_bytes());
