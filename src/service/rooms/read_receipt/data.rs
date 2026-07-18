@@ -37,6 +37,7 @@ struct Services {
 }
 
 pub(super) type ReceiptItem = (OwnedUserId, u64, Raw<AnySyncEphemeralRoomEvent>);
+type PublicReadReceipts = BTreeMap<String, (u64, ReceiptEvent)>;
 type PrivateReadReceipts = BTreeMap<String, (u64, ReceiptEvent, u64)>;
 
 impl Data {
@@ -68,6 +69,7 @@ impl Data {
 		target_thread: Option<&ReceiptThread>,
 	) -> Option<ruma::OwnedEventId> {
 		let key = roomuserid_key(room_id, user_id);
+		let target_thread_key = thread_key(target_thread);
 
 		// A missing or undeserializable entry in the new consolidated map doesn't
 		// mean there's no receipt -- the user may only have pre-migration data
@@ -75,6 +77,12 @@ impl Data {
 		// found a matching receipt here; otherwise fall through to the legacy
 		// stream-index scan below.
 		if let Ok(value) = self.roomuserid_readreceipt.get(&key).await {
+			if let Ok(receipts) = serde_json::from_slice::<PublicReadReceipts>(&value) {
+				if let Some((_, receipt_event)) = receipts.get(&target_thread_key) {
+					return receipt_event.content.0.keys().next().cloned();
+				}
+			}
+
 			if let Ok((_, receipt_event)) = serde_json::from_slice::<(u64, ReceiptEvent)>(&value)
 			{
 				for (event_id, receipts) in receipt_event.content.0 {
@@ -225,23 +233,48 @@ impl Data {
 		// read the same existing_event and clobber each other's write.
 		let _update_lock = self.readreceipt_update_mutex.lock(key.as_slice()).await;
 
-		// Get existing receipts for this user in this room to find old_count
-		let (old_count, mut existing_event) =
-			if let Ok(value) = self.roomuserid_readreceipt.get(&key).await {
-				if let Ok((old_c, ev)) = serde_json::from_slice::<(u64, ReceiptEvent)>(&value) {
-					(Some(old_c), ev)
-				} else {
-					(None, ReceiptEvent {
-						content: ruma::events::receipt::ReceiptEventContent(BTreeMap::new()),
-						room_id: room_id.to_owned(),
-					})
-				}
+		let mut existing_receipts = if let Ok(value) = self.roomuserid_readreceipt.get(&key).await
+		{
+			if let Ok(receipts) = serde_json::from_slice::<PublicReadReceipts>(&value) {
+				receipts
+			} else if let Ok((old_count, old_event)) =
+				serde_json::from_slice::<(u64, ReceiptEvent)>(&value)
+			{
+				let thread = old_event
+					.content
+					.0
+					.values()
+					.flat_map(BTreeMap::values)
+					.find_map(|users| users.get(user_id))
+					.map(|receipt| thread_key(Some(&receipt.thread)))
+					.unwrap_or_default();
+
+				BTreeMap::from([(thread, (old_count, old_event))])
 			} else {
-				(None, ReceiptEvent {
-					content: ruma::events::receipt::ReceiptEventContent(BTreeMap::new()),
-					room_id: room_id.to_owned(),
-				})
-			};
+				BTreeMap::new()
+			}
+		} else {
+			BTreeMap::new()
+		};
+
+		let mut existing_event = ReceiptEvent {
+			content: ruma::events::receipt::ReceiptEventContent(BTreeMap::new()),
+			room_id: room_id.to_owned(),
+		};
+		for (_, receipt_event) in existing_receipts.values() {
+			for (event_id, receipt_types) in &receipt_event.content.0 {
+				for (receipt_type, users) in receipt_types {
+					existing_event
+						.content
+						.0
+						.entry(event_id.clone())
+						.or_default()
+						.entry(receipt_type.clone())
+						.or_default()
+						.extend(users.clone());
+				}
+			}
+		}
 
 		// MSC4102: Synthesize unthreaded receipts for threaded ones
 		let synthetic_receipts = self
@@ -289,94 +322,60 @@ impl Data {
 
 			ordered_receipts.push((new_event_id, new_type, new_receipt, is_synthetic));
 		}
-		let new_receipts = ordered_receipts;
-		if new_receipts.is_empty() {
+		if ordered_receipts.is_empty() {
 			return;
 		}
 
-		// Remove old receipts for the same thread and type
-		for (_, new_type, new_receipt, _) in &new_receipts {
-			let mut empty_event_ids = Vec::new();
-			for (event_id, receipts) in &mut existing_event.content.0 {
-				if let Some(users) = receipts.get_mut(new_type) {
-					if let Some(existing_receipt) = users.get(user_id) {
-						if existing_receipt.thread == new_receipt.thread {
-							users.remove(user_id);
-						}
-					}
-					if users.is_empty() {
-						receipts.remove(new_type);
-					}
-				}
-				if receipts.is_empty() {
-					empty_event_ids.push(event_id.clone());
-				}
-			}
-			for event_id in empty_event_ids {
-				existing_event.content.0.remove(&event_id);
-			}
-		}
+		for (new_event_id, new_type, new_receipt, _) in ordered_receipts {
+			let thread = thread_key(Some(&new_receipt.thread));
+			let new_count = self.services.globals.next_count().unwrap();
+			let new_event = ReceiptEvent {
+				content: ruma::events::receipt::ReceiptEventContent(BTreeMap::from([(
+					new_event_id,
+					BTreeMap::from([(
+						new_type,
+						BTreeMap::from([(user_id.to_owned(), new_receipt)]),
+					)]),
+				)])),
+				room_id: room_id.to_owned(),
+			};
 
-		// Insert new receipts
-		for (new_event_id, new_type, new_receipt, is_synthetic) in new_receipts {
-			let users = existing_event
-				.content
-				.0
-				.entry(new_event_id)
-				.or_default()
-				.entry(new_type)
-				.or_default();
+			conduwuit::trace!(
+				?room_id,
+				?user_id,
+				?new_count,
+				thread,
+				"Updating dual-index read receipt maps"
+			);
 
-			if is_synthetic && users.contains_key(user_id) {
-				continue;
+			if let Some((old_count, _)) = existing_receipts.get(&thread) {
+				let mut old_stream_key = room_id.as_bytes().to_vec();
+				old_stream_key.push(database::SEP);
+				old_stream_key.extend_from_slice(&old_count.to_be_bytes());
+				old_stream_key.push(database::SEP);
+				old_stream_key.extend_from_slice(user_id.as_bytes());
+				self.readreceiptid_readreceipt.remove(&old_stream_key);
 			}
 
-			users.insert(user_id.to_owned(), new_receipt);
+			conduwuit::trace!(
+				target: "read_receipt_debug",
+				?new_event,
+				"Saving receipt event to DB"
+			);
+
+			let mut new_stream_key = room_id.as_bytes().to_vec();
+			new_stream_key.push(database::SEP);
+			new_stream_key.extend_from_slice(&new_count.to_be_bytes());
+			new_stream_key.push(database::SEP);
+			new_stream_key.extend_from_slice(user_id.as_bytes());
+
+			self.readreceiptid_readreceipt
+				.put(new_stream_key, Json(&new_event));
+			existing_receipts.insert(thread, (new_count, new_event));
 		}
 
-		let new_count = self.services.globals.next_count().unwrap();
-
-		conduwuit::trace!(
-			?room_id,
-			?user_id,
-			?new_count,
-			?old_count,
-			"Updating dual-index read receipt maps"
-		);
-
-		// Delete old stream index entry
-		if let Some(old_count) = old_count {
-			let mut old_stream_key = room_id.as_bytes().to_vec();
-			old_stream_key.push(database::SEP);
-			old_stream_key.extend_from_slice(&old_count.to_be_bytes());
-			old_stream_key.push(database::SEP);
-			old_stream_key.extend_from_slice(user_id.as_bytes());
-			self.readreceiptid_readreceipt.remove(&old_stream_key);
-		}
-
-		conduwuit::trace!(
-			target: "read_receipt_debug",
-			?existing_event,
-			"Saving existing_event to DB"
-		);
-
-		let existing_event_json = Json(&existing_event);
-
-		// Insert new stream index entry
-		let mut new_stream_key = room_id.as_bytes().to_vec();
-		new_stream_key.push(database::SEP);
-		new_stream_key.extend_from_slice(&new_count.to_be_bytes());
-		new_stream_key.push(database::SEP);
-		new_stream_key.extend_from_slice(user_id.as_bytes());
-
-		// For backward compatibility with older legacy maps, we store the pure
-		// ReceiptEvent in the stream index
-		self.readreceiptid_readreceipt
-			.put(new_stream_key, &existing_event_json);
-
-		// Update state map
 		self.roomuserid_readreceipt
-			.put(key, Json((new_count, existing_event)));
+			.put(key, Json(existing_receipts));
 	}
 
 	pub(super) fn readreceipts_since<'a>(
