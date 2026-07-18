@@ -27,7 +27,11 @@ pub async fn server_can_see_event(
 		// We can't evaluate history_visibility/membership at the event's state, so
 		// only allow servers that are currently participating in the room rather
 		// than failing open to any requester.
-		return false;
+		return self
+			.services
+			.state_cache
+			.server_in_room(origin, room_id)
+			.await;
 	};
 
 	let history_visibility = self

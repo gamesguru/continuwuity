@@ -316,6 +316,7 @@ enum CompatRequiredStateEntry {
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CompatRequiredStateObject {
 	#[serde(default)]
 	include: Vec<CompatRequiredStateEntry>,
@@ -333,38 +334,61 @@ fn deserialize_required_state<'de, D>(deserializer: D) -> Result<CompatRequiredS
 where
 	D: serde::Deserializer<'de>,
 {
+	use serde::de::Error as _;
+
 	#[derive(Deserialize)]
 	#[serde(untagged)]
-	enum CompatRequiredStateRepr {
+	enum CompatRequiredStateScalarRepr {
 		List(Vec<CompatRequiredStateEntry>),
 		Single(CompatRequiredStateEntry),
-		Keyed(BTreeMap<String, CompatRequiredStateEntry>),
-		ByEventType(BTreeMap<StateEventType, Vec<String>>),
-		Object(CompatRequiredStateObject),
 	}
 
-	let include = match CompatRequiredStateRepr::deserialize(deserializer)? {
-		| CompatRequiredStateRepr::List(entries) => entries
-			.into_iter()
-			.map(compat_required_state_entry_into_tuple)
-			.collect(),
-		| CompatRequiredStateRepr::Single(entry) => {
-			vec![compat_required_state_entry_into_tuple(entry)]
+	let value = Value::deserialize(deserializer)?;
+
+	let include = match value {
+		| Value::Object(entries) => {
+			let reserved = ["include", "exclude", "lazy_members"];
+			let has_reserved = entries.keys().any(|key| reserved.contains(&key.as_str()));
+
+			if has_reserved {
+				let object =
+					serde_json::from_value::<CompatRequiredStateObject>(Value::Object(entries))
+						.map_err(D::Error::custom)?;
+				return Ok(compat_required_state_object_into_tuples(object));
+			}
+
+			if let Ok(entries) = serde_json::from_value::<
+				BTreeMap<String, CompatRequiredStateEntry>,
+			>(Value::Object(entries.clone()))
+			{
+				entries
+					.into_values()
+					.map(compat_required_state_entry_into_tuple)
+					.collect()
+			} else {
+				serde_json::from_value::<BTreeMap<StateEventType, Vec<String>>>(Value::Object(
+					entries,
+				))
+				.map_err(D::Error::custom)?
+				.into_iter()
+				.flat_map(|(event_type, state_keys)| {
+					state_keys
+						.into_iter()
+						.map(move |state_key| (event_type.clone(), state_key))
+				})
+				.collect()
+			}
 		},
-		| CompatRequiredStateRepr::Keyed(entries) => entries
-			.into_values()
-			.map(compat_required_state_entry_into_tuple)
-			.collect(),
-		| CompatRequiredStateRepr::ByEventType(entries) => entries
-			.into_iter()
-			.flat_map(|(event_type, state_keys)| {
-				state_keys
-					.into_iter()
-					.map(move |state_key| (event_type.clone(), state_key))
-			})
-			.collect(),
-		| CompatRequiredStateRepr::Object(object) => {
-			return Ok(compat_required_state_object_into_tuples(object));
+		| value => match serde_json::from_value::<CompatRequiredStateScalarRepr>(value)
+			.map_err(D::Error::custom)?
+		{
+			| CompatRequiredStateScalarRepr::List(entries) => entries
+				.into_iter()
+				.map(compat_required_state_entry_into_tuple)
+				.collect(),
+			| CompatRequiredStateScalarRepr::Single(entry) => {
+				vec![compat_required_state_entry_into_tuple(entry)]
+			},
 		},
 	};
 
@@ -2219,7 +2243,7 @@ async fn direct_rooms_for_user(
 mod tests {
 	use super::*;
 
-	#[derive(Deserialize)]
+	#[derive(Debug, Deserialize)]
 	struct RequiredStateFixture {
 		#[serde(deserialize_with = "deserialize_required_state")]
 		required_state: CompatRequiredState,
@@ -2284,6 +2308,24 @@ mod tests {
 			Some(Vec::new()),
 			"explicit empty exclude must be Some(vec![]) so it can clear a sticky exclusion"
 		);
+	}
+
+	#[test]
+	fn required_state_accepts_exclude_only_object() {
+		let fixture: RequiredStateFixture =
+			serde_json::from_str(r#"{"required_state":{"exclude":[]}}"#)
+				.expect("exclude-only required_state object should deserialize");
+
+		assert_eq!(fixture.required_state.include, Vec::new());
+		assert_eq!(fixture.required_state.exclude, Some(Vec::new()));
+	}
+
+	#[test]
+	fn required_state_rejects_unknown_object_keys() {
+		serde_json::from_str::<RequiredStateFixture>(
+			r#"{"required_state":{"include":[],"bogus":[]}}"#,
+		)
+		.expect_err("unknown required_state object keys should be rejected");
 	}
 
 	#[test]
