@@ -50,6 +50,10 @@ pub(super) static MAPS: &[Descriptor] = &[
 		..descriptor::RANDOM_SMALL
 	},
 	Descriptor {
+		name: "deviceleftid_userid",
+		..descriptor::SEQUENTIAL
+	},
+	Descriptor {
 		name: "disabledroomids",
 		..descriptor::RANDOM_SMALL
 	},
