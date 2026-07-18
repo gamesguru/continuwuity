@@ -170,11 +170,20 @@ async fn load_timeline(
 	let mut limited = pdus.len() > limit || pdu_stream.next().await.is_some();
 
 	// 4. Capture chronological batch boundaries BEFORE topo sort shuffles order
+	//
+	// prev_batch must be a boundary strictly BEFORE the oldest event in the
+	// batch, not that event's own position -- per the spec's /sync examples
+	// (client-server-api "Syncing" section), prev_batch for a batch always
+	// sits in the gap before the earliest returned event. Using the event's
+	// own count here would make a subsequent `/members?at=prev_batch` or
+	// `/messages?from=prev_batch` resolve to that event's own state instead
+	// of the state right after the client's last known position.
 	let mut prev_batch = if pdus.len() > limit {
 		pdus.get(pdus.len().saturating_sub(limit))
-			.map(|(count, _)| *count)
+			.map(|(count, _)| count.saturating_inc(ruma::api::Direction::Backward))
 	} else {
-		pdus.front().map(|(count, _)| *count)
+		pdus.front()
+			.map(|(count, _)| count.saturating_inc(ruma::api::Direction::Backward))
 	};
 
 	// 5. Trim off the lookahead element from the primary evaluation window

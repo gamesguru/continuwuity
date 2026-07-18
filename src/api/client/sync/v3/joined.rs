@@ -375,12 +375,21 @@ async fn build_state_and_timeline(
 	// the token which may be passed to the messages endpoint to backfill room
 	// history. If the timeline is empty, fallback to the start of this sync window
 	// to ensure clients always have a valid topological pagination token.
-	let prev_batch = pdus.front().map(at!(0)).map(|c| c.to_string()).or_else(|| {
-		limited
-			.then_some(())
-			.and(sync_context.last_sync_end_count)
-			.map(|c| PduCount::Normal(c).to_string())
-	});
+	//
+	// Per the spec's /sync examples, prev_batch must sit strictly BEFORE the
+	// oldest event in this batch, not at that event's own position -- see
+	// load_timeline() in sync/mod.rs for the same fix and rationale.
+	let prev_batch = pdus
+		.front()
+		.map(at!(0))
+		.map(|c| c.saturating_inc(ruma::api::Direction::Backward))
+		.map(|c| c.to_string())
+		.or_else(|| {
+			limited
+				.then_some(())
+				.and(sync_context.last_sync_end_count)
+				.map(|c| PduCount::Normal(c).to_string())
+		});
 
 	// filter out ignored events from the timeline and convert the PDUs into Ruma's
 	// AnySyncTimelineEvent type
