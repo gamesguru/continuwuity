@@ -171,19 +171,29 @@ async fn load_timeline(
 
 	// 4. Capture chronological batch boundaries BEFORE topo sort shuffles order
 	//
-	// prev_batch must be a boundary strictly BEFORE the oldest event in the
-	// batch, not that event's own position -- per the spec's /sync examples
-	// (client-server-api "Syncing" section), prev_batch for a batch always
-	// sits in the gap before the earliest returned event. Using the event's
-	// own count here would make a subsequent `/members?at=prev_batch` or
-	// `/messages?from=prev_batch` resolve to that event's own state instead
-	// of the state right after the client's last known position.
-	let mut prev_batch = if pdus.len() > limit {
-		pdus.get(pdus.len().saturating_sub(limit))
-			.map(|(count, _)| count.saturating_inc(ruma::api::Direction::Backward))
+	// prev_batch only needs to sit strictly BEFORE the oldest event when the
+	// timeline was actually truncated (there's a real gap before the batch we
+	// returned). If everything fit (not `limited`), there is no gap -- the
+	// spec defines `state` as "the state between the previous sync and the
+	// start of the timeline", and with no gap that boundary is just the
+	// current sync position, same as Synapse: `_load_filtered_recents` seeds
+	// `room_key` from `upto_token` and only overwrites it with
+	// `oldest.stream_ordering - 1` inside the `len(filtered_recents) >
+	// timeline_limit` truncation branch. Using the oldest event's position
+	// unconditionally (as we did before) made e.g. `/members?at=prev_batch`
+	// resolve to state before the room's first event for any room small
+	// enough to fit in one sync, instead of the state right after the
+	// client's last known position.
+	let mut prev_batch = if limited {
+		if pdus.len() > limit {
+			pdus.get(pdus.len().saturating_sub(limit))
+				.map(|(count, _)| count.saturating_inc(ruma::api::Direction::Backward))
+		} else {
+			pdus.front()
+				.map(|(count, _)| count.saturating_inc(ruma::api::Direction::Backward))
+		}
 	} else {
-		pdus.front()
-			.map(|(count, _)| count.saturating_inc(ruma::api::Direction::Backward))
+		ending_count
 	};
 
 	// 5. Trim off the lookahead element from the primary evaluation window

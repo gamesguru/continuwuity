@@ -339,7 +339,11 @@ async fn build_state_and_timeline(
 	)
 	.await?;
 
-	let TimelinePdus { pdus, limited: timeline_limited, .. } = timeline;
+	let TimelinePdus {
+		pdus,
+		limited: timeline_limited,
+		prev_batch: timeline_prev_batch,
+	} = timeline;
 
 	let user_has_join_event_in_sync = pdus
 		.iter()
@@ -373,23 +377,12 @@ async fn build_state_and_timeline(
 	};
 
 	// the token which may be passed to the messages endpoint to backfill room
-	// history. If the timeline is empty, fallback to the start of this sync window
-	// to ensure clients always have a valid topological pagination token.
-	//
-	// Per the spec's /sync examples, prev_batch must sit strictly BEFORE the
-	// oldest event in this batch, not at that event's own position -- see
-	// load_timeline() in sync/mod.rs for the same fix and rationale.
-	let prev_batch = pdus
-		.front()
-		.map(at!(0))
-		.map(|c| c.saturating_inc(ruma::api::Direction::Backward))
-		.map(|c| c.to_string())
-		.or_else(|| {
-			limited
-				.then_some(())
-				.and(sync_context.last_sync_end_count)
-				.map(|c| PduCount::Normal(c).to_string())
-		});
+	// history. load_timeline() already computes this correctly: strictly
+	// before the oldest event when genuinely truncated, or the current sync
+	// position when nothing was left out (see its comment for the Synapse
+	// reference behavior this matches). Recomputing it here independently is
+	// exactly how this drifted out of sync with that logic before.
+	let prev_batch = timeline_prev_batch.map(|c| c.to_string());
 
 	// filter out ignored events from the timeline and convert the PDUs into Ruma's
 	// AnySyncTimelineEvent type
