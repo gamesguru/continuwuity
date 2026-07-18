@@ -784,6 +784,15 @@ where
 				"Skipping /state_ids fetch: not a state event or prev_events are rejected; using current room state"
 			);
 		} else {
+			let fallback_event_id = if incoming_pdu.prev_events().count() == 1 {
+				incoming_pdu
+					.prev_events()
+					.next()
+					.expect("count checked above")
+			} else {
+				incoming_pdu.event_id()
+			};
+
 			// Attempt a synchronous /state_ids fetch from the sending server
 			// BEFORE queuing the async DAG healer.
 			//
@@ -802,7 +811,7 @@ where
 				origin,
 				create_event,
 				room_id,
-				incoming_pdu.event_id(),
+				fallback_event_id,
 				false,
 			))
 			.await
