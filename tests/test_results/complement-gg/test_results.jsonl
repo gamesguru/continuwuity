@@ -754,9 +754,9 @@
 {"Action":"pass","Test":"TestRoomsInvite/Parallel/Uninvited_users_cannot_join_the_room"}
 {"Action":"pass","Test":"TestRoomsInvite/Parallel/Users_cannot_invite_a_user_that_is_already_in_the_room"}
 {"Action":"pass","Test":"TestRoomsInvite/Parallel/Users_cannot_invite_themselves_to_a_room"}
-{"Action":"fail","Test":"TestSearch"}
-{"Action":"fail","Test":"TestSearch/parallel"}
-{"Action":"fail","Test":"TestSearch/parallel/Can_back-paginate_search_results"}
+{"Action":"pass","Test":"TestSearch"}
+{"Action":"pass","Test":"TestSearch/parallel"}
+{"Action":"pass","Test":"TestSearch/parallel/Can_back-paginate_search_results"}
 {"Action":"pass","Test":"TestSearch/parallel/Can_get_context_around_search_results"}
 {"Action":"pass","Test":"TestSearch/parallel/Can_search_for_an_event_by_body"}
 {"Action":"pass","Test":"TestSearch/parallel/Search_results_with_rank_ordering_do_not_include_redacted_events"}

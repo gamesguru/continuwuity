@@ -139,9 +139,9 @@ async fn knock_room_by_id_helper(
 		.is_knocked(sender_user, room_id)
 		.await
 	{
-		debug_warn!(
-			"{sender_user} is already knocked in {room_id} locally, but proceeding with knock in \
-			 case of state desync"
+		info!(
+			"{sender_user} is already knocked in {room_id} locally, but proceeding with remote \
+			 knock in case of state desync"
 		);
 	}
 
