@@ -264,39 +264,34 @@ async fn update_private_read_receipt(
 			"Event is a backfilled PDU and cannot be marked as read."
 		)));
 	};
-	// Don't allow private receipt to move backwards
-	let old_count = services
-		.rooms
-		.read_receipt
-		.private_read_get_count(room_id, sender_user, Some(&thread))
-		.await
-		.unwrap_or(0);
 
-	if new_count > old_count {
-		let is_unthreaded = thread == ReceiptThread::Unthreaded;
-		let receipt_content = BTreeMap::from_iter([(
-			event_id.to_owned(),
-			BTreeMap::from_iter([(
-				ReceiptType::ReadPrivate,
-				BTreeMap::from_iter([(sender_user.to_owned(), ruma::events::receipt::Receipt {
-					ts: Some(MilliSecondsSinceUnixEpoch::now()),
-					thread,
-				})]),
-			)]),
-		)]);
+	let is_unthreaded = thread == ReceiptThread::Unthreaded;
+	let receipt_content = BTreeMap::from_iter([(
+		event_id.to_owned(),
+		BTreeMap::from_iter([(
+			ReceiptType::ReadPrivate,
+			BTreeMap::from_iter([(sender_user.to_owned(), ruma::events::receipt::Receipt {
+				ts: Some(MilliSecondsSinceUnixEpoch::now()),
+				thread,
+			})]),
+		)]),
+	)]);
 
-		let receipt_event = ruma::events::receipt::ReceiptEvent {
-			content: ruma::events::receipt::ReceiptEventContent(receipt_content),
-			room_id: room_id.to_owned(),
-		};
+	let receipt_event = ruma::events::receipt::ReceiptEvent {
+		content: ruma::events::receipt::ReceiptEventContent(receipt_content),
+		room_id: room_id.to_owned(),
+	};
 
-		services.rooms.read_receipt.private_read_set(
-			room_id,
-			sender_user,
-			new_count,
-			&receipt_event,
-		)?;
+	// The backwards-move check happens inside `private_read_set`, atomically with
+	// the write, so a racing older receipt can't be applied after a newer one.
+	let applied = services.rooms.read_receipt.private_read_set(
+		room_id,
+		sender_user,
+		new_count,
+		&receipt_event,
+	)?;
 
+	if applied {
 		if is_unthreaded {
 			services
 				.rooms
@@ -308,12 +303,10 @@ async fn update_private_read_receipt(
 	} else {
 		conduwuit::info!(
 			target: "read_receipt_debug",
-			"Ignoring private read receipt for {} from {} because it moves backwards \
-			 from {} to {}",
+			"Ignoring private read receipt for {} from {} because it moves backwards or is \
+			 stale",
 			room_id,
 			sender_user,
-			old_count,
-			new_count
 		);
 	}
 

@@ -69,11 +69,17 @@ type CompatRanges = Vec<(UInt, UInt)>;
 #[derive(Clone, Debug, Default, Serialize)]
 struct CompatRequiredState {
 	include: Vec<(StateEventType, String)>,
-	exclude: Vec<(StateEventType, String)>,
+	// `None` means the request didn't specify `exclude` for this selector (sticky:
+	// keep whatever was cached from a previous request). `Some(vec![])` means the
+	// client explicitly sent an empty exclude list, which must override -- and can
+	// clear -- a previously cached sticky exclusion.
+	exclude: Option<Vec<(StateEventType, String)>>,
 }
 
 impl CompatRequiredState {
-	fn is_empty(&self) -> bool { self.include.is_empty() && self.exclude.is_empty() }
+	fn is_empty(&self) -> bool {
+		self.include.is_empty() && self.exclude.as_ref().is_none_or(Vec::is_empty)
+	}
 }
 
 /// One list's or room subscription's required_state request for a room.
@@ -314,8 +320,10 @@ struct CompatRequiredStateObject {
 	#[serde(default)]
 	include: Vec<CompatRequiredStateEntry>,
 
-	#[serde(default)]
-	exclude: Vec<CompatRequiredStateEntry>,
+	// No `#[serde(default)]`: `Option` already defaults to `None` when the key is
+	// absent, which is what lets us distinguish "exclude omitted" from "exclude
+	// explicitly `[]`" for sticky-exclude semantics (see `CompatRequiredState`).
+	exclude: Option<Vec<CompatRequiredStateEntry>>,
 
 	#[serde(default)]
 	lazy_members: bool,
@@ -360,7 +368,7 @@ where
 		},
 	};
 
-	Ok(CompatRequiredState { include, exclude: Vec::new() })
+	Ok(CompatRequiredState { include, exclude: None })
 }
 
 fn compat_required_state_object_into_tuples(
@@ -376,11 +384,12 @@ fn compat_required_state_object_into_tuples(
 		include.push((StateEventType::RoomMember, "$LAZY".to_owned()));
 	}
 
-	let exclude = object
-		.exclude
-		.into_iter()
-		.map(compat_required_state_entry_into_tuple)
-		.collect::<Vec<_>>();
+	let exclude = object.exclude.map(|entries| {
+		entries
+			.into_iter()
+			.map(compat_required_state_entry_into_tuple)
+			.collect::<Vec<_>>()
+	});
 
 	CompatRequiredState { include, exclude }
 }
@@ -446,20 +455,31 @@ impl IncomingRequest for CompatSyncRequest {
 						.map(|filters| (list_id.clone(), filters))
 				})
 				.collect();
+			// Only carry a list/subscription's exclude into the sticky-override map if
+			// the request actually specified `exclude` (`Some`, even if empty) --
+			// that's what lets an explicit `"exclude": []` clear a previously cached
+			// sticky exclusion instead of being indistinguishable from omission.
 			let required_state_excludes = CompatRequiredStateExcludes {
 				lists: compat
 					.lists
 					.iter()
-					.filter(|(_, list)| !list.room_details.required_state.exclude.is_empty())
-					.map(|(list_id, list)| {
-						(list_id.clone(), list.room_details.required_state.exclude.clone())
+					.filter_map(|(list_id, list)| {
+						list.room_details
+							.required_state
+							.exclude
+							.clone()
+							.map(|exclude| (list_id.clone(), exclude))
 					})
 					.collect(),
 				room_subscriptions: compat
 					.room_subscriptions
 					.iter()
-					.filter(|(_, room)| !room.required_state.exclude.is_empty())
-					.map(|(room_id, room)| (room_id.clone(), room.required_state.exclude.clone()))
+					.filter_map(|(room_id, room)| {
+						room.required_state
+							.exclude
+							.clone()
+							.map(|exclude| (room_id.clone(), exclude))
+					})
 					.collect(),
 			};
 			(
@@ -2216,7 +2236,7 @@ mod tests {
 			(StateEventType::RoomMember, "$LAZY".to_owned()),
 			(StateEventType::RoomName, String::new()),
 		]);
-		assert!(fixture.required_state.exclude.is_empty());
+		assert_eq!(fixture.required_state.exclude, None);
 	}
 
 	#[test]
@@ -2230,7 +2250,7 @@ mod tests {
 			(StateEventType::RoomName, String::new()),
 			(StateEventType::RoomMember, "$LAZY".to_owned()),
 		]);
-		assert!(fixture.required_state.exclude.is_empty());
+		assert_eq!(fixture.required_state.exclude, None);
 	}
 
 	#[test]
@@ -2241,10 +2261,29 @@ mod tests {
 		.expect("stable exclude required_state should deserialize");
 
 		assert_eq!(fixture.required_state.include, vec![("*".into(), "*".to_owned())]);
-		assert_eq!(fixture.required_state.exclude, vec![(
-			StateEventType::RoomMember,
-			"*".to_owned()
-		)]);
+		assert_eq!(
+			fixture.required_state.exclude,
+			Some(vec![(StateEventType::RoomMember, "*".to_owned())])
+		);
+	}
+
+	#[test]
+	fn required_state_distinguishes_omitted_from_explicit_empty_exclude() {
+		let fixture: RequiredStateFixture = serde_json::from_str(
+			r#"{"required_state":{"include":[{"type":"m.room.name","state_key":""}]}}"#,
+		)
+		.expect("required_state without exclude should deserialize");
+		assert_eq!(fixture.required_state.exclude, None, "omitted exclude must be None");
+
+		let fixture: RequiredStateFixture = serde_json::from_str(
+			r#"{"required_state":{"include":[{"type":"m.room.name","state_key":""}],"exclude":[]}}"#,
+		)
+		.expect("required_state with explicit empty exclude should deserialize");
+		assert_eq!(
+			fixture.required_state.exclude,
+			Some(Vec::new()),
+			"explicit empty exclude must be Some(vec![]) so it can clear a sticky exclusion"
+		);
 	}
 
 	#[test]

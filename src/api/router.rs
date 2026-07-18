@@ -217,16 +217,8 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 			get(client::get_delayed_event_route),
 		)
 		.route(
-			"/_matrix/client/unstable/org.matrix.msc4140/delayed_events/{delay_id}/restart",
-			post(client::update_delayed_event_event_route),
-		)
-		.route(
-			"/_matrix/client/unstable/org.matrix.msc4140/delayed_events/{delay_id}/send",
-			post(client::update_delayed_event_event_route),
-		)
-		.route(
-			"/_matrix/client/unstable/org.matrix.msc4140/delayed_events/{delay_id}/cancel",
-			post(client::update_delayed_event_event_route),
+			"/_matrix/client/unstable/org.matrix.msc4140/delayed_events/{delay_id}/{action}",
+			post(client::update_delayed_event_route),
 		)
 		.ruma_route(&client::get_tags_route)
 		.ruma_route(&client::update_tag_route)

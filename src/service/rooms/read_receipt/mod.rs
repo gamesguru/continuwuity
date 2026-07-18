@@ -96,7 +96,9 @@ impl Service {
 		self.db.readreceipts_since(room_id, since.unwrap_or(0))
 	}
 
-	/// Sets a private read marker at PDU `count`.
+	/// Sets a private read marker at PDU `count`, unless a marker for the
+	/// same thread already exists at an equal or greater count. Returns
+	/// whether the marker was applied.
 	#[inline]
 	#[tracing::instrument(skip(self), level = "debug")]
 	pub fn private_read_set(
@@ -105,7 +107,7 @@ impl Service {
 		user_id: &UserId,
 		count: u64,
 		receipt: &ReceiptEvent,
-	) -> Result<()> {
+	) -> Result<bool> {
 		self.db.private_read_set(room_id, user_id, count, receipt)
 	}
 

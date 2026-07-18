@@ -3,7 +3,7 @@ use std::{collections::BTreeMap, sync::Arc};
 use conduwuit::{
 	Err, Result, SyncMutex,
 	matrix::pdu::{PduCount, PduId, RawPduId},
-	utils::{ReadyExt, stream::TryIgnore},
+	utils::{MutexMap, ReadyExt, stream::TryIgnore},
 };
 use database::{Deserialized, Json, Map};
 use futures::{Stream, StreamExt};
@@ -27,6 +27,7 @@ pub(super) struct Data {
 	services: Services,
 	readreceiptid_readreceipt: Arc<Map>,
 	private_read_mutex: SyncMutex<()>,
+	readreceipt_update_mutex: MutexMap<Vec<u8>, ()>,
 }
 
 struct Services {
@@ -49,6 +50,7 @@ impl Data {
 			roomuserid_readreceipt: db["roomuserid_readreceipt"].clone(),
 			readreceiptid_readreceipt: db["readreceiptid_readreceipt"].clone(),
 			private_read_mutex: SyncMutex::new(()),
+			readreceipt_update_mutex: MutexMap::new(),
 			services: Services {
 				globals: args.depend::<globals::Service>("globals"),
 				timeline: args.depend::<crate::rooms::timeline::Service>("rooms::timeline"),
@@ -66,14 +68,22 @@ impl Data {
 		target_thread: Option<&ReceiptThread>,
 	) -> Option<ruma::OwnedEventId> {
 		let key = roomuserid_key(room_id, user_id);
-		let value = self.roomuserid_readreceipt.get(&key).await.ok()?;
-		let (_, receipt_event): (u64, ReceiptEvent) = serde_json::from_slice(&value).ok()?;
 
-		for (event_id, receipts) in receipt_event.content.0 {
-			if let Some(users) = receipts.get(&ReceiptType::Read) {
-				if let Some(receipt) = users.get(user_id) {
-					if Some(&receipt.thread) == target_thread {
-						return Some(event_id);
+		// A missing or undeserializable entry in the new consolidated map doesn't
+		// mean there's no receipt -- the user may only have pre-migration data
+		// that was never rewritten into this map. Only return early once we've
+		// found a matching receipt here; otherwise fall through to the legacy
+		// stream-index scan below.
+		if let Ok(value) = self.roomuserid_readreceipt.get(&key).await {
+			if let Ok((_, receipt_event)) = serde_json::from_slice::<(u64, ReceiptEvent)>(&value)
+			{
+				for (event_id, receipts) in receipt_event.content.0 {
+					if let Some(users) = receipts.get(&ReceiptType::Read) {
+						if let Some(receipt) = users.get(user_id) {
+							if Some(&receipt.thread) == target_thread {
+								return Some(event_id);
+							}
+						}
 					}
 				}
 			}
@@ -209,6 +219,11 @@ impl Data {
 		}
 
 		let key = roomuserid_key(room_id, user_id);
+
+		// Serialize the read-modify-write for this (room_id, user_id) so concurrent
+		// updates (e.g. a federation EDU racing a local client receipt) can't both
+		// read the same existing_event and clobber each other's write.
+		let _update_lock = self.readreceipt_update_mutex.lock(key.as_slice()).await;
 
 		// Get existing receipts for this user in this room to find old_count
 		let (old_count, mut existing_event) =
@@ -420,15 +435,19 @@ impl Data {
 			.ignore_err()
 	}
 
+	/// Sets a private read marker at `count`, unless a marker for the same
+	/// thread already exists at a `count` that is equal or greater. The
+	/// existing-count check and the write happen under the same lock so a
+	/// racing update can't be overwritten by a stale one that read `count`
+	/// before this write landed. Returns whether the marker was applied.
 	pub(super) fn private_read_set(
 		&self,
 		room_id: &RoomId,
 		user_id: &UserId,
 		count: u64,
 		receipt: &ReceiptEvent,
-	) -> Result<()> {
+	) -> Result<bool> {
 		let key = roomuserid_key(room_id, user_id);
-		let next_count = self.services.globals.next_count()?;
 		let thread_key = private_read_thread_key(receipt, user_id);
 		let _guard = self.private_read_mutex.lock();
 		let mut receipts =
@@ -444,6 +463,14 @@ impl Data {
 				BTreeMap::new()
 			};
 
+		if let Some((existing_count, ..)) = receipts.get(&thread_key) {
+			if *existing_count >= count {
+				return Ok(false);
+			}
+		}
+
+		let next_count = self.services.globals.next_count()?;
+
 		// Delete from legacy maps so they don't shadow in private_read_get during the
 		// transitional phase
 		let mut legacy_key = room_id.as_bytes().to_vec();
@@ -456,7 +483,7 @@ impl Data {
 		receipts.insert(thread_key, (count, receipt.clone(), next_count));
 		self.roomuserid_privatereadreceipt.put(key, Json(receipts));
 
-		Ok(())
+		Ok(true)
 	}
 
 	pub(super) async fn private_read_get_count(

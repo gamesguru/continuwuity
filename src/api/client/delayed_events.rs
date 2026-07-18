@@ -6,19 +6,15 @@ use crate::Ruma;
 // MSC4140: the delay_id itself is the bearer capability for these actions;
 // per the MSC and its Complement coverage, restart/send/cancel are called
 // without a user access token, so this route is intentionally unauthenticated.
-pub(crate) async fn update_delayed_event_event_route(
+pub(crate) async fn update_delayed_event_route(
 	State(services): State<crate::State>,
-	axum::extract::Path(delay_id): axum::extract::Path<String>,
-	uri: http::Uri,
+	axum::extract::Path((delay_id, action)): axum::extract::Path<(String, String)>,
 ) -> Result<axum::Json<serde_json::Value>> {
-	let action = if uri.path().ends_with("/restart") {
-		service::rooms::delayed_events::UpdateAction::Restart
-	} else if uri.path().ends_with("/send") {
-		service::rooms::delayed_events::UpdateAction::Send
-	} else if uri.path().ends_with("/cancel") {
-		service::rooms::delayed_events::UpdateAction::Cancel
-	} else {
-		return Err!(Request(InvalidParam("Invalid action.")));
+	let action = match action.as_str() {
+		| "restart" => service::rooms::delayed_events::UpdateAction::Restart,
+		| "send" => service::rooms::delayed_events::UpdateAction::Send,
+		| "cancel" => service::rooms::delayed_events::UpdateAction::Cancel,
+		| _ => return Err!(Request(InvalidParam("Invalid action."))),
 	};
 
 	services
