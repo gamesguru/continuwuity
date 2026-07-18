@@ -1141,10 +1141,28 @@ async fn join_room_by_id_helper_local(
 	};
 
 	// For non-restricted rooms, the local join is authoritative -- no fallback.
-	services
+	let event_id = services
 		.rooms
 		.timeline
 		.build_and_append_pdu(builder, sender_user, Some(room_id), &state_lock)
+		.await?;
+
+	let pdu_id = services.rooms.timeline.get_pdu_id(&event_id).await?;
+
+	drop(state_lock);
+
+	let remote_servers = services
+		.rooms
+		.state_cache
+		.room_servers(room_id)
+		.ready_filter(|server| !services.globals.server_is_ours(server))
+		.map(ToOwned::to_owned)
+		.collect::<Vec<_>>()
+		.await;
+
+	services
+		.sending
+		.wait_for_pdu_servers(remote_servers, &pdu_id, Duration::from_secs(15))
 		.await?;
 
 	info!("Joined room locally");

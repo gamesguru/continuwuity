@@ -21,7 +21,7 @@ use conduwuit::{
 	warn,
 };
 use futures::{FutureExt, Stream, StreamExt};
-use ruma::{RoomId, ServerName, UserId, api::OutgoingRequest};
+use ruma::{OwnedServerName, RoomId, ServerName, UserId, api::OutgoingRequest};
 use tokio::{task, task::JoinSet};
 
 use self::data::Data;
@@ -41,7 +41,7 @@ pub struct Service {
 	services: Services,
 	channels: Vec<(loole::Sender<Msg>, loole::Receiver<Msg>)>,
 	pub(super) semaphore: Arc<tokio::sync::Semaphore>,
-	pub(super) dead_servers: std::sync::RwLock<std::collections::HashSet<ruma::OwnedServerName>>,
+	pub(super) dead_servers: std::sync::RwLock<std::collections::HashSet<OwnedServerName>>,
 }
 
 struct Services {
@@ -326,6 +326,59 @@ impl Service {
 			.ready_filter(|server_name| !self.services.globals.server_is_ours(server_name));
 
 		self.flush_servers(servers).await
+	}
+
+	#[tracing::instrument(skip(self, servers, pdu_id), level = "debug")]
+	pub async fn wait_for_pdu_servers(
+		&self,
+		servers: Vec<OwnedServerName>,
+		pdu_id: &RawPduId,
+		timeout: Duration,
+	) -> Result<()> {
+		if servers.is_empty() {
+			return Ok(());
+		}
+
+		let keys: Vec<Vec<u8>> = servers
+			.iter()
+			.map(|server| {
+				let mut key = Destination::Federation(server.clone()).get_prefix();
+				key.extend_from_slice(pdu_id.as_ref());
+				key
+			})
+			.collect();
+
+		let deadline = tokio::time::Instant::now() + timeout;
+		loop {
+			let mut pending = Vec::new();
+			for key in &keys {
+				if self.db.servernameevent_data.contains(key).await
+					|| self.db.servercurrentevent_data.contains(key).await
+				{
+					pending.push(key.clone());
+				}
+			}
+
+			if pending.is_empty() {
+				return Ok(());
+			}
+
+			let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+			if remaining.is_zero() {
+				return Err(err!(Request(Unknown(
+					"Timed out waiting for outbound federation to deliver join event."
+				))));
+			}
+
+			let mut watchers = futures::stream::FuturesUnordered::new();
+			for key in &pending {
+				watchers.push(self.db.servernameevent_data.watch_prefix(key));
+				watchers.push(self.db.servercurrentevent_data.watch_prefix(key));
+			}
+
+			let wait = remaining.min(Duration::from_secs(1));
+			let _ = tokio::time::timeout(wait, watchers.next()).await;
+		}
 	}
 
 	#[tracing::instrument(skip(self, servers), level = "debug")]
