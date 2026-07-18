@@ -232,7 +232,7 @@ where
 		.map(Arc::new)
 		.await;
 
-	if incoming_pdu.state_key().is_some() {
+	let resolved_state = if incoming_pdu.state_key().is_some() {
 		debug!("Event is a state-event. Deriving new room state");
 
 		// We also add state after incoming event to the fork states
@@ -260,11 +260,10 @@ where
 			.save_state(room_id, new_room_state)
 			.await?;
 
-		self.services
-			.state
-			.force_state(room_id, shortstatehash, added, removed, &state_lock)
-			.await?;
-	}
+		Some((shortstatehash, added, removed))
+	} else {
+		None
+	};
 
 	if !soft_fail {
 		// Don't call the below checks on events that have already soft-failed, there's
@@ -379,6 +378,13 @@ where
 			room_id,
 		)
 		.await?;
+
+	if let Some((shortstatehash, added, removed)) = resolved_state {
+		self.services
+			.state
+			.force_state(room_id, shortstatehash, added, removed, &state_lock)
+			.await?;
+	}
 
 	// Event has passed all auth/stateres checks
 	drop(state_lock);
