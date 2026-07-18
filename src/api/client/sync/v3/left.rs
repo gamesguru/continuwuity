@@ -80,7 +80,7 @@ pub(super) async fn load_left_room(
 	let is_forgotten = services
 		.rooms
 		.state_cache
-		.is_forgotten(room_id, syncing_user)
+		.is_forgotten(syncing_user, room_id)
 		.await;
 
 	match last_sync_end_count {

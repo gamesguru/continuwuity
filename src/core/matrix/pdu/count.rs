@@ -109,8 +109,11 @@ impl Count {
 	#[must_use]
 	pub fn saturating_add(self, add: u64) -> Self {
 		match self {
-			| Self::Normal(i) => Self::Normal(i.saturating_add(add)),
-			| Self::Backfilled(i) => Self::Backfilled(i.saturating_add(add as i64)),
+			| Self::Normal(i) => Self::Normal(i.saturating_add(add).min(i64::MAX as u64)),
+			| Self::Backfilled(i) => {
+				let add = i64::try_from(add).unwrap_or(i64::MAX);
+				Self::from_signed(i.saturating_add(add))
+			},
 		}
 	}
 

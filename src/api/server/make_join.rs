@@ -241,7 +241,8 @@ pub(crate) async fn user_can_perform_restricted_join(
 		return Err!(Request(Forbidden("You are not invited to this room.")));
 	}
 
-	// Collect the allowed room IDs for use by select_authorising_user
+	// Collect the full allowed room IDs for allow rules that need to return the
+	// room set as-is (for example the antispam override path below).
 	let allowed_rooms: Vec<OwnedRoomId> = r
 		.allow
 		.iter()
@@ -251,6 +252,7 @@ pub(crate) async fn user_can_perform_restricted_join(
 		})
 		.collect();
 
+	let mut valid_allowed_rooms = Vec::new();
 	let mut could_satisfy = true;
 	for allow_rule in &r.allow {
 		match allow_rule {
@@ -277,7 +279,7 @@ pub(crate) async fn user_can_perform_restricted_join(
 						"User {} is allowed to join room {} via membership in room {}",
 						user_id, room_id, membership.room_id
 					);
-					return Ok(Some(allowed_rooms));
+					valid_allowed_rooms.push(membership.room_id.clone());
 				}
 			},
 			| AllowRule::UnstableSpamChecker => {
@@ -300,6 +302,10 @@ pub(crate) async fn user_can_perform_restricted_join(
 				);
 			},
 		}
+	}
+
+	if !valid_allowed_rooms.is_empty() {
+		return Ok(Some(valid_allowed_rooms));
 	}
 
 	if could_satisfy {

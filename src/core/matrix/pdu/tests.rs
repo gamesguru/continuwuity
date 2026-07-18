@@ -48,41 +48,30 @@ fn saturating_inc_forward() {
 	assert_eq!(next, Count::Normal(11));
 
 	// Backfilled stays Backfilled going forward even once non-negative —
-	// saturating_add does not renormalize the variant, only from_signed does.
+	// the backfilled sequence only legitimately covers counts <= 0, so once
+	// we step past zero the value must normalize into the Normal variant.
 	let count = Count::Backfilled(-1);
 	let next = count.saturating_inc(Direction::Forward);
 	assert_eq!(next, Count::Backfilled(0));
 
 	let count = Count::Backfilled(0);
 	let next = count.saturating_inc(Direction::Forward);
-	assert_eq!(next, Count::Backfilled(1));
+	assert_eq!(next, Count::Normal(1));
 
-	// NOTE (pre-existing latent bug, not introduced by this change):
-	// Count::max() is Normal(i64::MAX as u64), but saturating_add operates on
-	// the raw u64 (ceiling u64::MAX), not i64::MAX. Incrementing past it
-	// produces Normal(i64::MAX as u64 + 1) = Normal(2^63), whose
-	// into_signed() cast (`i as i64`) wraps to i64::MIN — so under `Ord`
-	// this "incremented max" sorts as the SMALLEST possible Count, not the
-	// largest. Documenting the actual (broken) behavior here so it isn't
-	// silently relied upon; a real fix belongs in Count::saturating_add,
-	// not here.
+	// Saturate at the largest valid normal count rather than overflowing into
+	// values whose signed ordering no longer matches token ordering.
 	let count = Count::max();
 	let next = count.saturating_inc(Direction::Forward);
-	assert_eq!(next, Count::Normal(i64::MAX as u64 + 1));
-	assert!(
-		next < Count::max(),
-		"known bug: incrementing past Count::max() wraps to the smallest Ord value"
-	);
+	assert_eq!(next, Count::max());
 }
 
-/// Documents the exact compensation callers must apply to get inclusive
-/// semantics out of the exclusive `pdus`/`pdus_rev` primitives: bump the
-/// boundary one step in the direction of travel before passing it in.
-/// `members.rs`'s `/members?at=` handler depends on this identity to
-/// include the requested point-in-time event as its first `pdus_rev`
-/// result instead of the event immediately before it.
+/// Documents the `Count` arithmetic that inclusive callers rely on when
+/// compensating for the exclusive `pdus`/`pdus_rev` boundaries.
+///
+/// This is intentionally a low-level arithmetic test only; it does not
+/// exercise the `/members?at=` integration path directly.
 #[test]
-fn saturating_inc_compensates_exclusive_boundary_for_inclusive_callers() {
+fn saturating_inc_matches_boundary_compensation_arithmetic() {
 	use ruma::api::Direction;
 
 	// pdus_rev(until) excludes `until`; a caller wanting `at` included as the

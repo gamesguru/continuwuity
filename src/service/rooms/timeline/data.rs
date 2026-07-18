@@ -1407,8 +1407,13 @@ impl Data {
 			.try_flatten_stream()
 	}
 
-	/// EXCLUSIVE of `from`: the event at `from` itself is never yielded. See
-	/// `pdus_rev` above for the rationale and the caller-side workaround.
+	/// EXCLUSIVE of `from`: the event at `from` itself is never yielded.
+	///
+	/// Unlike `pdus_rev`, this method applies its exclusive-boundary offset
+	/// internally by seeking from `from.saturating_inc(Direction::Forward)`.
+	/// Callers that want the event at `from` included must therefore pass the
+	/// previous count (`from.saturating_inc(Direction::Backward)`), not `from`
+	/// itself.
 	pub(super) fn pdus<'a>(
 		&'a self,
 		room_id: &'a RoomId,

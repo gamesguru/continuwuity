@@ -688,7 +688,7 @@ pub async fn is_left(&self, user_id: &UserId, room_id: &RoomId) -> bool {
 /// device forgets the room.
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "trace")]
-pub async fn is_forgotten(&self, room_id: &RoomId, user_id: &UserId) -> bool {
+pub async fn is_forgotten(&self, user_id: &UserId, room_id: &RoomId) -> bool {
 	let key = (room_id, user_id);
 	self.db.roomuserid_forgotten.qry(&key).await.is_ok()
 }
@@ -700,7 +700,7 @@ pub async fn can_access_history(&self, user_id: &UserId, room_id: &RoomId) -> bo
 		return true;
 	}
 
-	self.is_left(user_id, room_id).await && !self.is_forgotten(room_id, user_id).await
+	self.is_left(user_id, room_id).await && !self.is_forgotten(user_id, room_id).await
 }
 
 #[implement(Service)]
