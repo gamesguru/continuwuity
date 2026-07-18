@@ -1,10 +1,10 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Duration};
 
 use axum::extract::State;
 use conduwuit::{
 	Err, Pdu, Result, debug_info, debug_warn, err,
 	matrix::{event::gen_event_id, pdu::PduBuilder},
-	utils::{self, FutureBoolExt},
+	utils::{self, FutureBoolExt, stream::ReadyExt},
 	warn,
 };
 use futures::{FutureExt, StreamExt, pin_mut};
@@ -156,7 +156,7 @@ pub async fn leave_room(
 
 			match user_member_event_content {
 				| Ok(content) => {
-					services
+					let event_id = services
 						.rooms
 						.timeline
 						.build_and_append_pdu(
@@ -171,6 +171,23 @@ pub async fn leave_room(
 							Some(room_id),
 							&state_lock,
 						)
+						.await?;
+					let pdu_id = services.rooms.timeline.get_pdu_id(&event_id).await?;
+
+					drop(state_lock);
+
+					let remote_servers = services
+						.rooms
+						.state_cache
+						.room_servers(room_id)
+						.ready_filter(|server| !services.globals.server_is_ours(server))
+						.map(ToOwned::to_owned)
+						.collect::<Vec<_>>()
+						.await;
+
+					services
+						.sending
+						.wait_for_pdu_servers(remote_servers, &pdu_id, Duration::from_secs(15))
 						.await?;
 
 					// `build_and_append_pdu` calls `mark_as_left` internally, so we return early.
