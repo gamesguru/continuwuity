@@ -28,7 +28,10 @@ use ruma::{
 };
 
 use super::{ExtractBody, ExtractRelatesTo, ExtractRelatesToEventId, RoomMutexGuard};
-use crate::{appservice::NamespaceRegex, rooms::state_compressor::CompressedState};
+use crate::{
+	appservice::NamespaceRegex,
+	rooms::state_compressor::{CompressedState, HashSetCompressStateEvent},
+};
 
 /// Append the incoming event setting the state snapshot to the state from
 /// the server that sent the event.
@@ -41,6 +44,7 @@ pub async fn append_incoming_pdu<'a, Leaves>(
 	pdu_json: CanonicalJsonObject,
 	new_room_leaves: Leaves,
 	state_ids_compressed: Arc<CompressedState>,
+	resolved_state: Option<HashSetCompressStateEvent>,
 	soft_fail: bool,
 	state_lock: &'a RoomMutexGuard,
 	room_id: &'a ruma::RoomId,
@@ -70,7 +74,7 @@ where
 	}
 
 	let pdu_id = self
-		.append_pdu(pdu, pdu_json, new_room_leaves, state_lock, room_id)
+		.append_pdu(pdu, pdu_json, new_room_leaves, resolved_state, state_lock, room_id)
 		.await?;
 
 	// Process admin commands for federation events
@@ -109,6 +113,7 @@ pub async fn append_pdu<'a, Leaves>(
 	pdu: &'a PduEvent,
 	mut pdu_json: CanonicalJsonObject,
 	leaves: Leaves,
+	resolved_state: Option<HashSetCompressStateEvent>,
 	state_lock: &'a RoomMutexGuard,
 	room_id: &'a ruma::RoomId,
 ) -> Result<RawPduId>
@@ -195,6 +200,13 @@ where
 	// Insert pdu
 	self.db.append_pdu(&pdu_id, pdu, &pdu_json, count2).await;
 	drop(cork);
+
+	if let Some(HashSetCompressStateEvent { shortstatehash, added, removed }) = resolved_state {
+		self.services
+			.state
+			.force_state(room_id, shortstatehash, added, removed, state_lock)
+			.await?;
+	}
 
 	let receipt_content = BTreeMap::from_iter([(
 		pdu.event_id().to_owned(),
