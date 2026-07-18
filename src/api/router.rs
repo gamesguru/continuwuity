@@ -217,6 +217,10 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 			get(client::get_delayed_event_route),
 		)
 		.route(
+			"/_matrix/client/unstable/org.matrix.msc4140/delayed_events/{delay_id}",
+			post(client::update_delayed_event_without_action_route),
+		)
+		.route(
 			"/_matrix/client/unstable/org.matrix.msc4140/delayed_events/{delay_id}/{action}",
 			post(client::update_delayed_event_route),
 		)

@@ -26,6 +26,12 @@ pub(crate) async fn update_delayed_event_route(
 	Ok(axum::Json(serde_json::json!({})))
 }
 
+pub(crate) async fn update_delayed_event_without_action_route(
+	axum::extract::Path(_delay_id): axum::extract::Path<String>,
+) -> Result<axum::Json<serde_json::Value>> {
+	Err!(Request(InvalidParam("Invalid action.")))
+}
+
 pub(crate) async fn get_delayed_event_route(
 	State(services): State<crate::State>,
 	axum::extract::Path(delay_id): axum::extract::Path<String>,
