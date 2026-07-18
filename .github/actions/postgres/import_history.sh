@@ -45,12 +45,15 @@ SET LOCAL synchronous_commit = OFF;
 CREATE TEMP TABLE b (j jsonb);
 \copy b FROM '$LEDGER_DIR/runs.jsonl' csv quote e'\x01' delimiter e'\x02';
 
-INSERT INTO runs (run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, profile, binary_sha256, n_pass, n_skip, n_fail, room_version)
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS github_run_id bigint;
+
+INSERT INTO runs (run_date, commit_hash, upstream_commit, branch, author_name, actor, provider, arch, os, version_string, features, profile, binary_sha256, n_pass, n_skip, n_fail, room_version, github_run_id)
 SELECT
     (j->>'run_date')::timestamptz, (j->>'commit_hash'), (j->>'upstream_commit'), (j->>'branch'),
     (j->>'author_name'), (j->>'actor'), (j->>'provider'), NULLIF(j->>'arch', ''), NULLIF(j->>'os', ''),
     (j->>'version_string'), COALESCE(regexp_replace(btrim(j->>'features', ' ,'), '[,\s]+', ' ', 'g'), ''), NULLIF(j->>'profile', ''), (j->>'binary_sha256'),
-    (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int, COALESCE(NULLIF(j->>'room_version', ''), '11')
+    (j->'passed_count')::int, (j->'skipped_count')::int, (j->'failed_count')::int, COALESCE(NULLIF(j->>'room_version', ''), '11'),
+    NULLIF(j->>'github_run_id', '')::bigint
 FROM b
 ON CONFLICT (commit_hash, arch, os, profile, room_version, features) DO NOTHING;
 COMMIT;

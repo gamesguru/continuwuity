@@ -24,6 +24,9 @@ CREATE TABLE IF NOT EXISTS runs (
     github_run_id bigint
 );
 
+ALTER TABLE runs
+    ADD COLUMN IF NOT EXISTS github_run_id bigint;
+
 -- Unique index to prevent duplicate machine reports
 CREATE UNIQUE INDEX IF NOT EXISTS idx_runs_unique_machine_run ON runs (commit_hash, run_date, arch, os, profile, room_version) NULLS NOT DISTINCT;
 

@@ -270,6 +270,7 @@ jobs:
           os: ${{ matrix.os }}
           profile: ${{ matrix.profile }}
           room_version: ${{ matrix.room_version }}
+          github_run_id: ${{ github.run_id }}
 
       - name: Ingest results into PostgreSQL
         if: always()
@@ -338,6 +339,7 @@ jobs:
               "room_version": "${{ matrix.room_version }}",
               "version_string": "${{ steps.version.outputs.version }}",
               "features": "${{ env.FEATURES }}",
+              "github_run_id": ${{ github.run_id }},
               "pass": ${{ steps.results.outputs.pass || 0 }},
               "fail": ${{ steps.results.outputs.fail || 0 }},
               "skip": ${{ steps.results.outputs.skip || 0 }}
