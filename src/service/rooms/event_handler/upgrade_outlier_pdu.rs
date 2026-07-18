@@ -784,13 +784,11 @@ where
 				"Skipping /state_ids fetch: not a state event or prev_events are rejected; using current room state"
 			);
 		} else {
-			let fallback_event_id = if incoming_pdu.prev_events().count() == 1 {
-				incoming_pdu
-					.prev_events()
-					.next()
-					.expect("count checked above")
-			} else {
-				incoming_pdu.event_id()
+			let mut prev_events = incoming_pdu.prev_events();
+			let first_prev = prev_events.next();
+			let fallback_event_id = match (first_prev, prev_events.next()) {
+				| (Some(first_prev), None) => first_prev,
+				| _ => incoming_pdu.event_id(),
 			};
 
 			// Attempt a synchronous /state_ids fetch from the sending server
