@@ -339,21 +339,24 @@ impl Service {
 			return Ok(());
 		}
 
-		let keys: Vec<Vec<u8>> = servers
+		let keys: Vec<(Vec<u8>, bool)> = servers
 			.iter()
 			.map(|server| {
 				let mut key = Destination::Federation(server.clone()).get_prefix();
 				key.extend_from_slice(pdu_id.as_ref());
-				key
+				(key, false)
 			})
 			.collect();
 
 		let started_at = tokio::time::Instant::now();
+		let mut keys = keys;
 		loop {
 			let mut pending = Vec::new();
-			for key in &keys {
-				if self.db.servernameevent_data.contains(key).await
-					|| self.db.servercurrentevent_data.contains(key).await
+			for (key, attempted) in &mut keys {
+				let is_current = self.db.servercurrentevent_data.contains(key).await;
+				*attempted |= is_current;
+
+				if is_current || (!*attempted && self.db.servernameevent_data.contains(key).await)
 				{
 					pending.push(key.clone());
 				}
