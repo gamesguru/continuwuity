@@ -681,6 +681,7 @@ where
 	let exact_match = !current_extremities.is_empty()
 		&& prev_events.len() == current_extremities.len()
 		&& current_extremities.iter().all(|e| prev_events.contains(e));
+	let is_dag_fork = !exact_match;
 
 	let mut state_at_event: Option<StateAtEvent> = None;
 
@@ -715,8 +716,6 @@ where
 		// This matches Synapse's `compute_event_context()` which resolves
 		// state groups across all prev_events (including current extremities
 		// that aren't in the incoming event's prev_events).
-		let is_dag_fork = !exact_match;
-
 		let resolved_state = if is_dag_fork {
 			// Collect all events we need to resolve across: the incoming
 			// event's prev_events PLUS the current forward extremities.
@@ -784,11 +783,15 @@ where
 				"Skipping /state_ids fetch: not a state event or prev_events are rejected; using current room state"
 			);
 		} else {
-			let mut prev_events = incoming_pdu.prev_events();
-			let first_prev = prev_events.next();
-			let fallback_event_id = match (first_prev, prev_events.next()) {
-				| (Some(first_prev), None) => first_prev,
-				| _ => incoming_pdu.event_id(),
+			let fallback_event_id = if is_dag_fork {
+				incoming_pdu.event_id()
+			} else {
+				let mut prev_events = incoming_pdu.prev_events();
+				let first_prev = prev_events.next();
+				match (first_prev, prev_events.next()) {
+					| (Some(first_prev), None) => first_prev,
+					| _ => incoming_pdu.event_id(),
+				}
 			};
 
 			// Attempt a synchronous /state_ids fetch from the sending server
