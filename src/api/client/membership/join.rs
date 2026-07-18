@@ -1022,7 +1022,7 @@ async fn join_room_by_id_helper_local(
 	room_id: &RoomId,
 	reason: Option<String>,
 	servers: &[OwnedServerName],
-	state_lock: RoomMutexGuard,
+	mut state_lock: RoomMutexGuard,
 	json_body: Option<&CanonicalJsonValue>,
 ) -> Result {
 	info!("Joining room locally");
@@ -1057,8 +1057,10 @@ async fn join_room_by_id_helper_local(
 					// User qualifies but no local authorizer found.
 					// A local user with invite power may exist but their power level
 					// hasn't propagated over federation yet (often happens in tests).
-					// Retry briefly before giving up and going remote.
+					// Drop the state lock while waiting so inbound federation can
+					// finish publishing the updated room state we are waiting on.
 					if auth_user.is_none() {
+						drop(state_lock);
 						for _ in 0..5 {
 							tokio::time::sleep(Duration::from_millis(150)).await;
 							auth_user = select_authorising_user(services, room_id, allowed_rooms)
@@ -1068,6 +1070,11 @@ async fn join_room_by_id_helper_local(
 								break;
 							}
 						}
+
+						state_lock = services.rooms.state.mutex.lock(room_id).await;
+						auth_user = select_authorising_user(services, room_id, allowed_rooms)
+							.await
+							.ok();
 					}
 
 					// User qualifies but no local authorizer found -- another
