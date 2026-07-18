@@ -1,5 +1,5 @@
-{"Action":"pass","Test":"TestDelayedEvents"}
-{"Action":"pass","Test":"TestDelayedEvents/cannot_update_a_delayed_event_with_an_invalid_action"}
+{"Action":"fail","Test":"TestDelayedEvents"}
+{"Action":"fail","Test":"TestDelayedEvents/cannot_update_a_delayed_event_with_an_invalid_action"}
 {"Action":"pass","Test":"TestDelayedEvents/cannot_update_a_delayed_event_without_an_action"}
 {"Action":"pass","Test":"TestDelayedEvents/delayed_event_lookups_are_authenticated"}
 {"Action":"pass","Test":"TestDelayedEvents/delayed_events_are_empty_on_startup"}
