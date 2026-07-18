@@ -147,7 +147,11 @@ async fn get_signing_keys_for(
 			.server_request_coalesced(server_name, minimum_valid_until_ts, requested_key_ids)
 			.await
 		{
-			| Ok(new_keys) => match services.server_keys.add_signing_keys(&new_keys).await {
+			| Ok(new_keys) => match services
+				.server_keys
+				.add_signing_keys(&new_keys, conduwuit_service::server_keys::FetchSource::Direct)
+				.await
+			{
 				| Ok(_) => server_key = Some(new_keys),
 				| Err(e) => conduwuit::warn!("add_signing_keys failed for {server_name}: {e}"),
 			},

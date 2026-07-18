@@ -201,6 +201,26 @@ pub(super) fn historical_db_key(origin: &ServerName) -> Vec<u8> {
 	key
 }
 
+/// Constructs the database key for the set of key IDs whose binding is
+/// still provisional (learned only via a notary, not yet confirmed by a
+/// direct fetch). See MSC4499 "Notary fallback (two-tier binding)".
+fn provisional_db_key(origin: &ServerName) -> Vec<u8> {
+	let mut key = origin.as_bytes().to_vec();
+	key.extend_from_slice(b"\0provisional");
+	key
+}
+
+/// Where a key observation came from. Only a direct fetch can promote a
+/// provisional (notary-learned) binding to permanent; see MSC4499 "Notary
+/// fallback (two-tier binding)".
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FetchSource {
+	/// A direct fetch from the origin's `/_matrix/key/v2/server`.
+	Direct,
+	/// A relayed observation from a `/_matrix/key/v2/query` notary.
+	Notary,
+}
+
 #[implement(Service)]
 #[inline]
 pub fn keypair(&self) -> &Ed25519KeyPair { &self.keypair }
@@ -224,6 +244,7 @@ pub fn active_verify_key(&self) -> (&ServerSigningKeyId, &VerifyKey) {
 pub async fn add_signing_keys(
 	&self,
 	raw_new_keys: &Raw<ServerSigningKeys>,
+	source: FetchSource,
 ) -> Result<ServerSigningKeys> {
 	let mut new_keys: ServerSigningKeys = raw_new_keys
 		.deserialize()
@@ -278,6 +299,29 @@ pub async fn add_signing_keys(
 		| Err(e) => return Err(e),
 	};
 
+	// MSC4499 "Notary fallback (two-tier binding)": key IDs whose binding is
+	// still provisional (learned only via a notary). Only a direct fetch that
+	// still finds the binding live in verify_keys (i.e. not yet retired to
+	// old_verify_keys) may promote it to permanent; this dual condition is
+	// this schema's stand-in for "not expired and not retired", since
+	// per-key valid_until_ts isn't tracked separately from retirement here.
+	let provisional_key = provisional_db_key(origin);
+	let mut provisional: std::collections::BTreeSet<OwnedServerSigningKeyId> = self
+		.db
+		.server_signingkeys
+		.get(&provisional_key)
+		.await
+		.deserialized()
+		.unwrap_or_default();
+	let mut provisional_changed = false;
+	let originally_known_key_ids: std::collections::BTreeSet<OwnedServerSigningKeyId> =
+		historical_keys
+			.verify_keys
+			.keys()
+			.chain(historical_keys.old_verify_keys.keys())
+			.cloned()
+			.collect();
+
 	// Helper to compute sha256 hex string for fingerprint logging
 	let get_fingerprint = |base64_key: &ruma::serde::Base64| -> String {
 		use sha2::{Digest, Sha256};
@@ -304,15 +348,29 @@ pub async fn add_signing_keys(
 	for (key_id, new_key) in &new_keys.verify_keys {
 		if let Some(existing_key) = historical_keys.verify_keys.get(key_id) {
 			if existing_key.key != new_key.key {
-				let existing_fp = get_fingerprint(&existing_key.key);
-				let new_fp = get_fingerprint(&new_key.key);
-				conduwuit::warn!(
-					"Key ID collision detected for server {origin} on active key {key_id}! \
-					 Cached fingerprint: {existing_fp}, conflicting fingerprint: {new_fp}. \
-					 {collision_action}"
-				);
-				if enforce_fsw {
-					filtered_verify_keys.remove(key_id);
+				if source == FetchSource::Direct && provisional.contains(key_id) {
+					// MSC4499 "Notary fallback (two-tier binding)": a direct fetch
+					// overriding a still-live provisional (notary-learned) binding is
+					// promotion, not a collision. Leave filtered_verify_keys untouched
+					// so the new (direct) body wins the merge below.
+					conduwuit::warn!(
+						"MSC4499: direct fetch overrides provisional notary-learned key \
+						 {key_id} for {origin} (two-tier binding promotion); this becomes the \
+						 permanent binding"
+					);
+					provisional.remove(key_id);
+					provisional_changed = true;
+				} else {
+					let existing_fp = get_fingerprint(&existing_key.key);
+					let new_fp = get_fingerprint(&new_key.key);
+					conduwuit::warn!(
+						"Key ID collision detected for server {origin} on active key {key_id}! \
+						 Cached fingerprint: {existing_fp}, conflicting fingerprint: {new_fp}. \
+						 {collision_action}"
+					);
+					if enforce_fsw {
+						filtered_verify_keys.remove(key_id);
+					}
 				}
 			}
 		} else if let Some(existing_old_key) = historical_keys.old_verify_keys.get(key_id) {
@@ -334,15 +392,25 @@ pub async fn add_signing_keys(
 	for (key_id, new_old_key) in &new_keys.old_verify_keys {
 		if let Some(existing_key) = historical_keys.verify_keys.get(key_id) {
 			if existing_key.key != new_old_key.key {
-				let existing_fp = get_fingerprint(&existing_key.key);
-				let new_fp = get_fingerprint(&new_old_key.key);
-				conduwuit::warn!(
-					"Key ID collision detected for server {origin} on old/active key {key_id}! \
-					 Cached fingerprint: {existing_fp}, conflicting fingerprint: {new_fp}. \
-					 {collision_action}"
-				);
-				if enforce_fsw {
-					filtered_old_verify_keys.remove(key_id);
+				if source == FetchSource::Direct && provisional.contains(key_id) {
+					conduwuit::warn!(
+						"MSC4499: direct fetch overrides provisional notary-learned key \
+						 {key_id} for {origin} (two-tier binding promotion); this becomes the \
+						 permanent binding"
+					);
+					provisional.remove(key_id);
+					provisional_changed = true;
+				} else {
+					let existing_fp = get_fingerprint(&existing_key.key);
+					let new_fp = get_fingerprint(&new_old_key.key);
+					conduwuit::warn!(
+						"Key ID collision detected for server {origin} on old/active key \
+						 {key_id}! Cached fingerprint: {existing_fp}, conflicting fingerprint: \
+						 {new_fp}. {collision_action}"
+					);
+					if enforce_fsw {
+						filtered_old_verify_keys.remove(key_id);
+					}
 				}
 			}
 		} else if let Some(existing_old_key) = historical_keys.old_verify_keys.get(key_id) {
@@ -438,7 +506,31 @@ pub async fn add_signing_keys(
 			);
 			historical_keys.old_verify_keys.remove(&id);
 			new_keys.old_verify_keys.remove(&id);
+			if provisional.remove(&id) {
+				provisional_changed = true;
+			}
 		}
+	}
+
+	// MSC4499 "Notary fallback (two-tier binding)": a key ID observed for the
+	// very first time via a notary starts provisional; one observed directly
+	// starts (and stays) permanent, so it's never added here.
+	if source == FetchSource::Notary {
+		for key_id in new_keys
+			.verify_keys
+			.keys()
+			.chain(new_keys.old_verify_keys.keys())
+		{
+			if !originally_known_key_ids.contains(key_id) && provisional.insert(key_id.clone()) {
+				provisional_changed = true;
+			}
+		}
+	}
+
+	if provisional_changed {
+		self.db
+			.server_signingkeys
+			.raw_put(&provisional_key, Json(&provisional));
 	}
 
 	self.db

@@ -941,25 +941,6 @@ pub struct Config {
 	#[serde(default = "default_trusted_server_batch_size")]
 	pub trusted_server_batch_size: usize,
 
-	/// Enforce MSC4499 strict server signing key caching: a key ID
-	/// (`algorithm:key_id`) is permanently bound to the first public key
-	/// body observed for it (First Seen Wins), and a later observation of a
-	/// different key body under the same key ID is rejected rather than
-	/// replacing the binding.
-	///
-	/// When disabled (the default), this is the MSC's recommended
-	/// observation phase: collisions are still detected, logged loudly, and
-	/// the first-seen binding is still recorded for a future switch to
-	/// strict mode, but verification continues against the newest observed
-	/// key body, matching pre-MSC4499 behavior so enabling data-gathering
-	/// does not itself cause verification failures against misconfigured
-	/// remote servers already in the wild (e.g. long-lived servers still
-	/// publishing under a reused `ed25519:auto`-style key ID).
-	///
-	/// default: false
-	#[serde(default)]
-	pub msc4499_strict_key_caching: bool,
-
 	/// Max log level for continuwuity. Allows debug, info, warn, or error.
 	///
 	/// You can append specific module filters or custom targets to this string

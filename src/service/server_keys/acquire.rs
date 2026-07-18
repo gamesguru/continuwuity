@@ -180,7 +180,10 @@ async fn acquire_origin(
 				"received server_keys"
 			);
 
-			match self.add_signing_keys(&server_keys).await {
+			match self
+				.add_signing_keys(&server_keys, super::FetchSource::Direct)
+				.await
+			{
 				| Ok(server_keys) => {
 					key_ids.retain(|key_id| !key_exists(&server_keys, key_id));
 				},
@@ -248,7 +251,10 @@ async fn acquire_notary_result(&self, missing: &mut Batch, server_keys: Raw<Serv
 		return;
 	};
 
-	match self.add_signing_keys(&server_keys).await {
+	match self
+		.add_signing_keys(&server_keys, super::FetchSource::Notary)
+		.await
+	{
 		| Ok(server_keys) =>
 			if let Some(key_ids) = missing.get_mut(&server) {
 				key_ids.retain(|key_id| !key_exists(&server_keys, key_id));
