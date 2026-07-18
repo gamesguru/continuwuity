@@ -121,12 +121,11 @@ pub(crate) async fn get_state_events_route(
 		.is_joined(sender_user, room_id)
 		.await;
 
-	if !is_joined
-		&& !services
-			.rooms
-			.state_cache
-			.is_left(sender_user, room_id)
-			.await
+	if !services
+		.rooms
+		.state_cache
+		.can_access_history(sender_user, room_id)
+		.await
 	{
 		return Err!(Request(Forbidden("You don't have permission to view the room state.")));
 	}
@@ -185,12 +184,11 @@ pub(crate) async fn get_state_events_for_key_route(
 		.is_joined(sender_user, room_id)
 		.await;
 
-	if !is_joined
-		&& !services
-			.rooms
-			.state_cache
-			.is_left(sender_user, room_id)
-			.await
+	if !services
+		.rooms
+		.state_cache
+		.can_access_history(sender_user, room_id)
+		.await
 	{
 		return Err!(Request(NotFound(debug_warn!(
 			"You don't have permission to view the room state."

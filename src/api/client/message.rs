@@ -100,21 +100,12 @@ pub(crate) async fn get_message_events_route(
 	// even though is_left() still returns true -- forgetting no longer
 	// deletes the leave record (see state_cache::forget()'s doc comment), so
 	// it must be checked explicitly here rather than inferred from is_left().
-	let is_member = services
+	if !services
 		.rooms
 		.state_cache
-		.is_joined(sender_user, room_id)
-		.await || (services
-		.rooms
-		.state_cache
-		.is_left(sender_user, room_id)
-		.await && !services
-		.rooms
-		.state_cache
-		.is_forgotten(room_id, sender_user)
-		.await);
-
-	if !is_member {
+		.can_access_history(sender_user, room_id)
+		.await
+	{
 		return Err!(Request(Forbidden("You don't have permission to view this room.")));
 	}
 

@@ -695,6 +695,16 @@ pub async fn is_forgotten(&self, room_id: &RoomId, user_id: &UserId) -> bool {
 
 #[implement(Service)]
 #[tracing::instrument(skip(self), level = "trace")]
+pub async fn can_access_history(&self, user_id: &UserId, room_id: &RoomId) -> bool {
+	if self.is_joined(user_id, room_id).await {
+		return true;
+	}
+
+	self.is_left(user_id, room_id).await && !self.is_forgotten(room_id, user_id).await
+}
+
+#[implement(Service)]
+#[tracing::instrument(skip(self), level = "trace")]
 pub async fn invite_sender(&self, user_id: &UserId, room_id: &RoomId) -> Result<OwnedUserId> {
 	let key = (user_id, room_id);
 	self.db

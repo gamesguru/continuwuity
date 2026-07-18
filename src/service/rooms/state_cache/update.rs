@@ -259,6 +259,7 @@ pub async fn mark_as_joined(&self, user_id: &UserId, room_id: &RoomId) {
 
 	self.db.userroomid_knockedstate.remove(&userroom_id);
 	self.db.roomuserid_knockedcount.remove(&roomuser_id);
+	self.unforget(room_id, user_id);
 
 	self.db.roomid_inviteviaservers.remove(room_id);
 
@@ -291,6 +292,7 @@ pub async fn mark_as_joined_silent(&self, user_id: &UserId, room_id: &RoomId) {
 
 	self.db.userroomid_knockedstate.remove(&userroom_id);
 	self.db.roomuserid_knockedcount.remove(&roomuser_id);
+	self.unforget(room_id, user_id);
 
 	self.db.roomid_inviteviaservers.remove(room_id);
 
@@ -425,6 +427,7 @@ pub fn mark_as_knocked(
 
 	self.db.userroomid_leftstate.remove(&userroom_id);
 	self.db.roomuserid_leftcount.remove(&roomuser_id);
+	self.unforget(room_id, user_id);
 
 	self.db.roomid_inviteviaservers.remove(room_id);
 }
@@ -444,6 +447,15 @@ pub fn forget(&self, room_id: &RoomId, user_id: &UserId) {
 	let roomuser_id = (room_id, user_id);
 
 	self.db.roomuserid_forgotten.put_raw(roomuser_id, []);
+}
+
+#[implement(super::Service)]
+#[tracing::instrument(skip(self), level = "debug")]
+pub fn unforget(&self, room_id: &RoomId, user_id: &UserId) {
+	let roomuser_id = (room_id, user_id);
+	let roomuser_id = serialize_key(roomuser_id).expect("failed to serialize roomuser_id");
+
+	self.db.roomuserid_forgotten.remove(&roomuser_id);
 }
 
 #[implement(super::Service)]
@@ -500,6 +512,7 @@ pub async fn mark_as_invited(
 
 	self.db.userroomid_knockedstate.remove(&userroom_id);
 	self.db.roomuserid_knockedcount.remove(&roomuser_id);
+	self.unforget(room_id, user_id);
 
 	if let Some(servers) = invite_via.filter(is_not_empty!()) {
 		self.add_servers_invite_via(room_id, servers).await;
