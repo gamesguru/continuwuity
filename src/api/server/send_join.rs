@@ -1,11 +1,15 @@
 #![allow(deprecated)]
 
-use std::{borrow::Borrow, time::Instant, vec};
+use std::{
+	borrow::Borrow,
+	time::{Duration, Instant},
+	vec,
+};
 
 use axum::extract::State;
 use conduwuit::{
 	Err, Event, Result, at, debug, err, info, trace,
-	utils::stream::{BroadbandExt, IterStream, TryBroadbandExt},
+	utils::stream::{BroadbandExt, IterStream, ReadyExt, TryBroadbandExt},
 	warn,
 };
 use conduwuit_service::Services;
@@ -175,6 +179,18 @@ async fn create_join_event(
 		.await?;
 	info!(fast_join = %omit_members, "Sending join event to other servers");
 	services.sending.send_pdu_room(room_id, &pdu_id).await?;
+	let remote_servers = services
+		.rooms
+		.state_cache
+		.room_servers(room_id)
+		.ready_filter(|server| !services.globals.server_is_ours(server))
+		.map(ToOwned::to_owned)
+		.collect::<Vec<_>>()
+		.await;
+	services
+		.sending
+		.wait_for_pdu_servers(remote_servers, &pdu_id, Duration::from_secs(15))
+		.await?;
 	debug!("Finished sending join event");
 	let servers_in_room: Option<Vec<_>> = if !omit_members {
 		None
