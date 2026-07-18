@@ -348,7 +348,7 @@ impl Service {
 			})
 			.collect();
 
-		let deadline = tokio::time::Instant::now() + timeout;
+		let started_at = tokio::time::Instant::now();
 		loop {
 			let mut pending = Vec::new();
 			for key in &keys {
@@ -363,7 +363,7 @@ impl Service {
 				return Ok(());
 			}
 
-			let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+			let remaining = timeout.saturating_sub(started_at.elapsed());
 			if remaining.is_zero() {
 				return Err(err!(Request(Unknown(
 					"Timed out waiting for outbound federation to deliver join event."
