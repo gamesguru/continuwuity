@@ -183,7 +183,7 @@ async fn create_join_event(
 		.rooms
 		.state_cache
 		.room_servers(room_id)
-		.ready_filter(|server| !services.globals.server_is_ours(server))
+		.ready_filter(|server| !services.globals.server_is_ours(server) && *server != origin)
 		.map(ToOwned::to_owned)
 		.collect::<Vec<_>>()
 		.await;
