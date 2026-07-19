@@ -177,8 +177,7 @@ async fn create_join_event(
 		.try_collect()
 		.boxed()
 		.await?;
-	info!(fast_join = %omit_members, "Sending join event to other servers");
-	services.sending.send_pdu_room(room_id, &pdu_id).await?;
+	info!(%omit_members, "Waiting for join event federation");
 	if !services.globals.server_is_ours(origin) {
 		services
 			.sending
