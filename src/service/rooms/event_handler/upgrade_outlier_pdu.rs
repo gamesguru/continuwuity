@@ -232,21 +232,19 @@ where
 		.map(Arc::new)
 		.await;
 
-	if incoming_pdu.state_key().is_some() {
+	if let Some(state_key) = incoming_pdu.state_key() {
 		debug!("Event is a state-event. Deriving new room state");
 
 		// We also add state after incoming event to the fork states
 		let mut state_after = state_at_incoming_event.clone();
-		if let Some(state_key) = incoming_pdu.state_key() {
-			let shortstatekey = self
-				.services
-				.short
-				.get_or_create_shortstatekey(&incoming_pdu.kind().to_string().into(), state_key)
-				.await;
+		let shortstatekey = self
+			.services
+			.short
+			.get_or_create_shortstatekey(&incoming_pdu.kind().to_string().into(), state_key)
+			.await;
 
-			let event_id = incoming_pdu.event_id();
-			state_after.insert(shortstatekey, event_id.to_owned());
-		}
+		let event_id = incoming_pdu.event_id();
+		state_after.insert(shortstatekey, event_id.to_owned());
 
 		let new_room_state = self
 			.resolve_state(room_id, &room_version_id, state_after)
