@@ -10,7 +10,11 @@ It's the official community continuation of the `conduwuit <https://github.com/g
 
 .. ANCHOR: body
 
-|comp_gh|
+|unittest_dev|
+
+|comp_gh| ``(main)``
+
+|comp_gh_dev| ``(dev)``
 
 |comp_fg|
 
@@ -60,9 +64,17 @@ Chats to join (my fork)
 
 .. Substitutions for Badges
 
+.. |unittest_dev| image:: https://raw.githubusercontent.com/gamesguru/continuwuity/_metadata/badges/tests-guru-dev-2026-03-27-b1-presence-b2-federation.svg
+   :target: https://github.com/gamesguru/continuwuity/actions/workflows/test.yml?query=branch%3Aguru%2Fdev-2026-03-27%2Bb1-presence%2Bb2-federation
+   :alt: Unit Tests
+
 .. |comp_gh| image:: https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadge-main.json
    :target: https://github.com/gamesguru/continuwuity/actions/workflows/complement.yml?query=branch%3Amain
    :alt: Complement Tests (GitHub)
+
+.. |comp_gh_dev| image:: https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadge-guru-dev-2026-03-27-b1-presence-b2-federation.json
+   :target: https://github.com/gamesguru/continuwuity/actions/workflows/complement.yml?query=branch%3Aguru%2Fdev-2026-03-27%2Bb1-presence%2Bb2-federation
+   :alt: Complement Tests (dev)
 
 .. |comp_fg| image:: https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Fgamesguru%2Fcontinuwuity%2F_metadata%2Fbadges%2Fbadge-main-upstream.json
    :target: https://forgejo.ellis.link/gamesguru/continuwuity/actions?workflow=complement.yml&actor=0&status=0
