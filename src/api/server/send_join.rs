@@ -1,10 +1,6 @@
 #![allow(deprecated)]
 
-use std::{
-	borrow::Borrow,
-	time::{Duration, Instant},
-	vec,
-};
+use std::{borrow::Borrow, time::Instant, vec};
 
 use axum::extract::State;
 use conduwuit::{
@@ -108,7 +104,7 @@ async fn create_join_event(
 		guard_restricted_join_without_auth(services, &state_key, room_id).await?;
 	}
 
-	let pdu_id = super::utils::handle_and_send_incoming_pdu(
+	super::utils::handle_and_send_incoming_pdu(
 		services,
 		origin,
 		room_id,
@@ -177,13 +173,7 @@ async fn create_join_event(
 		.try_collect()
 		.boxed()
 		.await?;
-	info!(%omit_members, "Waiting for join event federation");
-	if !services.globals.server_is_ours(origin) {
-		services
-			.sending
-			.wait_for_pdu_servers(vec![origin.to_owned()], &pdu_id, Duration::from_secs(15))
-			.await?;
-	}
+	info!(%omit_members, "Join event accepted; outbound federation queued");
 	debug!("Finished sending join event");
 	let servers_in_room: Option<Vec<_>> = if !omit_members {
 		None
