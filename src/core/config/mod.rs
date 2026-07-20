@@ -485,6 +485,15 @@ pub struct Config {
 	#[serde(default = "default_federation_timeout")]
 	pub federation_timeout: u64,
 
+	/// Timeout for fetching server signing keys from other homeservers
+	/// (seconds). You may want to lower this in test environments, but in
+	/// production, giving slower federation origins some time to respond is
+	/// beneficial.
+	///
+	/// default: 45
+	#[serde(default = "default_server_key_fetch_timeout")]
+	pub server_key_fetch_timeout: u64,
+
 	/// MSC4284 Policy server request timeout (seconds). Generally policy
 	/// servers should respond near instantly, however may slow down under
 	/// load. If a policy server doesn't respond in a short amount of time, the
@@ -913,6 +922,26 @@ pub struct Config {
 	/// unless you know exactly what you are doing.
 	#[serde(default)]
 	pub only_query_trusted_key_servers: bool,
+
+	/// Enforce MSC4499 First-Seen-Wins semantics for federation signing keys.
+	/// When a server re-publishes a key ID with different key material, the
+	/// first-seen key is retained and the collision is logged. This prevents
+	/// key hijacking attacks where a compromised server tries to replace an
+	/// existing key. Setting this to false still logs collisions but does not
+	/// enforce; useful for observation before enforcement.
+	///
+	/// default: true
+	#[serde(default = "true_fn")]
+	pub msc4499_first_seen_wins: bool,
+
+	/// Backoff duration in seconds after a failed federation key fetch.
+	/// During backoff, the server will not re-attempt key fetches for the
+	/// failing origin. MSC4499 recommends 60 seconds. Reduce for faster
+	/// complement testing.
+	///
+	/// default: 60
+	#[serde(default = "default_msc4499_backoff_secs")]
+	pub msc4499_backoff_secs: u64,
 
 	/// Maximum number of keys to request in each trusted server batch query.
 	///
@@ -2798,6 +2827,8 @@ fn default_sender_timeout() -> u64 { 180 }
 
 fn default_sender_idle_timeout() -> u64 { 180 }
 
+fn default_server_key_fetch_timeout() -> u64 { 45 }
+
 fn default_sender_retry_backoff_base() -> u64 { 5 }
 
 fn default_sender_retry_backoff_limit() -> u64 { 86400 }
@@ -2975,6 +3006,8 @@ fn parallelism_scaled_u32(val: u32) -> u32 {
 fn parallelism_scaled(val: usize) -> usize { val.saturating_mul(sys::available_parallelism()) }
 
 fn default_trusted_server_batch_size() -> usize { 256 }
+
+fn default_msc4499_backoff_secs() -> u64 { 60 }
 
 fn default_db_pool_workers() -> usize {
 	sys::available_parallelism()

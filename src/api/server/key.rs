@@ -4,15 +4,20 @@ use std::{
 };
 
 use axum::{Json, extract::State, response::IntoResponse};
-use conduwuit::{Result, utils::timepoint_from_now};
+use conduwuit::{Result, err, utils::timepoint_from_now};
 use ruma::{
 	MilliSecondsSinceUnixEpoch, Signatures,
 	api::{
 		OutgoingResponse,
-		federation::discovery::{OldVerifyKey, ServerSigningKeys, get_server_keys},
+		federation::discovery::{
+			OldVerifyKey, ServerSigningKeys, get_remote_server_keys,
+			get_remote_server_keys_batch, get_server_keys,
+		},
 	},
 	serde::Raw,
 };
+
+use crate::Ruma;
 
 /// # `GET /_matrix/key/v2/server`
 ///
@@ -25,27 +30,7 @@ use ruma::{
 pub(crate) async fn get_server_keys_route(
 	State(services): State<crate::State>,
 ) -> Result<impl IntoResponse> {
-	let server_name = services.globals.server_name();
-	let active_key_id = services.server_keys.active_key_id();
-	let mut all_keys = services.server_keys.verify_keys_for(server_name).await;
-
-	let verify_keys = all_keys
-		.remove_entry(active_key_id)
-		.expect("active verify_key is missing");
-
-	let old_verify_keys = all_keys
-		.into_iter()
-		.map(|(id, key)| (id, OldVerifyKey::new(expires_ts(), key.key)))
-		.collect();
-
-	let server_key = ServerSigningKeys {
-		verify_keys: [verify_keys].into(),
-		old_verify_keys,
-		server_name: server_name.to_owned(),
-		valid_until_ts: valid_until_ts(),
-		signatures: Signatures::new(),
-	};
-
+	let server_key = get_our_signing_keys(&services).await;
 	let server_key = Raw::new(&server_key)?;
 	let mut response = get_server_keys::v2::Response::new(server_key)
 		.try_into_http_response::<Vec<u8>>()
@@ -78,4 +63,155 @@ pub(crate) async fn get_server_keys_deprecated_route(
 	State(services): State<crate::State>,
 ) -> impl IntoResponse {
 	get_server_keys_route(State(services)).await
+}
+
+async fn get_our_signing_keys(services: &crate::State) -> ServerSigningKeys {
+	let server_name = services.globals.server_name();
+	let active_key_id = services.server_keys.active_key_id();
+	let mut all_keys = services.server_keys.verify_keys_for(server_name).await;
+
+	let verify_keys = all_keys
+		.remove_entry(active_key_id)
+		.expect("active verify_key is missing");
+
+	let old_verify_keys = all_keys
+		.into_iter()
+		.map(|(id, key)| (id, OldVerifyKey::new(expires_ts(), key.key)))
+		.collect();
+
+	ServerSigningKeys {
+		verify_keys: [verify_keys].into(),
+		old_verify_keys,
+		server_name: server_name.to_owned(),
+		valid_until_ts: valid_until_ts(),
+		signatures: Signatures::new(),
+	}
+}
+
+async fn sign_signing_keys(
+	services: &crate::State,
+	server_keys: &Raw<ServerSigningKeys>,
+) -> Result<Raw<ServerSigningKeys>> {
+	let mut keys_obj: ruma::CanonicalJsonObject = serde_json::from_str(server_keys.json().get())?;
+	services.server_keys.sign_json(&mut keys_obj)?;
+	let raw_value = serde_json::value::to_raw_value(&keys_obj)?;
+	Ok(Raw::from_json(raw_value))
+}
+
+async fn get_signing_keys_for(
+	services: &crate::State,
+	server_name: &ruma::ServerName,
+	minimum_valid_until_ts: Option<MilliSecondsSinceUnixEpoch>,
+	requested_key_ids: &[&ruma::ServerSigningKeyId],
+) -> Result<Raw<ServerSigningKeys>> {
+	if services.globals.server_is_ours(server_name) {
+		return Raw::new(&get_our_signing_keys(services).await).map_err(Into::into);
+	}
+
+	let mut server_key = match services.server_keys.raw_signing_keys_for(server_name).await {
+		| Ok(keys) => Some(keys),
+		| Err(ref e) if e.is_not_found() => None,
+		| Err(e) => return Err(e),
+	};
+	let merged_server_key = match services
+		.server_keys
+		.merged_signing_keys_for(server_name)
+		.await
+	{
+		| Ok(keys) => Some(keys),
+		| Err(ref e) if e.is_not_found() => None,
+		| Err(e) => return Err(e),
+	};
+
+	let needs_fetch = match &merged_server_key {
+		| Some(keys) => {
+			// Re-fetch if any requested key ID is missing from the cached payload
+			let missing_requested_key = requested_key_ids.iter().any(|kid| {
+				!keys.verify_keys.contains_key(*kid) && !keys.old_verify_keys.contains_key(*kid)
+			});
+
+			if missing_requested_key {
+				true
+			} else if let Some(min_valid) = minimum_valid_until_ts {
+				keys.valid_until_ts < min_valid
+			} else {
+				false
+			}
+		},
+		| None => true,
+	};
+
+	if needs_fetch {
+		match services
+			.server_keys
+			.server_request_coalesced(server_name, minimum_valid_until_ts, requested_key_ids)
+			.await
+		{
+			| Ok(new_keys) => match services
+				.server_keys
+				.add_signing_keys(&new_keys, conduwuit_service::server_keys::FetchSource::Direct)
+				.await
+			{
+				| Ok(_) => server_key = Some(new_keys),
+				| Err(e) => conduwuit::warn!("add_signing_keys failed for {server_name}: {e}"),
+			},
+			| Err(e) =>
+				conduwuit::warn!("server_request_coalesced failed for {server_name}: {e}"),
+		}
+	}
+
+	if let Some(keys) = server_key {
+		Ok(keys)
+	} else {
+		Err(err!(Request(NotFound("Signing keys not found for server"))))
+	}
+}
+
+/// # `GET /_matrix/key/v2/query/{serverName}`
+///
+/// Query keys of a remote server via this notary server.
+pub(crate) async fn get_remote_server_keys_route(
+	State(services): State<crate::State>,
+	body: Ruma<get_remote_server_keys::v2::Request>,
+) -> Result<get_remote_server_keys::v2::Response> {
+	let server_key =
+		get_signing_keys_for(&services, &body.server_name, Some(body.minimum_valid_until_ts), &[
+		])
+		.await?;
+	let signed_key = sign_signing_keys(&services, &server_key).await?;
+
+	Ok(get_remote_server_keys::v2::Response { server_keys: vec![signed_key] })
+}
+
+/// # `POST /_matrix/key/v2/query`
+///
+/// Query keys of multiple remote servers via this notary server.
+pub(crate) async fn get_remote_server_keys_batch_route(
+	State(services): State<crate::State>,
+	body: Ruma<get_remote_server_keys_batch::v2::Request>,
+) -> Result<get_remote_server_keys_batch::v2::Response> {
+	let mut response_keys = Vec::new();
+
+	for (server_name, key_ids) in &body.server_keys {
+		let min_valid = key_ids
+			.values()
+			.filter_map(|c| c.minimum_valid_until_ts)
+			.max();
+
+		let requested: Vec<&ruma::ServerSigningKeyId> =
+			key_ids.keys().map(AsRef::as_ref).collect();
+
+		if let Ok(server_key) =
+			get_signing_keys_for(&services, server_name, min_valid, &requested).await
+		{
+			match sign_signing_keys(&services, &server_key).await {
+				| Ok(signed_key) => response_keys.push(signed_key),
+				| Err(e) => {
+					conduwuit::warn!("Failed to sign server keys for {server_name}: {e}");
+				},
+			}
+		}
+	}
+
+	Ok(get_remote_server_keys_batch::v2::Response { server_keys: response_keys })
 }
