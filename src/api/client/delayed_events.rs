@@ -1,7 +1,78 @@
 use axum::extract::State;
 use conduwuit::{Err, Result};
+use ruma::api::{
+	AuthScheme, IncomingRequest, Metadata,
+	client::device::get_devices,
+	error::FromHttpRequestError,
+};
 
 use crate::Ruma;
+
+struct GetDelayedEventRequest;
+
+impl IncomingRequest for GetDelayedEventRequest {
+	type EndpointError = <get_devices::v3::Request as IncomingRequest>::EndpointError;
+	type OutgoingResponse = <get_devices::v3::Request as IncomingRequest>::OutgoingResponse;
+
+	const METADATA: Metadata = Metadata {
+		method: http::Method::GET,
+		rate_limited: true,
+		authentication: AuthScheme::AccessToken,
+		history: ruma::api::VersionHistory::new(
+			&["/_matrix/client/unstable/org.matrix.msc4140/delayed_events/{delay_id}"],
+			&[],
+			None,
+			None,
+		),
+	};
+
+	fn try_from_http_request<B, S>(
+		_req: http::Request<B>,
+		path_args: &[S],
+	) -> std::result::Result<Self, FromHttpRequestError>
+	where
+		B: AsRef<[u8]>,
+		S: AsRef<str>,
+	{
+		match path_args {
+			| [_delay_id] => Ok(Self),
+			| _ => Err(serde::de::Error::custom("expected delayed event id path argument")),
+		}
+	}
+}
+
+struct GetAllDelayedEventsRequest;
+
+impl IncomingRequest for GetAllDelayedEventsRequest {
+	type EndpointError = <get_devices::v3::Request as IncomingRequest>::EndpointError;
+	type OutgoingResponse = <get_devices::v3::Request as IncomingRequest>::OutgoingResponse;
+
+	const METADATA: Metadata = Metadata {
+		method: http::Method::GET,
+		rate_limited: true,
+		authentication: AuthScheme::AccessToken,
+		history: ruma::api::VersionHistory::new(
+			&["/_matrix/client/unstable/org.matrix.msc4140/delayed_events"],
+			&[],
+			None,
+			None,
+		),
+	};
+
+	fn try_from_http_request<B, S>(
+		_req: http::Request<B>,
+		path_args: &[S],
+	) -> std::result::Result<Self, FromHttpRequestError>
+	where
+		B: AsRef<[u8]>,
+		S: AsRef<str>,
+	{
+		match path_args {
+			| [] => Ok(Self),
+			| _ => Err(serde::de::Error::custom("unexpected delayed events path argument")),
+		}
+	}
+}
 
 // MSC4140: the delay_id itself is the bearer capability for these actions;
 // per the MSC and its Complement coverage, restart/send/cancel are called
@@ -35,7 +106,7 @@ pub(crate) async fn update_delayed_event_without_action_route(
 pub(crate) async fn get_delayed_event_route(
 	State(services): State<crate::State>,
 	axum::extract::Path(delay_id): axum::extract::Path<String>,
-	body: Ruma<ruma::api::client::device::get_devices::v3::Request>,
+	body: Ruma<GetDelayedEventRequest>,
 ) -> Result<axum::Json<serde_json::Value>> {
 	let sender_user = body.sender_user();
 
@@ -52,7 +123,7 @@ pub(crate) async fn get_delayed_event_route(
 
 pub(crate) async fn get_all_delayed_events_route(
 	State(services): State<crate::State>,
-	body: Ruma<ruma::api::client::device::get_devices::v3::Request>,
+	body: Ruma<GetAllDelayedEventsRequest>,
 ) -> Result<axum::Json<serde_json::Value>> {
 	let sender_user = body.sender_user();
 
