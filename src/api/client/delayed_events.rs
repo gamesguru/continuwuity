@@ -1,14 +1,14 @@
 use axum::extract::State;
 use conduwuit::{Err, Result};
 use ruma::api::{
-	AuthScheme, IncomingRequest, Metadata,
-	client::device::get_devices,
+	AuthScheme, IncomingRequest, Metadata, client::device::get_devices,
 	error::FromHttpRequestError,
 };
+use serde::Deserialize;
 
 use crate::Ruma;
 
-struct GetDelayedEventRequest;
+pub(crate) struct GetDelayedEventRequest;
 
 impl IncomingRequest for GetDelayedEventRequest {
 	type EndpointError = <get_devices::v3::Request as IncomingRequest>::EndpointError;
@@ -34,14 +34,17 @@ impl IncomingRequest for GetDelayedEventRequest {
 		B: AsRef<[u8]>,
 		S: AsRef<str>,
 	{
-		match path_args {
-			| [_delay_id] => Ok(Self),
-			| _ => Err(serde::de::Error::custom("expected delayed event id path argument")),
-		}
+		let (_delay_id,): (String,) =
+			Deserialize::deserialize(serde::de::value::SeqDeserializer::<
+				_,
+				serde::de::value::Error,
+			>::new(path_args.iter().map(AsRef::as_ref)))?;
+
+		Ok(Self)
 	}
 }
 
-struct GetAllDelayedEventsRequest;
+pub(crate) struct GetAllDelayedEventsRequest;
 
 impl IncomingRequest for GetAllDelayedEventsRequest {
 	type EndpointError = <get_devices::v3::Request as IncomingRequest>::EndpointError;
@@ -67,10 +70,12 @@ impl IncomingRequest for GetAllDelayedEventsRequest {
 		B: AsRef<[u8]>,
 		S: AsRef<str>,
 	{
-		match path_args {
-			| [] => Ok(Self),
-			| _ => Err(serde::de::Error::custom("unexpected delayed events path argument")),
-		}
+		let (): () = Deserialize::deserialize(serde::de::value::SeqDeserializer::<
+			_,
+			serde::de::value::Error,
+		>::new(path_args.iter().map(AsRef::as_ref)))?;
+
+		Ok(Self)
 	}
 }
 
