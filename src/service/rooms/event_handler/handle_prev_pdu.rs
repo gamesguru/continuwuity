@@ -77,6 +77,7 @@ where
 			.remove(room_id);
 	}};
 
+	// Keep the large upgrade future out of handle_prev_pdu's own future.
 	Box::pin(self.upgrade_outlier_to_timeline_pdu(
 		pdu,
 		json,

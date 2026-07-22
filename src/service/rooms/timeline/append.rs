@@ -201,6 +201,7 @@ where
 	self.db.append_pdu(&pdu_id, pdu, &pdu_json, count2).await;
 	drop(cork);
 
+	let resolved_state_applied = resolved_state.is_some();
 	if let Some(HashSetCompressStateEvent { shortstatehash, added, removed }) = resolved_state {
 		self.services
 			.state
@@ -368,7 +369,7 @@ where
 					.await
 					.remove(room_id);
 			},
-		| TimelineEventType::RoomMember => {
+		| TimelineEventType::RoomMember if !resolved_state_applied => {
 			if let Some(state_key) = pdu.state_key() {
 				// if the state_key fails
 				let target_user_id =
