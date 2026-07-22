@@ -471,9 +471,9 @@
 {"Action":"pass","Test":"TestMembersLocal/Parallel/Existing_members_see_new_members'_presence_(in_initial_sync)"}
 {"Action":"pass","Test":"TestMembersLocal/Parallel/New_room_members_see_their_own_join_event"}
 {"Action":"fail","Test":"TestMembershipOnEvents"}
-{"Action":"fail","Test":"TestMessagesOverFederation"}
-{"Action":"fail","Test":"TestMessagesOverFederation/Visible_shared_history_after_joining_new_room_(backfill)"}
-{"Action":"fail","Test":"TestMessagesOverFederation/Visible_shared_history_after_joining_new_room_(backfill)/`messagesRequestLimit`_is_greater_than_the_number_of_messages_backfilled_(in_Synapse,_100)"}
+{"Action":"pass","Test":"TestMessagesOverFederation"}
+{"Action":"pass","Test":"TestMessagesOverFederation/Visible_shared_history_after_joining_new_room_(backfill)"}
+{"Action":"pass","Test":"TestMessagesOverFederation/Visible_shared_history_after_joining_new_room_(backfill)/`messagesRequestLimit`_is_greater_than_the_number_of_messages_backfilled_(in_Synapse,_100)"}
 {"Action":"pass","Test":"TestMessagesOverFederation/Visible_shared_history_after_joining_new_room_(backfill)/`messagesRequestLimit`_is_lower_than_the_number_of_messages_backfilled_(assumed)"}
 {"Action":"pass","Test":"TestMessagesOverFederation/Visible_shared_history_after_re-joining_room_(backfill)"}
 {"Action":"pass","Test":"TestMessagesOverFederation/Visible_shared_history_after_re-joining_room_(backfill)/`messagesRequestLimit`_is_lower_than_the_number_of_messages_backfilled_(assumed)"}
@@ -796,7 +796,7 @@
 {"Action":"pass","Test":"TestSyncTimelineGap/full"}
 {"Action":"pass","Test":"TestSyncTimelineGap/incremental"}
 {"Action":"pass","Test":"TestTentativeEventualJoiningAfterRejecting"}
-{"Action":"fail","Test":"TestThreadReceiptsInSyncMSC4102"}
+{"Action":"pass","Test":"TestThreadReceiptsInSyncMSC4102"}
 {"Action":"fail","Test":"TestThreadSubscriptions"}
 {"Action":"fail","Test":"TestThreadSubscriptions/Can_create_automatic_subscription_to_a_thread"}
 {"Action":"fail","Test":"TestThreadSubscriptions/Can_subscribe_to_and_unsubscribe_from_a_thread"}
