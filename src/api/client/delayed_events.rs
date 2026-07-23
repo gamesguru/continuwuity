@@ -6,7 +6,7 @@ use ruma::api::{
 };
 use serde::Deserialize;
 
-use crate::Ruma;
+use crate::AuthenticatedUser;
 
 pub(crate) struct GetDelayedEventRequest;
 
@@ -111,14 +111,12 @@ pub(crate) async fn update_delayed_event_without_action_route(
 pub(crate) async fn get_delayed_event_route(
 	State(services): State<crate::State>,
 	axum::extract::Path(delay_id): axum::extract::Path<String>,
-	body: Ruma<GetDelayedEventRequest>,
+	AuthenticatedUser { user_id }: AuthenticatedUser,
 ) -> Result<axum::Json<serde_json::Value>> {
-	let sender_user = body.sender_user();
-
 	let data = services
 		.rooms
 		.delayed_events
-		.get_delayed_event(sender_user, delay_id)
+		.get_delayed_event(&user_id, delay_id)
 		.await?;
 
 	Ok(axum::Json(serde_json::json!({
@@ -128,14 +126,12 @@ pub(crate) async fn get_delayed_event_route(
 
 pub(crate) async fn get_all_delayed_events_route(
 	State(services): State<crate::State>,
-	body: Ruma<GetAllDelayedEventsRequest>,
+	AuthenticatedUser { user_id }: AuthenticatedUser,
 ) -> Result<axum::Json<serde_json::Value>> {
-	let sender_user = body.sender_user();
-
 	let mut data = services
 		.rooms
 		.delayed_events
-		.get_user_scheduled_delayed_events(sender_user, None)
+		.get_user_scheduled_delayed_events(&user_id, None)
 		.await;
 
 	data.sort_by_key(|event| {
