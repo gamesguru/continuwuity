@@ -40,6 +40,34 @@ pub(crate) struct Args<T> {
 	pub(crate) delay: Option<std::time::Duration>,
 }
 
+pub(crate) struct AuthenticatedUser {
+	pub(crate) user_id: OwnedUserId,
+}
+
+impl FromRequest<State, Body> for AuthenticatedUser {
+	type Rejection = Error;
+
+	async fn from_request(
+		request: hyper::Request<Body>,
+		services: &State,
+	) -> Result<Self, Self::Rejection> {
+		let mut request = request::from(services, request).await?;
+		let json_body = serde_json::from_slice::<CanonicalJsonValue>(&request.body).ok();
+		let auth = auth::auth(
+			services,
+			&mut request,
+			json_body.as_ref(),
+			&ruma::api::client::device::get_devices::v3::Request::METADATA,
+		)
+		.await?;
+		let user_id = auth
+			.sender_user
+			.ok_or_else(|| err!(Request(MissingToken("Missing access token."))))?;
+
+		Ok(Self { user_id })
+	}
+}
+
 impl<T> Args<T>
 where
 	T: IncomingRequest + Send + Sync + 'static,
