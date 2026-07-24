@@ -1,79 +1,7 @@
-use axum::{
-	body::Body,
-	extract::{FromRequest, State},
-};
+use axum::extract::State;
 use conduwuit::{Err, Result};
-use ruma::api::{AuthScheme, Metadata, VersionHistory};
 
-use crate::router::authenticate_user;
-
-pub(crate) struct GetDelayedEventRequest;
-
-pub(crate) struct DelayedEventUser {
-	pub(crate) user_id: ruma::OwnedUserId,
-}
-
-pub(crate) struct AllDelayedEventsUser {
-	pub(crate) user_id: ruma::OwnedUserId,
-}
-
-impl FromRequest<crate::State, Body> for DelayedEventUser {
-	type Rejection = conduwuit::Error;
-
-	async fn from_request(
-		request: hyper::Request<Body>,
-		services: &crate::State,
-	) -> Result<Self> {
-		Ok(Self {
-			user_id: authenticate_user(request, services, &GetDelayedEventRequest::METADATA)
-				.await?,
-		})
-	}
-}
-
-impl FromRequest<crate::State, Body> for AllDelayedEventsUser {
-	type Rejection = conduwuit::Error;
-
-	async fn from_request(
-		request: hyper::Request<Body>,
-		services: &crate::State,
-	) -> Result<Self> {
-		Ok(Self {
-			user_id: authenticate_user(request, services, &GetAllDelayedEventsRequest::METADATA)
-				.await?,
-		})
-	}
-}
-
-impl GetDelayedEventRequest {
-	const METADATA: Metadata = Metadata {
-		method: http::Method::GET,
-		rate_limited: true,
-		authentication: AuthScheme::AccessToken,
-		history: VersionHistory::new(
-			&["/_matrix/client/unstable/org.matrix.msc4140/delayed_events/{delay_id}"],
-			&[],
-			None,
-			None,
-		),
-	};
-}
-
-pub(crate) struct GetAllDelayedEventsRequest;
-
-impl GetAllDelayedEventsRequest {
-	const METADATA: Metadata = Metadata {
-		method: http::Method::GET,
-		rate_limited: true,
-		authentication: AuthScheme::AccessToken,
-		history: VersionHistory::new(
-			&["/_matrix/client/unstable/org.matrix.msc4140/delayed_events"],
-			&[],
-			None,
-			None,
-		),
-	};
-}
+use crate::Ruma;
 
 // MSC4140: the delay_id itself is the bearer capability for these actions;
 // per the MSC and its Complement coverage, restart/send/cancel are called
@@ -107,12 +35,14 @@ pub(crate) async fn update_delayed_event_without_action_route(
 pub(crate) async fn get_delayed_event_route(
 	State(services): State<crate::State>,
 	axum::extract::Path(delay_id): axum::extract::Path<String>,
-	user: DelayedEventUser,
+	body: Ruma<ruma::api::client::device::get_devices::v3::Request>,
 ) -> Result<axum::Json<serde_json::Value>> {
+	let sender_user = body.sender_user();
+
 	let data = services
 		.rooms
 		.delayed_events
-		.get_delayed_event(&user.user_id, delay_id)
+		.get_delayed_event(sender_user, delay_id)
 		.await?;
 
 	Ok(axum::Json(serde_json::json!({
@@ -122,12 +52,14 @@ pub(crate) async fn get_delayed_event_route(
 
 pub(crate) async fn get_all_delayed_events_route(
 	State(services): State<crate::State>,
-	user: AllDelayedEventsUser,
+	body: Ruma<ruma::api::client::device::get_devices::v3::Request>,
 ) -> Result<axum::Json<serde_json::Value>> {
+	let sender_user = body.sender_user();
+
 	let mut data = services
 		.rooms
 		.delayed_events
-		.get_user_scheduled_delayed_events(&user.user_id, None)
+		.get_user_scheduled_delayed_events(sender_user, None)
 		.await;
 
 	data.sort_by_key(|event| {
