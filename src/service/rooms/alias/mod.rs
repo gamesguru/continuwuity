@@ -145,7 +145,14 @@ impl Service {
 	) -> Result<(OwnedRoomId, Vec<OwnedServerName>)> {
 		if room.is_room_id() {
 			let room_id: &RoomId = room.try_into().expect("valid RoomId");
-			Ok((room_id.to_owned(), servers.unwrap_or_default()))
+			let mut s = servers.unwrap_or_default();
+			if let Some(server_name) = room_id.server_name() {
+				let owned_server_name = server_name.to_owned();
+				if !s.contains(&owned_server_name) {
+					s.push(owned_server_name);
+				}
+			}
+			Ok((room_id.to_owned(), s))
 		} else {
 			let alias: &RoomAliasId = room.try_into().expect("valid RoomAliasId");
 			self.resolve_alias(alias).await

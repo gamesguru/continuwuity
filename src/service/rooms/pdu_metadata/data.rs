@@ -25,7 +25,7 @@ use crate::{
 pub(super) struct Data {
 	tofrom_relation: Arc<Map>,
 	referencedevents: Arc<Map>,
-	softfailedeventids: Arc<Map>,
+	eventid_metadata: Arc<Map>,
 	services: Services,
 }
 
@@ -39,7 +39,7 @@ impl Data {
 		Self {
 			tofrom_relation: db["tofrom_relation"].clone(),
 			referencedevents: db["referencedevents"].clone(),
-			softfailedeventids: db["softfailedeventids"].clone(),
+			eventid_metadata: db["eventid_metadata"].clone(),
 			services: Services {
 				timeline: args.depend::<rooms::timeline::Service>("rooms::timeline"),
 			},
@@ -62,8 +62,16 @@ impl Data {
 		dir: Direction,
 	) -> impl Stream<Item = PdusIterItem> + Send + 'a {
 		// Query from exact position then filter excludes it (saturating_inc could skip
-		// events at min/max boundaries)
-		let from_unsigned = from.into_unsigned();
+		// events at min/max boundaries).
+		//
+		// Relations currently only index normal timeline counts. `PduCount::min()`
+		// is a backfilled sentinel whose unsigned encoding lands far beyond any
+		// normal count, which would make forward pagination from the beginning
+		// return an empty stream.
+		let from_unsigned = match (dir, from) {
+			| (Direction::Forward, PduCount::Backfilled(_)) => 0,
+			| _ => from.into_unsigned(),
+		};
 		let mut current = ArrayVec::<u8, 16>::new();
 		current.extend(target.to_be_bytes());
 		current.extend(from_unsigned.to_be_bytes());
@@ -114,11 +122,110 @@ impl Data {
 		self.referencedevents.qry(&key).await.is_ok()
 	}
 
-	pub(super) fn mark_event_soft_failed(&self, event_id: &EventId) {
-		self.softfailedeventids.insert(event_id, []);
+	pub(super) fn mark_event_soft_failed(&self, event_id: &EventId, reason: &str) {
+		let mut meta = if let Ok(metadata_bytes) = self.eventid_metadata.get_blocking(event_id) {
+			rooms::timeline::EventMetadata::from_bincode(&metadata_bytes).unwrap_or_default()
+		} else {
+			// New metadata: events reaching this path without existing metadata
+			// are always outliers (not yet in the timeline).
+			rooms::timeline::EventMetadata { is_outlier: true, ..Default::default() }
+		};
+
+		if !meta.soft_failed || meta.soft_fail_reason.is_empty() {
+			meta.soft_failed = true;
+			reason.clone_into(&mut meta.soft_fail_reason);
+			if let Ok(new_bytes) = bincode::serialize(&meta) {
+				self.eventid_metadata.insert(event_id, new_bytes);
+			}
+		}
 	}
 
 	pub(super) async fn is_event_soft_failed(&self, event_id: &EventId) -> bool {
-		self.softfailedeventids.get(event_id).await.is_ok()
+		if let Ok(metadata_bytes) = self.eventid_metadata.get(event_id).await {
+			if let Ok(meta) = rooms::timeline::EventMetadata::from_bincode(&metadata_bytes) {
+				return meta.soft_failed;
+			}
+		}
+		false
+	}
+
+	pub(super) async fn get_soft_fail_reason(&self, event_id: &EventId) -> Option<String> {
+		let metadata_bytes = self.eventid_metadata.get(event_id).await.ok()?;
+		let meta = rooms::timeline::EventMetadata::from_bincode(&metadata_bytes).ok()?;
+		if meta.soft_failed && !meta.soft_fail_reason.is_empty() {
+			Some(meta.soft_fail_reason)
+		} else {
+			None
+		}
+	}
+
+	pub(super) fn unmark_event_soft_failed(&self, event_id: &EventId) {
+		if let Ok(metadata_bytes) = self.eventid_metadata.get_blocking(event_id) {
+			if let Ok(mut meta) = rooms::timeline::EventMetadata::from_bincode(&metadata_bytes) {
+				if meta.soft_failed {
+					meta.soft_failed = false;
+					if let Ok(new_bytes) = bincode::serialize(&meta) {
+						self.eventid_metadata.insert(event_id, new_bytes);
+					}
+				}
+			}
+		}
+	}
+
+	pub(super) fn mark_event_rejected(&self, event_id: &EventId, reason: &str) {
+		let mut meta = if let Ok(metadata_bytes) = self.eventid_metadata.get_blocking(event_id) {
+			rooms::timeline::EventMetadata::from_bincode(&metadata_bytes).unwrap_or_default()
+		} else {
+			// New metadata: events reaching this path without existing metadata
+			// are always outliers (not yet in the timeline).
+			rooms::timeline::EventMetadata { is_outlier: true, ..Default::default() }
+		};
+
+		if !meta.rejected || meta.rejection_reason.is_empty() {
+			meta.rejected = true;
+			reason.clone_into(&mut meta.rejection_reason);
+			if let Ok(new_bytes) = bincode::serialize(&meta) {
+				self.eventid_metadata.insert(event_id, new_bytes);
+			}
+		}
+	}
+
+	pub(super) async fn get_rejection_reason(&self, event_id: &EventId) -> Option<String> {
+		let metadata_bytes = self.eventid_metadata.get(event_id).await.ok()?;
+		let meta = rooms::timeline::EventMetadata::from_bincode(&metadata_bytes).ok()?;
+		if meta.rejected && !meta.rejection_reason.is_empty() {
+			Some(meta.rejection_reason)
+		} else {
+			None
+		}
+	}
+
+	pub(super) async fn is_event_rejected(&self, event_id: &EventId) -> bool {
+		if let Ok(metadata_bytes) = self.eventid_metadata.get(event_id).await {
+			if let Ok(meta) = rooms::timeline::EventMetadata::from_bincode(&metadata_bytes) {
+				return meta.rejected;
+			}
+		}
+		false
+	}
+
+	pub(super) fn unmark_event_rejected(&self, event_id: &EventId) {
+		if let Ok(metadata_bytes) = self.eventid_metadata.get_blocking(event_id) {
+			if let Ok(mut meta) = rooms::timeline::EventMetadata::from_bincode(&metadata_bytes) {
+				if meta.rejected {
+					meta.rejected = false;
+					meta.rejection_reason.clear();
+					if let Ok(new_bytes) = bincode::serialize(&meta) {
+						self.eventid_metadata.insert(event_id, new_bytes);
+					}
+				}
+			}
+		}
+	}
+
+	/// Removes any soft-fail or rejection markers applied to the target PDU
+	pub(super) fn clear_pdu_markers(&self, event_id: &EventId) {
+		self.unmark_event_rejected(event_id);
+		self.unmark_event_soft_failed(event_id);
 	}
 }

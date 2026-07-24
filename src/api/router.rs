@@ -16,7 +16,10 @@ pub(super) use conduwuit_service::state::State;
 use http::{Uri, uri};
 
 use self::handler::RouterExt;
-pub(super) use self::{args::Args as Ruma, response::RumaResponse};
+pub(super) use self::{
+	args::{Args as Ruma, authenticate_user},
+	response::RumaResponse,
+};
 use crate::{admin, client, server};
 
 pub fn build(router: Router<State>, server: &Server) -> Router<State> {
@@ -114,8 +117,12 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		.ruma_route(&client::invite_user_route)
 		.ruma_route(&client::set_room_visibility_route)
 		.ruma_route(&client::get_room_visibility_route)
-		.ruma_route(&client::get_public_rooms_route)
-		.ruma_route(&client::get_public_rooms_filtered_route)
+		.merge(
+			Router::new()
+				.ruma_route(&client::get_public_rooms_route)
+				.ruma_route(&client::get_public_rooms_filtered_route)
+				.layer(axum::middleware::map_response(inject_public_join_rule)),
+		)
 		.ruma_route(&client::search_users_route)
 		.ruma_route(&client::get_member_events_route)
 		.ruma_route(&client::get_protocols_route)
@@ -166,8 +173,16 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		.route("/_matrix/client/v3/sync", get(client::sync_events_route))
 		.ruma_route(&client::sync_events_v5_route)
 		.ruma_route(&client::get_context_route)
-		.ruma_route(&client::get_message_events_route)
-		.ruma_route(&client::search_events_route)
+		.merge(
+			Router::new()
+				.ruma_route(&client::get_message_events_route)
+				.layer(axum::middleware::from_fn(default_messages_dir)),
+		)
+		.merge(
+			Router::new()
+				.ruma_route(&client::search_events_route)
+				.layer(axum::middleware::map_response(ensure_search_results_present)),
+		)
 		.ruma_route(&client::turn_server_route)
 		.ruma_route(&client::send_event_to_device_route)
 		.ruma_route(&client::create_content_route)
@@ -250,6 +265,7 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 		.route("/_continuwuity/server_version", get(client::conduwuit_server_version))
 		.ruma_route(&client::room_initial_sync_route)
 		.route("/client/server.json", get(client::syncv3_client_server_json))
+		.route("/_matrix/client/unstable/org.continuwuity.dag/{room_id}", get(client::get_room_dag_route))
 		.ruma_route(&admin::rooms::ban::ban_room)
 		.ruma_route(&admin::rooms::list::list_rooms);
 
@@ -261,8 +277,12 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 				"/_matrix/key/v2/server/{key_id}",
 				get(server::get_server_keys_deprecated_route),
 			)
-			.ruma_route(&server::get_public_rooms_route)
-			.ruma_route(&server::get_public_rooms_filtered_route)
+			.merge(
+			Router::new()
+				.ruma_route(&server::get_public_rooms_route)
+				.ruma_route(&server::get_public_rooms_filtered_route)
+				.layer(axum::middleware::map_response(inject_public_join_rule)),
+		)
 			.ruma_route(&server::send_transaction_message_route)
 			.ruma_route(&server::get_event_route)
 			.ruma_route(&server::get_backfill_route)
@@ -291,6 +311,11 @@ pub fn build(router: Router<State>, server: &Server) -> Router<State> {
 			.ruma_route(&server::get_content_route)
 			.ruma_route(&server::get_content_thumbnail_route)
 			.ruma_route(&server::get_edutypes_route)
+			// MSC0F01: Gossip-Based Federation Room Reconciliation
+			.route(
+				"/_matrix/federation/unstable/org.matrix.msc0f01/room_digest/{room_id}",
+				get(server::room_digest::get_room_digest_route),
+			)
 			.route("/_conduwuit/local_user_count", get(client::conduwuit_local_user_count))
 			.route("/_continuwuity/local_user_count", get(client::conduwuit_local_user_count));
 	} else {
@@ -388,4 +413,116 @@ async fn legacy_media_disabled() -> impl IntoResponse {
 
 async fn federation_disabled() -> impl IntoResponse {
 	err!(Request(Forbidden("Federation is disabled.")))
+}
+
+async fn inject_public_join_rule(res: axum::response::Response) -> axum::response::Response {
+	use axum::body::to_bytes;
+
+	let (parts, body) = res.into_parts();
+
+	let Ok(bytes) = to_bytes(body, usize::MAX).await else {
+		return axum::response::Response::from_parts(parts, axum::body::Body::empty());
+	};
+
+	if let Ok(mut json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+		if let Some(chunk) = json.get_mut("chunk").and_then(|c| c.as_array_mut()) {
+			for room in chunk {
+				if room.get("join_rule").is_none() {
+					room["join_rule"] = serde_json::json!("public");
+				}
+			}
+		}
+		if let Ok(modified_bytes) = serde_json::to_vec(&json) {
+			return axum::response::Response::from_parts(
+				parts,
+				axum::body::Body::from(modified_bytes),
+			);
+		}
+	}
+
+	axum::response::Response::from_parts(parts, axum::body::Body::from(bytes))
+}
+
+/// ruma's `ResultRoomEvents::results` has `skip_serializing_if =
+/// "Vec::is_empty"`, so an empty page of search results serializes with the
+/// `results` key dropped entirely rather than as `results: []`. Complement's
+/// `Can back-paginate search results` test (and the spec's implied contract)
+/// expects the key to always be present when `room_events` was requested.
+/// Patched here at the response-body level instead of in the vendored ruma
+/// crate, mirroring `inject_public_join_rule` above.
+async fn ensure_search_results_present(
+	res: axum::response::Response,
+) -> axum::response::Response {
+	use axum::body::to_bytes;
+
+	let (parts, body) = res.into_parts();
+
+	let Ok(bytes) = to_bytes(body, usize::MAX).await else {
+		return axum::response::Response::from_parts(parts, axum::body::Body::empty());
+	};
+
+	if let Ok(mut json) = serde_json::from_slice::<serde_json::Value>(&bytes) {
+		if let Some(room_events) = json
+			.get_mut("search_categories")
+			.and_then(|c| c.get_mut("room_events"))
+			.and_then(|r| r.as_object_mut())
+		{
+			room_events
+				.entry("results")
+				.or_insert_with(|| serde_json::json!([]));
+		}
+		if let Ok(modified_bytes) = serde_json::to_vec(&json) {
+			return axum::response::Response::from_parts(
+				parts,
+				axum::body::Body::from(modified_bytes),
+			);
+		}
+	}
+
+	axum::response::Response::from_parts(parts, axum::body::Body::from(bytes))
+}
+
+/// ruma's `get_message_events::v3::Request::dir` is a required `Direction`
+/// (no `Option`, no `#[serde(default)]`), matching the letter of the spec
+/// ("dir (Required)"). But Synapse treats it as optional and defaults to
+/// forwards when absent (`PaginationConfig.from_request`,
+/// `default_dir: Direction = Direction.FORWARDS`) -- the same kind of
+/// spec-vs-reference-implementation gap already established for `from` by
+/// MSC3567 ("Synapse already implements this, but it is not spec-compliant").
+/// Complement tests against that lenient behavior (e.g. `TestRoomForget`'s
+/// "Forgotten room messages cannot be paginated" omits `dir` entirely), so a
+/// request missing `dir` would otherwise 400 with `M_BAD_JSON` before our
+/// handler ever gets to run its own checks.
+///
+/// Since this is a required *request* field (not a response shape ruma
+/// serializes for us), it can't be patched the same way as the
+/// response-side workarounds above -- there's no body to fix up after the
+/// fact, because ruma's deserializer rejects the request before our handler
+/// runs. Instead this injects a default `dir=f` into the query string
+/// ahead of extraction, mirroring Synapse's default.
+async fn default_messages_dir(
+	mut req: http::Request<axum::body::Body>,
+	next: axum::middleware::Next,
+) -> axum::response::Response {
+	let uri = req.uri();
+	let has_dir = uri
+		.query()
+		.is_some_and(|q| q.split('&').any(|kv| kv.split('=').next() == Some("dir")));
+
+	if !has_dir {
+		let path = uri.path();
+		let query = match uri.query() {
+			| Some(q) if !q.is_empty() => format!("{q}&dir=f"),
+			| _ => "dir=f".to_owned(),
+		};
+
+		if let Ok(new_uri) = Uri::builder()
+			.path_and_query(format!("{path}?{query}"))
+			.build()
+		{
+			*req.uri_mut() = new_uri;
+		}
+	}
+
+	next.run(req).await
 }

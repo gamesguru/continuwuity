@@ -113,6 +113,7 @@ impl Services {
 				timeline: build!(rooms::timeline::Service),
 				typing: build!(rooms::typing::Service),
 				user: build!(rooms::user::Service),
+				monitor: build!(rooms::monitor::Service),
 			},
 			federation: build!(federation::Service),
 			sending: build!(sending::Service),
@@ -153,13 +154,13 @@ impl Services {
 			manager
 		};
 
-		info!("Starting service workers...");
-		manager.start().await?;
-
 		// reset dormant online/away statuses to offline on startup
 		if self.server.config.allow_local_presence {
 			info!("Local presence statuses will be reset in the background.");
 		}
+
+		info!("Starting service workers...");
+		manager.start().await?;
 
 		info!("Services startup complete.");
 

@@ -1,10 +1,10 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, time::Duration};
 
 use axum::extract::State;
 use conduwuit::{
 	Err, Pdu, Result, debug_info, debug_warn, err,
 	matrix::{event::gen_event_id, pdu::PduBuilder},
-	utils::{self, FutureBoolExt},
+	utils::{self, FutureBoolExt, stream::ReadyExt},
 	warn,
 };
 use futures::{FutureExt, StreamExt, pin_mut};
@@ -96,6 +96,9 @@ pub async fn leave_room(
 
 	in cases 1 and 2, we have to update the state cache using `mark_as_left` directly.
 	otherwise `build_and_append_pdu` will take care of updating the state cache for us.
+
+	TODO: collapse these split cache update paths behind one helper which emits the
+	final persisted membership transition and then derives cache state from it.
 	*/
 
 	// `leave_pdu` is the outlier `m.room.member` event which will be synced to the
@@ -153,7 +156,7 @@ pub async fn leave_room(
 
 			match user_member_event_content {
 				| Ok(content) => {
-					services
+					let event_id = services
 						.rooms
 						.timeline
 						.build_and_append_pdu(
@@ -168,6 +171,23 @@ pub async fn leave_room(
 							Some(room_id),
 							&state_lock,
 						)
+						.await?;
+					let pdu_id = services.rooms.timeline.get_pdu_id(&event_id).await?;
+
+					drop(state_lock);
+
+					let remote_servers = services
+						.rooms
+						.state_cache
+						.room_servers(room_id)
+						.ready_filter(|server| !services.globals.server_is_ours(server))
+						.map(ToOwned::to_owned)
+						.collect::<Vec<_>>()
+						.await;
+
+					services
+						.sending
+						.wait_for_pdu_servers(remote_servers, &pdu_id, Duration::from_secs(15))
 						.await?;
 
 					// `build_and_append_pdu` calls `mark_as_left` internally, so we return early.
@@ -439,7 +459,7 @@ pub async fn remote_leave_room<S: ::std::hash::BuildHasher>(
 	services
 		.rooms
 		.outlier
-		.add_pdu_outlier(&event_id, &leave_event);
+		.add_pdu_outlier(&event_id, &leave_event, Some(room_id));
 
 	let leave_pdu = Pdu::from_id_val(&event_id, leave_event, Some(room_id)).map_err(|e| {
 		err!(BadServerResponse("Invalid leave PDU received during federated leave: {e:?}"))

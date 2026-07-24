@@ -1,16 +1,16 @@
 use axum::extract::State;
 use axum_client_ip::ClientIp;
 use conduwuit::{
-	Err, Error, Result, at, debug_warn,
+	Err, Error, PduEvent, Result, at, debug_warn, info,
 	matrix::{
 		event::{Event, Matches},
-		pdu::PduCount,
+		pdu::{PduCount, TopoToken},
 	},
 	ref_at,
 	utils::{
 		IterStream, ReadyExt,
 		result::LogErr,
-		stream::{BroadbandExt, TryIgnore, WidebandExt},
+		stream::{BroadbandExt, TryIgnore},
 	},
 };
 use conduwuit_service::{
@@ -18,7 +18,7 @@ use conduwuit_service::{
 	rooms::{
 		lazy_loading,
 		lazy_loading::{MemberSet, Options},
-		timeline::PdusIterItem,
+		timeline::TopoIterItem,
 	},
 };
 use futures::{FutureExt, StreamExt, TryFutureExt, future::OptionFuture, pin_mut};
@@ -37,6 +37,7 @@ use ruma::{
 };
 use tracing::warn;
 
+use super::sync::add_membership_to_unsigned;
 use crate::Ruma;
 
 /// list of safe and common non-state events to ignore if the user is ignored
@@ -89,17 +90,39 @@ pub(crate) async fn get_message_events_route(
 		return Err!(Request(Forbidden("Room does not exist to this server")));
 	}
 
-	let from: PduCount = body
+	// Check access before parsing pagination tokens — an unauthorized user
+	// should get 403 Forbidden, not a parse error from a stale token.
+	// Per Matrix spec, /messages is accessible to current AND former members.
+	// The per-event visibility_filter handles fine-grained history_visibility
+	// checks; this gate only verifies the user has/had membership.
+	//
+	// A former member who has forgotten the room (POST /forget) loses access
+	// even though is_left() still returns true -- forgetting no longer
+	// deletes the leave record (see state_cache::forget()'s doc comment), so
+	// it must be checked explicitly here rather than inferred from is_left().
+	if !services
+		.rooms
+		.state_cache
+		.can_access_history(sender_user, room_id)
+		.await
+	{
+		return Err!(Request(Forbidden("You don't have permission to view this room.")));
+	}
+
+	let from: TopoToken = body
 		.from
 		.as_deref()
 		.map(str::parse)
 		.transpose()?
 		.unwrap_or_else(|| match body.dir {
-			| Direction::Forward => PduCount::min(),
-			| Direction::Backward => PduCount::max(),
+			| Direction::Forward => TopoToken { depth: 0, pdu_count: PduCount::min() },
+			| Direction::Backward => TopoToken {
+				depth: u64::MAX,
+				pdu_count: PduCount::max(),
+			},
 		});
 
-	let to: Option<PduCount> = body.to.as_deref().map(str::parse).transpose()?;
+	let to: Option<TopoToken> = body.to.as_deref().map(str::parse).transpose()?;
 
 	let limit: usize = body
 		.limit
@@ -107,11 +130,16 @@ pub(crate) async fn get_message_events_route(
 		.unwrap_or(LIMIT_DEFAULT)
 		.min(LIMIT_MAX);
 
+	info!(
+		"/messages: room={room_id} dir={:?} from={from} to={to:?} limit={limit}",
+		body.dir
+	);
+
 	if matches!(body.dir, Direction::Backward) {
 		services
 			.rooms
 			.timeline
-			.backfill_if_required(room_id, from)
+			.backfill_if_required(room_id, from.pdu_count, limit)
 			.boxed()
 			.await
 			.log_err()
@@ -122,67 +150,59 @@ pub(crate) async fn get_message_events_route(
 		| Direction::Forward => services
 			.rooms
 			.timeline
-			.pdus(room_id, Some(from))
+			.topo_pdus(room_id, Some(from))
 			.ignore_err()
 			.boxed(),
 
 		| Direction::Backward => services
 			.rooms
 			.timeline
-			.pdus_rev(room_id, Some(from))
+			.topo_pdus_rev(room_id, Some(from))
 			.ignore_err()
 			.boxed(),
 	};
 
-	let mut events: Vec<_> = it
-		.ready_take_while(|(count, _)| Some(*count) != to)
-		.ready_filter_map(|item| event_filter(item, filter))
-		.wide_filter_map(|item| ignored_filter(&services, item, sender_user))
-		.wide_filter_map(|item| visibility_filter(&services, item, sender_user))
-		.take(limit)
-		.then(async |mut pdu| {
-			pdu.1.set_unsigned(Some(sender_user));
-			if let Err(e) = services
-				.rooms
-				.pdu_metadata
-				.add_bundled_aggregations_to_pdu(sender_user, &mut pdu.1)
-				.await
-			{
-				debug_warn!("Failed to add bundled aggregations: {e}");
-			}
-			pdu
-		})
-		.collect()
-		.await;
+	let mut events = Vec::with_capacity(limit);
+	let mut next_token = None;
+	let mut exhausted = true;
 
-	// Capture the DB sequence boundary token BEFORE topological sort changes
-	// the order. This must be the outermost PduCount from the original query.
-	let next_token = events.last().map(at!(0));
+	let mut stream = it;
+	while let Some(item) = stream.next().await {
+		let (token, pdu) = item;
 
-	if !events.is_empty() {
-		let mut event_to_count = std::collections::HashMap::new();
-		let events_to_sort: Vec<_> = events
-			.into_iter()
-			.map(|(count, pdu)| {
-				event_to_count.insert(pdu.event_id.clone(), count);
-				pdu
-			})
-			.collect();
+		if Some(token) == to {
+			break;
+		}
 
-		let sorted_events = conduwuit::matrix::dag::sort_topologically(events_to_sort);
+		next_token = Some(token);
 
-		events = sorted_events
-			.into_iter()
-			.map(|pdu| {
-				let count = event_to_count
-					.remove(&pdu.event_id)
-					.expect("event count exists");
-				(count, pdu)
-			})
-			.collect();
+		let Some(item) = event_filter((token, pdu), filter) else {
+			continue;
+		};
 
-		if matches!(body.dir, Direction::Backward) {
-			events.reverse();
+		let Some(item) = ignored_filter(&services, item, sender_user).await else {
+			continue;
+		};
+
+		let Some(mut item) = visibility_filter(&services, item, sender_user).await else {
+			continue;
+		};
+
+		item.1.set_unsigned(Some(sender_user));
+		add_membership_to_unsigned(&services, sender_user, &mut item.1).await;
+		if let Err(e) = services
+			.rooms
+			.pdu_metadata
+			.add_bundled_aggregations_to_pdu(sender_user, &mut item.1)
+			.await
+		{
+			debug_warn!("Failed to add bundled aggregations: {e}");
+		}
+		events.push(item);
+
+		if events.len() == limit {
+			exhausted = false;
+			break;
 		}
 	}
 
@@ -200,7 +220,7 @@ pub(crate) async fn get_message_events_route(
 			}
 		}),
 		room_id,
-		token: Some(from.into_unsigned()),
+		token: Some(from.pdu_count.into_unsigned()),
 		options: Some(&filter.lazy_load_options),
 	};
 
@@ -222,18 +242,37 @@ pub(crate) async fn get_message_events_route(
 		.collect()
 		.await;
 
+	// Return the raw cursor of the oldest event we actually consumed, not the
+	// last visible event. That keeps pagination moving even when filters skip an
+	// entire page, and it still preserves the old "omit end when nothing matched"
+	// behavior at the edge of the timeline.
+	let next_token = if events.is_empty() && exhausted {
+		None
+	} else {
+		next_token
+	};
+
 	let chunk = events
 		.into_iter()
 		.map(at!(1))
 		.map(Event::into_format)
 		.collect();
 
-	Ok(get_message_events::v3::Response {
+	let resp = get_message_events::v3::Response {
 		start: from.to_string(),
-		end: next_token.as_ref().map(PduCount::to_string),
+		end: next_token.as_ref().map(TopoToken::to_string),
 		chunk,
 		state,
-	})
+	};
+
+	info!(
+		"/messages: room={room_id} returning {} events, start={}, end={:?}",
+		resp.chunk.len(),
+		resp.start,
+		resp.end
+	);
+
+	Ok(resp)
 }
 
 pub(crate) async fn lazy_loading_witness<'a, I>(
@@ -242,19 +281,17 @@ pub(crate) async fn lazy_loading_witness<'a, I>(
 	events: I,
 ) -> MemberSet
 where
-	I: Iterator<Item = &'a PdusIterItem> + Clone + Send,
+	I: Iterator<Item = &'a TopoIterItem> + Clone + Send,
 {
 	let oldest = events
 		.clone()
-		.map(|(count, _)| count)
-		.copied()
+		.map(|(token, _)| token.pdu_count)
 		.min()
 		.unwrap_or_else(PduCount::max);
 
 	let newest = events
 		.clone()
-		.map(|(count, _)| count)
-		.copied()
+		.map(|(token, _)| token.pdu_count)
 		.max()
 		.unwrap_or_else(PduCount::max);
 
@@ -299,11 +336,11 @@ async fn get_member_event(
 }
 
 #[inline]
-pub(crate) async fn ignored_filter(
+pub(crate) async fn ignored_filter<T: Send>(
 	services: &Services,
-	item: PdusIterItem,
+	item: (T, PduEvent),
 	user_id: &UserId,
-) -> Option<PdusIterItem> {
+) -> Option<(T, PduEvent)> {
 	let (_, ref pdu) = item;
 
 	is_ignored_pdu(services, pdu, user_id)
@@ -370,11 +407,11 @@ where
 }
 
 #[inline]
-pub(crate) async fn visibility_filter(
+pub(crate) async fn visibility_filter<T: Send>(
 	services: &Services,
-	item: PdusIterItem,
+	item: (T, PduEvent),
 	user_id: &UserId,
-) -> Option<PdusIterItem> {
+) -> Option<(T, PduEvent)> {
 	let (_, pdu) = &item;
 
 	let room_id = pdu.room_id_or_hash()?;
@@ -388,7 +425,10 @@ pub(crate) async fn visibility_filter(
 }
 
 #[inline]
-pub(crate) fn event_filter(item: PdusIterItem, filter: &RoomEventFilter) -> Option<PdusIterItem> {
+pub(crate) fn event_filter<T: Send>(
+	item: (T, PduEvent),
+	filter: &RoomEventFilter,
+) -> Option<(T, PduEvent)> {
 	let (_, pdu) = &item;
 	filter.matches(pdu).then_some(item)
 }

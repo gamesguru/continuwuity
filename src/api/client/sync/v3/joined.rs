@@ -9,7 +9,7 @@ use conduwuit::{
 	},
 	trace,
 	utils::{
-		BoolExt, IterStream, ReadyExt, TryFutureExtExt,
+		IterStream, ReadyExt, TryFutureExtExt,
 		math::ruma_from_u64,
 		stream::{TryIgnore, WidebandExt},
 	},
@@ -163,8 +163,16 @@ async fn build_ephemeral(
 				.user_is_ignored(&read_user, syncing_user)
 				.await;
 
-			// filter out read receipts for ignored users
-			is_ignored.or_some(edu)
+			if is_ignored {
+				None
+			} else {
+				let mut json: serde_json::Value = serde_json::from_str(edu.json().get()).ok()?;
+				if let Some(obj) = json.as_object_mut() {
+					obj.remove("room_id");
+				}
+				let raw = serde_json::value::to_raw_value(&json).ok()?;
+				Some(Raw::from_json(raw))
+			}
 		})
 		.collect::<Vec<_>>()
 		.boxed();
@@ -228,8 +236,8 @@ async fn build_ephemeral(
 				// update the marker if it's changed since the last sync
 				last_privateread_update > last_sync_end_count
 			},
-			// always update the marker on an initial sync
-			| None => true,
+			// omit the marker on an initial sync
+			| None => false,
 		};
 
 		if should_send_private_read {
@@ -277,34 +285,8 @@ async fn build_state_and_timeline(
 	let joined_since_last_sync =
 		check_joined_since_last_sync(services, room_id, shortstatehashes, sync_context).await?;
 
-	let mut timeline =
+	let timeline =
 		build_timeline(services, sync_context, room_id, joined_since_last_sync).await?;
-
-	// The timeline should always include at least one PDU if the syncing user
-	// joined since the last sync (their join event). If it's empty, the join
-	// event was likely appended after current_count was captured at sync start
-	// (a race between federation join and sync). Re-fetch without the upper
-	// bound to include it.
-	if joined_since_last_sync && timeline.pdus.is_empty() {
-		warn!(%room_id, "timeline for newly joined room is empty, retrying without upper bound");
-		let timeline_limit = sync_context
-			.filter
-			.room
-			.timeline
-			.limit
-			.and_then(|limit| limit.try_into().ok())
-			.unwrap_or(DEFAULT_TIMELINE_LIMIT);
-
-		timeline = load_timeline(
-			services,
-			sync_context.syncing_user,
-			room_id,
-			sync_context.last_sync_end_count.map(PduCount::Normal),
-			None,
-			timeline_limit,
-		)
-		.await?;
-	}
 
 	let (state_events, state_after, notification_counts) = try_join3(
 		build_state_events(
@@ -327,6 +309,13 @@ async fn build_state_and_timeline(
 		state_len = state_events.len(),
 		"build_state_and_timeline: results"
 	);
+
+	// the timeline should always include at least one PDU if the syncing user
+	// joined since the last sync, that being the syncing user's join event. if
+	// it's empty something is wrong.
+	if joined_since_last_sync && timeline.pdus.is_empty() {
+		warn!(%room_id, "timeline for newly joined room is empty");
+	}
 
 	let (summary, device_list_updates) = try_join(
 		build_room_summary(
@@ -353,7 +342,7 @@ async fn build_state_and_timeline(
 	let TimelinePdus {
 		pdus,
 		limited: timeline_limited,
-		prev_batch,
+		prev_batch: timeline_prev_batch,
 	} = timeline;
 
 	let user_has_join_event_in_sync = pdus
@@ -388,14 +377,12 @@ async fn build_state_and_timeline(
 	};
 
 	// the token which may be passed to the messages endpoint to backfill room
-	// history. If the timeline is empty, fallback to the start of this sync window
-	// to ensure clients always have a valid topological pagination token.
-	let prev_batch = prev_batch.map(|c| c.to_string()).or_else(|| {
-		limited
-			.then_some(())
-			.and(sync_context.last_sync_end_count)
-			.map(|c| PduCount::Normal(c).to_string())
-	});
+	// history. load_timeline() already computes this correctly: strictly
+	// before the oldest event when genuinely truncated, or the current sync
+	// position when nothing was left out (see its comment for the Synapse
+	// reference behavior this matches). Recomputing it here independently is
+	// exactly how this drifted out of sync with that logic before.
+	let prev_batch = timeline_prev_batch.map(|c| c.to_string());
 
 	// filter out ignored events from the timeline and convert the PDUs into Ruma's
 	// AnySyncTimelineEvent type
@@ -474,13 +461,10 @@ async fn fetch_shortstatehashes(
 	// the room state as of the end of the last sync.
 	let next_hash = async {
 		let hash = match last_sync_end_count {
-			| Some(last_sync_end_count) => services
+			| Some(count) => services
 				.rooms
 				.timeline
-				.prev_shortstatehash(
-					room_id,
-					PduCount::Normal(last_sync_end_count.saturating_add(1)),
-				)
+				.next_shortstatehash(room_id, PduCount::Normal(count))
 				.await
 				.ok(),
 			| None => None,
@@ -491,10 +475,10 @@ async fn fetch_shortstatehashes(
 	let (current_shortstatehash, next_hash) = try_join(current_hash, next_hash).await?;
 
 	// the room state as of the end of the last sync. if next_shortstatehash
-	// returned None (no events after last_sync_end_count), we fall back to
-	// current_shortstatehash IF the room actually existed at that count.
-	// if the room is brand new to this sync stream, we keep it as None so
-	// that we correctly trigger an initial state sync.
+	// returned None (because the room doesn't exist or an error occurred),
+	// we keep it as None so that we correctly trigger an initial state sync.
+	// note: next_shortstatehash correctly falls back to current_shortstatehash
+	// if there are no events after the count.
 	let last_sync_end_shortstatehash = next_hash;
 
 	trace!(
@@ -998,17 +982,12 @@ async fn build_heroes(
 #[tracing::instrument(level = "debug", skip_all)]
 async fn build_device_list_updates(
 	services: &Services,
-	SyncContext {
-		syncing_user,
-		last_sync_end_count,
-		current_count,
-		..
-	}: SyncContext<'_>,
+	SyncContext { syncing_user, last_sync_end_count, .. }: SyncContext<'_>,
 	room_id: &RoomId,
 	ShortStateHashes { .. }: ShortStateHashes,
 	timeline: &TimelinePdus,
 	state_events: &[PduEvent],
-	_joined_since_last_sync: bool,
+	joined_since_last_sync: bool,
 ) -> Result<DeviceListUpdates> {
 	// initial syncs don't include device updates, so return early
 	if last_sync_end_count.is_none() {
@@ -1017,16 +996,38 @@ async fn build_device_list_updates(
 
 	let mut device_list_updates = DeviceListUpdates::new();
 
+	if joined_since_last_sync {
+		services
+			.rooms
+			.state_cache
+			.room_members(room_id)
+			.ready_for_each(|user_id| {
+				device_list_updates.changed.insert(user_id.to_owned());
+			})
+			.await;
+	}
+
 	// add users with changed keys to the `changed` list
-	services
+	let room_key_changes = services
 		.users
-		.room_keys_changed(room_id, last_sync_end_count, Some(current_count))
+		.room_keys_changed(room_id, last_sync_end_count, None)
 		.map(at!(0))
 		.map(ToOwned::to_owned)
-		.ready_for_each(|user_id| {
-			device_list_updates.changed.insert(user_id);
-		})
+		.collect::<Vec<_>>()
 		.await;
+
+	if !room_key_changes.is_empty() {
+		trace!(
+			%room_id,
+			syncing_user = %syncing_user,
+			changed_user_count = room_key_changes.len(),
+			"build_device_list_updates: room key changes"
+		);
+	}
+
+	for user_id in room_key_changes {
+		device_list_updates.changed.insert(user_id);
+	}
 
 	// add users who now share encrypted rooms to `changed` and
 	// users who no longer share encrypted rooms to `left`

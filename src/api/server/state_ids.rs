@@ -1,7 +1,7 @@
 use std::{borrow::Borrow, iter::once};
 
 use axum::extract::State;
-use conduwuit::{Err, Result, at, err, info};
+use conduwuit::{Result, at, err, info};
 use futures::{StreamExt, TryStreamExt};
 use ruma::{OwnedEventId, api::federation::event::get_room_state_ids};
 
@@ -25,25 +25,34 @@ pub(crate) async fn get_room_state_ids_route(
 	.check()
 	.await?;
 
-	if !services
-		.rooms
-		.state_cache
-		.server_in_room(services.globals.server_name(), &body.room_id)
-		.await
-	{
-		info!(
-			origin = body.origin().as_str(),
-			"Refusing to serve state for room we aren't participating in"
-		);
-		return Err!(Request(NotFound("This server is not participating in that room.")));
-	}
+	info!(
+		origin = body.origin().as_str(),
+		room_id = %body.room_id,
+		event_id = %body.event_id,
+		"Serving state_ids request"
+	);
 
-	let shortstatehash = services
+	let is_extremity = services
 		.rooms
-		.state_accessor
-		.pdu_shortstatehash(&body.event_id)
-		.await
-		.map_err(|_| err!(Request(NotFound("Pdu state not found."))))?;
+		.state
+		.is_forward_extremity(&body.room_id, &body.event_id)
+		.await;
+
+	let shortstatehash = if is_extremity {
+		services
+			.rooms
+			.state
+			.get_room_shortstatehash(&body.room_id)
+			.await
+			.map_err(|_| err!(Request(NotFound("Room state not found."))))?
+	} else {
+		services
+			.rooms
+			.state_accessor
+			.pdu_shortstatehash(&body.event_id)
+			.await
+			.map_err(|_| err!(Request(NotFound("Pdu state not found."))))?
+	};
 
 	let pdu_ids: Vec<OwnedEventId> = services
 		.rooms
