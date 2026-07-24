@@ -17,7 +17,7 @@ use http::{Uri, uri};
 
 use self::handler::RouterExt;
 pub(super) use self::{
-	args::{Args as Ruma, AuthenticatedUser},
+	args::{Args as Ruma, authenticate_user},
 	response::RumaResponse,
 };
 use crate::{admin, client, server};
